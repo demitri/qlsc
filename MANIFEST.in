@@ -1,0 +1,3 @@
+# specify directories that contain headers
+#graft q3c/
+Q3C_VERSION = 1.8.1
