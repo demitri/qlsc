@@ -1,5 +1,5 @@
 
-__version__ = '1.0a1'
+from .version import __version__
 #__author__ = "Demitri Muna"
 
 from .q3c import Q3C, Q3CIndex
