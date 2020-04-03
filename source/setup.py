@@ -56,10 +56,11 @@ classifiers = [
     "Intended Audience :: Science/Research"
 ]
 
-
+exec(open('pyq3c/version.py').read())
 setup(
     name="pyq3c",
-    version=get_property('__version__', 'pyq3c'),
+    version=__version__,
+    #version=get_property('__version__', 'pyq3c'),
     description=description,
     long_description=long_description,
     #long_description_content_type='text/markdown; charset=UTF-8; variant=GFM',

@@ -26,14 +26,37 @@ from . import _q3c_wrapper # as q3c
 from ._q3c_wrapper import radial_query_it, sindist
 
 class Q3C:
+	'''
+	A class that describes a quadrilaterized sphere.
+	
+	The quadrilaterized sphere is divided into six faces. A bin is the subdivided region on the sphere.
+	At this lowest resolution, the bin level is 0, there is 1 bin per face for a total of 6 bins.
+	The next bin level 1 divides each face into four bins, i.e. a total of 24 bins.
+	Higher bin levels further divide each bin four more times.
+	
+	A scheme can be defined by the bin level where:
+		no. bins = 2**(2*bin_level)
+		number of bins on sphere = no. bins * 6
+	
+	A Q3C object can be created with one (and only one) of "nside" (number of bins per face) or "bin_level".
+	Each bin has a pixel number called an "ipix", which is an integer encoded with the location of the bin.
+	
+	The default value of nside (1073741824, corresponding to 6,442,450,944 segments or bin_level=15)
+	is the one used by the Q3C PostgreSQL plugin. This value is used if 'nside' or 'bin_size' is not specified.
+	
+	:param nside: number of quadtree subdivisions per face (of six faces)
+	:param bin_level: number of times each bin in each face is subdivided by four
+	'''		
+	def __init__(self, nside:int=None, bin_level:int=None):
 
-	def __init__(self, nside:int=1073741824):
-		'''
-		
-		The default value of nside (1073741824) is the one used by the Q3C PostgreSQL plugin.
-		
-		@param nside number of quadtree subdivisions
-		'''		
+		if all([nside,bin_level]):
+			raise ValueError("Only one of 'nside' or 'bin_level' can be specified in the initialization.")
+		elif nside is None and bin_level is None:
+			nside = 1073741824
+			
+		if bin_level is not None:
+			nside = int(pow(2, 2*bin_level))
+
 		#self.sqlite_db = None
 		#self.main_dbcursor = None
 
@@ -59,13 +82,28 @@ class Q3C:
 		:param ipix: ipix number
 		:returns: ra,dec in degrees as a tuple
 		'''
+		if isinstance(ipix, int) is False:
+			raise ValueError(f"The ipix value must be an integer; was given '{type(ipix)}'.")
+
+		# perform a bounds check
+		if not (0 <= ipix < self.nbins):
+			raise ValueError(f"The ipix number is out of bounds for this scheme: [0,{self.nbins-1}].")
+
 		return _q3c_wrapper.ipix2ang(self._hprm, ipix)
 				
 	@property
 	def nsides(self) -> int:
 		'''
+		Number of divisions per face.
 		'''
 		return _q3c_wrapper.nsides(self._hprm)
+	
+	@property
+	def nbins(self) -> int:
+		'''
+		Returns the total number of bins in this scheme (number of divisions per face * 6).
+		'''
+		return self.nsides * 6
 	
 	def face_number(self, ra:float, dec:float) -> int:
 		'''

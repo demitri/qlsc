@@ -26,7 +26,8 @@
 #include <string.h>
 #include "my_bits.h"
 
-static char __q3c_version[]=Q3C_VERSION;
+//static char __q3c_version[]=Q3C_VERSION;
+static char __q3c_version[]="1.8.2";
 
 static int q3c_setup_square_stack(struct q3c_square *stack, q3c_coord_t xmin,
                       q3c_coord_t ymin, q3c_coord_t xmax, q3c_coord_t ymax,

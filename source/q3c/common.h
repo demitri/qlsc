@@ -23,7 +23,7 @@
 
 #include <math.h>
 #include <stdlib.h>
-#include "postgres.h"
+//#include "postgres.h"
 
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
@@ -37,12 +37,14 @@
 #ifndef q3c_ipix_t
 /*#define q3c_ipix_t long long
   typedef long long q3c_ipix_t ;*/
-typedef int64 q3c_ipix_t ;
+typedef int64_t q3c_ipix_t ;
 #endif /* q3c_ipix_t */
 
 #ifndef Q3C_IPIX_FMT
-#define Q3C_IPIX_FMT INT64_FORMAT
-#define Q3C_CONST(c) INT64CONST(c)
+#define Q3C_IPIX_FMT "%"PRId64
+#define Q3C_CONST(c) INT64_C(c)
+//#define Q3C_IPIX_FMT INT64_FORMAT
+//#define Q3C_CONST(c) INT64CONST(c)
 #endif /* Q3C_IPIX_FMT */
 
 
