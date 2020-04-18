@@ -7,6 +7,7 @@ from typing import Iterable, Tuple
 from urllib.parse import urlparse
 from math import pow, sin
 from math import radians as deg2rad
+import collections
 
 import numpy as np
 
@@ -22,7 +23,7 @@ try:
 except ImportError:
 	pandas_available = False
 
-from . import _q3c_wrapper # as q3c
+from . import _q3c_wrapper # functions defined in "pyq3c_module.c" as named in the array "pyq3c_methods"
 from ._q3c_wrapper import radial_query_it, sindist
 
 class Q3C:
@@ -35,7 +36,7 @@ class Q3C:
 	Higher bin levels further divide each bin four more times.
 	
 	A scheme can be defined by the bin level where:
-		no. bins = 2**(2*bin_level)
+		no. bins per face        = 2**(2*bin_level)
 		number of bins on sphere = no. bins * 6
 	
 	A Q3C object can be created with one (and only one) of "nside" (number of bins per face) or "bin_level".
@@ -66,15 +67,67 @@ class Q3C:
 		if self._hprm is None:
 			raise Exception("Internal Q3C data structure could not be created.")
 			
-	def ang2ipix(self, ra:float, dec:float) -> int:
+# 	def ang2ipix(self, ra:float, dec:float) -> int:
+# 		'''
+# 		Convert an ra,dec position to an ipix number.
+# 		
+# 		:param ra: right ascension (degrees)
+# 		:param dec: declination (degrees)
+# 		'''
+# 		return _q3c_wrapper.ang2ipix(self._hprm, ra, dec)
+	
+	def ang2ipix(self, ra:float=None, dec:float=None, points=None):
 		'''
 		Convert an ra,dec position to an ipix number.
 		
-		:param ra: right ascension (degrees)
-		:param dec: declination (degrees)
+		Example usage:
+			ang2ipix(45,60)
+			ang2ipix(ra=45,dec=60)
+			and2ipix(points=np.array([[45,60],[0,55]])
+		
+		:param ra: right ascension (degrees); must be in [0,360]
+		:param dec: declination (degrees); must be in [-90,90]
+		:param points: an array of [ra,dec] points, shape=(n,2)
+		:returns: int if a single point is provided, an array of ints if an array of points is provided
 		'''
-		return _q3c_wrapper.ang2ipix(self._hprm, ra, dec)
+		if points is None:
+			# check "ra","dec" are both set
+			if True in [x is None for x in [ra,dec]]: # can't use any/all with possible "0" values
+				raise ValueError(f"Values for 'ra','dec' must be specified. {ra},{dec}")
+		else:
+			# check neither "ra","dec" are set
+			if ra is not None or dec is not None:
+				raise ValueError("Only specify 'ra','dec' OR 'points'.")
+		
+		if isinstance(ra, collections.abc.Iterable):
+			# .. todo: ensure that ra,dec points are within the proper ranges; the C code will fail silently
+			if not(min(dec) >= -90 and max(dec) <= 90):
+				raise ValueError("ang2ipix: dec out of range [-90,90]")
+			if not(min(ra) >= 0 and max(ra) <= 360):
+				raise ValueError("ang2ipix: ra out of range [0,360]")
+			# ra is unwrapped in the C code, but should be checked here anyway
+		else:
+			if not(dec >= -90 and dec <= 90):
+				raise ValueError("ang2ipix: dec out of range [-90,90]")
+			if not(ra >= 0 and ra <= 360):
+				raise ValueError("ang2ipix: ra out of range [0,360]")
+		
+		if points is None:
+			return _q3c_wrapper.ang2ipix(self._hprm, ra, dec)
+		else:
+			# .. todo: modify C wrapper code to take numpy arrays directly
+			v = np.vectorize(_q3c_wrapper.ang2ipix)
+			return v(self._hprm, points[:,0], points[:,1])
+			#return _q3c_wrapper.ang2ipix(self._hprm, points[:,0], points[:,1])
+
+	def ang2ipix_xy(self, ra:float=None, dec:float=None, points=None) -> dict:
+		'''
+		Convert an ra,dec position to an ipix number; also returns the face number, and (x,y) location on the square face.
+		'''
+		
+		return _q3c_wrapper.ang2ipix_xy(self._hprm, ra, dec)
 	
+
 	def ipix2ang(self, ipix:int) -> Tuple[float, float]:
 		'''
 		Convert an ipix number to ra,dec in degrees.
@@ -89,8 +142,40 @@ class Q3C:
 		if not (0 <= ipix < self.nbins):
 			raise ValueError(f"The ipix number is out of bounds for this scheme: [0,{self.nbins-1}].")
 
+		# The underlying C code forces dec > 90 to 90 and dec < -90 to 90.
+		# Either normalize the angle here or raise an exception.
+		#if -90 <= dec <= 90:
+		#	raise ValueError(f"Values of 'dec' must be in the range [-90,90] (was given '{dec}').")
+			
+			
+		# The underlying C code *does* unwrap RA.
+
 		return _q3c_wrapper.ipix2ang(self._hprm, ipix)
-				
+	
+	def ipix2xy(self, ipix:int) -> Tuple[int, float, float]:
+		'''
+		Convert an ipix value to the (x,y) position on the corresponding square face; returns (facenum,x,y).
+		
+		:param ipix: ipix number
+		:returns: (facenum,x,y) as a tuple
+		'''
+		
+		return _q3c_wrapper.ipix2xy(self._hprm, ipix)
+	
+	def xy2ang(self, x:float=None, y:float=None, facenum:int=None) -> Tuple[float,float]:
+		'''
+		Convert an x,y coordinate pair on the given face number to (ra,dec).
+		'''
+		# .. todo: validate ra,dec
+		
+		if not (0 <= facenum <= 5):
+			raise ValueError(f"Values of 'facenum' must be an integer between 0 and 5; was given '{facenum}'.")
+		
+		if not (-1 <= x <= 1) and not (-1 <= y <= 1):
+			raise ValueError("Values of 'x' and 'y' must be in the range [-1,1].")
+		
+		return _q3c_wrapper.xy2ang(x, y, facenum)
+	
 	@property
 	def nsides(self) -> int:
 		'''
@@ -109,9 +194,15 @@ class Q3C:
 		'''
 		Return the cube face number for the provided coordinate; in [0-5].
 		
-		@param ra right ascension in degrees
-		@param dec declination in degrees
+		:param ra: right ascension in degrees; must be in [0,360]
+		:param dec: declination in degrees; must be in [-90,90]
 		'''
+		
+		if not -90 <= dec <= 90:
+			raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
+		if not -360 <= ra <= 360:
+			raise ValueError(f"The value of 'ra' must be normalized to [0,360]; was given '{ra}'.")
+		
 		return _q3c_wrapper.facenum(self._hprm, ra, dec)
 	
 	def pixarea(self, ipix:int, depth:int) -> float: # rename to "ipix_area"?
@@ -125,6 +216,9 @@ class Q3C:
 		pixels per face = 2 ^ (2 * (30-depth))
 
 		pixel area = 4pi / no. pixels on sphere
+		
+		:param ipix:
+		:param depth:
 		'''
 		if not (1 <= depth <= 30):
 			raise ValueError(f"The depth provided {depth} is out of the range 1-30")
@@ -135,9 +229,9 @@ class Q3C:
 		'''
 		Returns the ipix value of the pixel center at certain pixel depth covering the specified (ra,dec). [??]
 	
-		:param ra: right ascension (degrees)
-		:param dec: declination (degrees)
-		:param depth:
+		:param ra: right ascension (degrees); must be in [0,360]
+		:param dec: declination (degrees); must be in [-90,90]
+		:param depth: ; must be in range [1-30]
 		:returns: 
 		'''
 		if not (1 <= depth <= 30):
