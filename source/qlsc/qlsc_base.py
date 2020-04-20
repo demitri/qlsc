@@ -153,10 +153,14 @@ class QLSC:
 
 	def ipix2ang(self, ipix:int) -> Tuple[float, float]:
 		'''
-		Convert an ipix number to ra,dec in degrees.
+		Convert an ipix number to ra,dec of the "lower left" corner of the pixel, in degrees.
+		
+		See the method "ipix2ang_center" to return the center of the pixel.
+		
+		This method matches that of the Q3C PostgreSQL plugin.
 		
 		:param ipix: ipix number
-		:returns: ra,dec in degrees as a tuple
+		:returns: ra,dec in degrees as a tuple of the lower left corner of the pixel
 		'''
 		if isinstance(ipix, int) is False:
 			raise ValueError(f"The ipix value must be an integer; was given '{type(ipix)}'.")
@@ -166,6 +170,33 @@ class QLSC:
 			raise ValueError(f"The ipix number is out of bounds for this scheme; range: [0,{self.nbins-1}].")
 
 		return _q3c_wrapper.ipix2ang(self._hprm, ipix)
+
+	def ipixcenter2ang(self, ipix:int) -> Tuple[float, float]:
+		'''
+		Convert an ipix number to ra,dec of the center of the pixel, in degrees.
+		
+		See the method "ipix2ang" to return the "lower left" corner of the pixel
+		which matches what is returned by the Q3C PostgreSQL plugin.
+		
+		The pixel "center" here is defined in the x,y coordinates;
+		the point projected on the sphere is the one returned.
+		
+		:param ipix: ipix number
+		:returns: ra,dec in degrees as a tuple of the center of the pixel
+		'''
+		if isinstance(ipix, int) is False:
+			raise ValueError(f"The ipix value must be an integer; was given '{type(ipix)}'.")
+
+		# perform a bounds check
+		if not (0 <= ipix < self.nbins):
+			raise ValueError(f"The ipix number is out of bounds for this scheme; range: [0,{self.nbins-1}].")
+
+		# bin_length = 2./self.nside
+		hbl = 1. / self.nside # half bin length
+		
+		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
+		return self.xy2ang(facenum=facenum, x=x+hbl, y=y+hbl)
+		
 	
 	def ipix2xy(self, ipix:int) -> Tuple[int, float, float]:
 		'''
@@ -286,7 +317,7 @@ class QLSC:
 		:returns: the area of the specified pixel in steradians
 		'''
 		
-		return 4 * math.pi / self.nbins
+		return 4. * math.pi / self.nbins
 		
 		#if not (0 <= depth <= 30):
 		#	raise ValueError(f"The depth provided {depth} is out of the range 0-30")
@@ -320,18 +351,6 @@ class QLSC:
 		:param duplicate_endpoint: if True, repeat the first coordinate in the polygon as the last element
 		:returns: an array of ra,dec coordinates in degrees
 		'''
-		
-#		original_face = self.face_number(ipix=ipix)
-		
-		# find corresponding ipix value on face 1
-#		bins_per_face = self.nside ^ 2
-# 		if original_face == 1:
-# 			ipix_1 = original_face # corresponding ipix value on face 1
-# 		elif original_face == 0:
-# 			ipix_1 = ipix + bins_per_face
-# 		else:
-# 			ipix_1 = ipix - (original_face-1)*bins_per_face
-		
 		if ipix is None:
 			raise ValueError(f"An 'ipix' value must be specified.")
 		if not (0 <= ipix < self.nbins):
@@ -339,12 +358,10 @@ class QLSC:
 		
 		# array of bin edges, both x and y
 		#bins = np.linspace(-1,1,endpoint=True, dtype=np.double, num=self.nside*4+1)
-#		bins = np.linspace(-45,45,endpoint=True, dtype=np.double, num=self.nside*4+1)
 		
-		d = 2/self.nside # bin_length (d=delta)
+		d = 2./self.nside # bin_length since -1 ≤ x ≤ 1 (d=delta)
 		
 		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
-		print("f=",facenum, x, y)
 		
 		if duplicate_endpoint:
 			polygon = np.array([
@@ -362,8 +379,6 @@ class QLSC:
 					[  x , y+d ]
 				], dtype=np.double)
 
-		print("x,y polygon: ", polygon)
-			
 		if duplicate_endpoint == True:
 			polygon = polygon[:-1]
 		
