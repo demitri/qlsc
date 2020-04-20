@@ -2,7 +2,7 @@
 import pytest
 from numpy.testing import assert_approx_equal
 
-from pyq3c import Q3C
+from qlsc import QLSC
 
 # ipix, depth, facenum
 expected_results = [
@@ -19,7 +19,7 @@ expected_results = [
 @pytest.mark.parametrize("ipix, depth, area", expected_results)
 def test_pixarea(ipix, depth, area):
 	'''
-	Test Q3C pixarea.
+	Test QLSC pixarea.
 	'''
-	q3c = Q3C()
-	assert_approx_equal(area, q3c.pixarea(ipix, depth))
+	q = QLSC()
+	assert_approx_equal(area, q.pixarea(ipix, depth))

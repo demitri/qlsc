@@ -1,5 +1,5 @@
 
-import pyq3c
+#import qlsc
 from . import _q3c_wrapper # as q3c
 
 def distance(ra1, dec1, ra2, dec2) -> float:

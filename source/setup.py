@@ -30,7 +30,7 @@ def get_property(prop:str, project:str):
 	result = re.search(r'{}\s*=\s*[\'"]([^\'"]*)[\'"]'.format(prop), open(project + '/__init__.py').read())
 	return result.group(1)
 
-sources = ["pyq3c/pyq3c_module.c", "q3c/q3cube.c", "q3c/q3c_poly.c"]
+sources = ["qlsc/qlsc_c_module.c", "q3c/q3cube.c", "q3c/q3c_poly.c"]
 data_files = []
 include_dirs = ['q3c']		# -I directories
 library_dirs = []			# -L directories
@@ -38,7 +38,7 @@ libraries = []		# libraries to include
 define_macros = [('Q3C_VERSION', '"1.8.1"')] # equivalent of a bare #define in C source
 extra_link_args = [] # e.g. ['-framework', 'OpenGL', '-framework', 'GLUT'])
 
-ext = Extension(name="pyq3c._q3c_wrapper",
+ext = Extension(name="qlsc._q3c_wrapper",
 				sources=sources,
 				language=['C'],
 				include_dirs=include_dirs,
@@ -56,17 +56,17 @@ classifiers = [
     "Intended Audience :: Science/Research"
 ]
 
-exec(open('pyq3c/version.py').read())
+exec(open('qlsc/version.py').read())
 setup(
-    name="pyq3c",
+    name="qlsc",
     version=__version__,
-    #version=get_property('__version__', 'pyq3c'),
+    #version=get_property('__version__', 'qlsc'),
     description=description,
     long_description=long_description,
     #long_description_content_type='text/markdown; charset=UTF-8; variant=GFM',
     #license="GPL",
     #classifiers=classifiers,
-    url="https://github.com/demitri/pyq3c",
+    url="https://github.com/demitri/qlsc",
     author="Demitri Muna",
     author_email="demitri@scicoder.org",
     #setup_requires=[],
@@ -75,7 +75,7 @@ setup(
     data_files=data_files,
     ext_modules=[ext], # alternative: cythonize(etc), needs "from Cython.Build import cythonize"
     include_dirs=['q3c'],
-    packages=['pyq3c']
+    packages=['qlsc']
 )
 #    cmdclass={"build_ext": build_ext_subclass}
 #)

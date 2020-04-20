@@ -1,7 +1,7 @@
 
 import pytest
 
-from pyq3c import Q3C
+from qlsc import QLSC
 
 # bin_level, ra, dec, ipix
 expected_results = [
@@ -27,7 +27,7 @@ expected_results = [
 @pytest.mark.parametrize("bin_level, ra, dec, ipix", expected_results)
 def test_ang2ipix(bin_level, ra, dec, ipix):
 	'''
-	Test Q3C ang2ipix.
+	Test QLSC ang2ipix.
 	'''
-	qlsc = Q3C(bin_level=bin_level)
-	assert ipix == qlsc.ang2ipix(ra, dec)
+	q = QLSC(bin_level=bin_level)
+	assert ipix == q.ang2ipix(ra, dec)

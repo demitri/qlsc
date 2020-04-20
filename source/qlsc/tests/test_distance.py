@@ -5,7 +5,7 @@ from numpy.testing import assert_approx_equal
 # See for C to assert_approx_equal:
 # https://stackoverflow.com/questions/16839658/printf-width-specifier-to-maintain-precision-of-floating-point-value
 
-import pyq3c
+import qlsc
 
 # ra1, dec1, ra2, dec2, distance - all degrees
 expected_results = [
@@ -18,6 +18,6 @@ expected_results = [
 @pytest.mark.parametrize("ra1, ra2, dec1, dec2, distance", expected_results)
 def test_distance(ra1, ra2, dec1, dec2, distance):
 	'''
-	Test Q3C dist, the angular distance between two points on a sphere.
+	Test QLSC dist, the angular distance between two points on a sphere.
 	'''
-	assert_approx_equal(distance, pyq3c.distance(ra1, ra2, dec1, dec2))
+	assert_approx_equal(distance, qlsc.distance(ra1, ra2, dec1, dec2))

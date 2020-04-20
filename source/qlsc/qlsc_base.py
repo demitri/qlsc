@@ -24,11 +24,11 @@ try:
 except ImportError:
 	pandas_available = False
 
-from . import _q3c_wrapper # functions defined in "pyq3c_module.c" as named in the array "pyq3c_methods"
+from . import _q3c_wrapper # functions defined in "qlsc_c_module.c" as named in the array "qlsc_methods"
 from ._q3c_wrapper import radial_query_it, sindist
 from .utilities import _normalize_ang
 
-class Q3C:
+class QLSC:
 	'''
 	A class that describes a quadrilaterized spherical cube (QLSC).
 	
@@ -273,7 +273,7 @@ class Q3C:
 	
 	def ipix_area(self, ipix:int, depth:int) -> float:
 		'''
-		Return the area of a given Q3C pixel in steradians for a given ipix.
+		Return the area of a given QLSC pixel in steradians for a given ipix.
 		
 		NOTE: currently this method returns the average bin size and ignores the ipix and depth values!
 		
@@ -370,16 +370,16 @@ class Q3C:
 		return self.xy2ang(facenum=facenum, points=polygon)
 		
 
-class Q3CIndex:
+class QLSCIndex:
 	
-	def __init__(self, q3c:Q3C=Q3C()):
+	def __init__(self, qlsc:QLSC=QLSC()):
 		'''
 		'''
-		self.q3c = q3c
+		self.qlsc = qlsc
 
 		self.ra_key = "ra"
 		self.dec_key = "dec"
-		self.database_tablename = "q3c_table"
+		self.database_tablename = "qlsc_table"
 
 		self._data_source = sqlite3.connect(":memory:")
 		self._init_sqlite_db()
@@ -461,18 +461,18 @@ class Q3CIndex:
 		#con.create_function("ang2ipix", 1, self.ang2ipix)
 		assert isinstance(self.data_source, sqlite3.Connection), "_init_sqlite_db called on an object that isn't an SQLite database connection!"
 		
-		#self.data_source.create_function("q3c_ang2ipix", 3, self.q3c.ang2ipix)
+		#self.data_source.create_function("qlsc_ang2ipix", 3, self.qlsc.ang2ipix)
 
 # 		def plus(a,b):
 # 			return a+b
 		
-		#self.data_source.create_function("q3c_ang2ipix", 2, plus)
+		#self.data_source.create_function("qlsc_ang2ipix", 2, plus)
 
 		with contextlib.closing(self.data_source.cursor()) as cursor:
 			cursor.execute(f"CREATE TABLE {self.database_tablename} ({self.ra_key} REAL, {self.dec_key} REAL)") # ipix
 			#cursor.execute(f"CREATE INDEX ipix_idx ON {self.database_tablename} (ipix)")
 
-# 			cursor.execute("SELECT q3c_ang2ipix(12, 34)")
+# 			cursor.execute("SELECT qlsc_ang2ipix(12, 34)")
 # 			ipix = cursor.fetchone()[0]
 # 			print(ipix)
 
@@ -549,7 +549,7 @@ class Q3CIndex:
 
 		if isinstance(self.data_source, sqlite3.Connection):
 			with contextlib.closing(self._data_source.cursor()) as cursor:
-				for ra, dec in cursor.execute(f"SELECT {self.ra_key}, {self.dec_key} FROM q3c_table"):
+				for ra, dec in cursor.execute(f"SELECT {self.ra_key}, {self.dec_key} FROM qlsc_table"):
 					if self._radial_match(ra, dec, center_ra, center_dec, radius):
 					   matches.append((ra,dec))
 		
@@ -585,8 +585,8 @@ class Q3CIndex:
 		'''
 		# indexing makes this step fast - this is the slow part
 		# index is ra,dec in, ipix out
-		ipix = self.q3c.ang2ipix(ra, dec)
-		hprm = self.q3c._hprm
+		ipix = self.qlsc.ang2ipix(ra, dec)
+		hprm = self.qlsc._hprm
 		return ((ipix>=radial_query_it(hprm,center_ra,center_dec,radius,0,1)  and ipix<radial_query_it(hprm,center_ra,center_dec,radius,1,1)) or \
 			    (ipix>=radial_query_it(hprm,center_ra,center_dec,radius,2,1)  and ipix<radial_query_it(hprm,center_ra,center_dec,radius,3,1)) or \
 			    (ipix>=radial_query_it(hprm,center_ra,center_dec,radius,4,1)  and ipix<radial_query_it(hprm,center_ra,center_dec,radius,5,1)) or \

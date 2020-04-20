@@ -5,7 +5,7 @@ from numpy.testing import assert_approx_equal
 # See for C to assert_approx_equal:
 # https://stackoverflow.com/questions/16839658/printf-width-specifier-to-maintain-precision-of-floating-point-value
 
-from pyq3c import Q3C
+from qlsc import QLSC
 
 # facenum. x, y, ra, dec (ra,dec)
 expected_results = [
@@ -94,10 +94,10 @@ expected_results = [
 @pytest.mark.parametrize("facenum, x, y, ra, dec", expected_results)
 def test_xy2ang(facenum, x, y, ra, dec):
 	'''
-	Test Q3C xy2facenum. This is independent of bin size.
+	Test QLSC xy2facenum. This is independent of bin size.
 	'''
-	qlsc = Q3C(bin_level=1) # the bin level doesn't matter
-	ra_out, dec_out = qlsc.xy2ang(facenum=facenum, x=x, y=y)
+	q = QLSC(bin_level=1) # the bin level doesn't matter
+	ra_out, dec_out = q.xy2ang(facenum=facenum, x=x, y=y)
 	assert_approx_equal(ra, ra_out)
 	assert_approx_equal(dec, dec_out)
 	

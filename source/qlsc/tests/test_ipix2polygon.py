@@ -6,7 +6,7 @@ from numpy.testing import assert_allclose #, assert_approx_equal
 # See for C to assert_approx_equal:
 # https://stackoverflow.com/questions/16839658/printf-width-specifier-to-maintain-precision-of-floating-point-value
 
-from pyq3c import Q3C
+from qlsc import QLSC
 
 # bin_level, ipix, [[ra1,dec1], ... , [ran,decn]]
 
@@ -47,7 +47,7 @@ expected_results = qlsc0_expected_results + qlsc2_expected_results + qlsc10_expe
 @pytest.mark.parametrize("bin_level, ipix, polygon", expected_results)
 def test_ipix2polygon(bin_level, ipix, polygon):
 	'''
-	Test Q3C ipix2polygon.
+	Test QLSC ipix2polygon.
 	'''
-	qlsc = Q3C(bin_level=bin_level)
-	assert_allclose(polygon, qlsc.ipix2polygon(ipix))
+	q = QLSC(bin_level=bin_level)
+	assert_allclose(polygon, q.ipix2polygon(ipix))

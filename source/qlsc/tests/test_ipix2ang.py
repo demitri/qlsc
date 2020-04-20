@@ -2,7 +2,7 @@
 import pytest
 from numpy.testing import assert_approx_equal
 
-from pyq3c import Q3C
+from qlsc import QLSC
 
 # bin_level, ipix, ra, dec
 expected_results_30 = [
@@ -17,10 +17,10 @@ expected_results = expected_results_30
 @pytest.mark.parametrize("bin_level, ipix, ra, dec", expected_results)
 def test_ipix2ang(bin_level, ipix, ra, dec):
 	'''
-	Test Q3C ipix2ang.
+	Test QLSC ipix2ang.
 	'''
-	qlsc = Q3C(bin_level=bin_level) # use default nside value
-	ra_out, dec_out = qlsc.ipix2ang(ipix)
+	q = QLSC(bin_level=bin_level) # use default nside value
+	ra_out, dec_out = q.ipix2ang(ipix)
 	
 	assert_approx_equal(ra, ra_out)
 	assert_approx_equal(dec, dec_out)

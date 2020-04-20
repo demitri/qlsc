@@ -1,7 +1,7 @@
 
 import pytest
 
-import pyq3c
+import qlsc
 
 # ra, dec, depth, ipix
 expected_results = [
@@ -12,22 +12,22 @@ expected_results = [
 
 # ra, dec, depth, ipix
 depth_out_of_range_expected_results = [
-	(12, 34, 0, 6790392854874529380) # the ipix value acutally return in the Q3C PostgreSQL plugin (?)
+	(12, 34, 0, 6790392854874529380) # the ipix value actually returned in the Q3C PostgreSQL plugin (?)
 ]
 
 @pytest.mark.parametrize("ra, dec, depth, ipix", expected_results)
 def test_ipixcenter(ra, dec, depth, ipix):
 	'''
-	Test Q3C ipixcenter.
+	Test QLSC ipixcenter.
 	'''
-	q3c = pyq3c.Q3C()
-	assert ipix == q3c.ipixcenter(ra, dec, depth)
+	q = qlsc.QLSC()
+	assert ipix == q.ipixcenter(ra, dec, depth)
 
 @pytest.mark.parametrize("ra, dec, depth, ipix", depth_out_of_range_expected_results)
 def test_ipixcenter_depth_range(ra, dec, depth, ipix):
 	'''
-	Test Q3C ipixcenter depth in correct range.
+	Test QLSC ipixcenter depth in correct range.
 	'''
 	with pytest.raises(ValueError):
-		q3c = pyq3c.Q3C()
-		q3c.ipixcenter(ra, dec, depth) # depth should be int > 0
+		q = qlsc.QLSC()
+		q.ipixcenter(ra, dec, depth) # depth should be int > 0

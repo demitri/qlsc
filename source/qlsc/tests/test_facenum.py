@@ -1,7 +1,7 @@
 
 import pytest
 
-from pyq3c import Q3C
+from qlsc import QLSC
 
 # bin_level, ra, dec, facenum
 expected_results = [
@@ -22,7 +22,7 @@ expected_results = [
 @pytest.mark.parametrize("bin_level, ra, dec, facenum", expected_results)
 def test_facenum(bin_level, ra, dec, facenum):
 	'''
-	Test Q3C ang2ipix.
+	Test QLSC ang2ipix.
 	'''
-	qlsc = Q3C(bin_level=bin_level)
-	assert facenum == qlsc.face_number(ra, dec)
+	q = QLSC(bin_level=bin_level)
+	assert facenum == q.face_number(ra, dec)

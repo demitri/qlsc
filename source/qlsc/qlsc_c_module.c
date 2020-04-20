@@ -31,7 +31,7 @@ static void del_prm(PyObject *obj)
 }
 
 static PyObject *
-pyq3c_init_q3c1(PyObject *self, PyObject *args, PyObject *kwargs)
+qlsc_init_q3c1(PyObject *self, PyObject *args, PyObject *kwargs)
 {
 	PyObject *returnValue = NULL;
 	
@@ -66,7 +66,7 @@ finally:
 // ---------------------------------
 
 static PyObject *
-pyq3c_q3c_nside(PyObject *self, PyObject *arg)
+qlsc_q3c_nside(PyObject *self, PyObject *arg)
 {
 	PyObject *return_value = NULL;
 
@@ -89,8 +89,8 @@ pyq3c_q3c_nside(PyObject *self, PyObject *arg)
 }
 
 static PyObject *
-pyq3c_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast as PyCFunctionWithKeywords
-//pyq3c_q3c_ang2ipix(PyObject *module, PyObject *args) // -> cast as PyCFunction
+qlsc_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast as PyCFunctionWithKeywords
+//qlsc_q3c_ang2ipix(PyObject *module, PyObject *args) // -> cast as PyCFunction
 {
 	// external parameters
 	q3c_coord_t ra;
@@ -154,7 +154,7 @@ pyq3c_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cas
 }
 
 static PyObject *
-pyq3c_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast as PyCFunctionWithKeywords
+qlsc_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast as PyCFunctionWithKeywords
 {
 	// external parameters
 	q3c_coord_t ra;
@@ -232,7 +232,7 @@ pyq3c_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> 
 }
 
 static PyObject *
-pyq3c_q3c_ipix2ang(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast as PyCFunctionWithKeywords
+qlsc_q3c_ipix2ang(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast as PyCFunctionWithKeywords
 {
 	// external parameters
 	q3c_ipix_t ipix; // int64_t
@@ -307,7 +307,7 @@ void ipix_to_xy(struct q3c_prm *hprm, q3c_ipix_t ipix, q3c_coord_t *x, q3c_coord
 }
 
 static PyObject *
-pyq3c_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
+qlsc_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
 	q3c_ipix_t ipix;
@@ -354,7 +354,7 @@ pyq3c_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 }
 
 static PyObject *
-pyq3c_q3c_pixarea(PyObject *module, PyObject *args, PyObject *kwargs)
+qlsc_q3c_pixarea(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external xy2angparameters
 	q3c_ipix_t ipix;
@@ -390,7 +390,7 @@ pyq3c_q3c_pixarea(PyObject *module, PyObject *args, PyObject *kwargs)
 }
 
 static PyObject *
-pyq3c_q3c_facenum(PyObject *module, PyObject *args, PyObject *kwargs)
+qlsc_q3c_facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
 	q3c_coord_t ra, dec;
@@ -420,7 +420,7 @@ pyq3c_q3c_facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 }
 
 static PyObject *
-pyq3c_q3c_dist(PyObject *module, PyObject *args, PyObject *kwargs)
+qlsc_q3c_dist(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
 	q3c_coord_t ra1, dec1; // degrees
@@ -447,7 +447,7 @@ pyq3c_q3c_dist(PyObject *module, PyObject *args, PyObject *kwargs)
 }
 
 static PyObject *
-pyq3c_q3c_sindist(PyObject *module, PyObject *args, PyObject *kwargs)
+qlsc_q3c_sindist(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
 	q3c_coord_t ra1, dec1; // degrees
@@ -474,7 +474,7 @@ pyq3c_q3c_sindist(PyObject *module, PyObject *args, PyObject *kwargs)
 }
 
 static PyObject *
-pyq3c_q3c_xy2ang(PyObject *module, PyObject *args, PyObject *kwargs)
+qlsc_q3c_xy2ang(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
 	q3c_coord_t x, y;
@@ -536,7 +536,7 @@ pyq3c_q3c_xy2ang(PyObject *module, PyObject *args, PyObject *kwargs)
 
 /* I don't really know what this does.
 static PyObject *
-pyq3c_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
+qlsc_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
 	q3c_coord_t x, y;
@@ -562,7 +562,7 @@ pyq3c_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 */
 
 static PyObject *
-pyq3c_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
+qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
 	PyObject *hprm_capsule;
@@ -622,7 +622,7 @@ pyq3c_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	return full_flag ? PyLong_FromLongLong(fulls[iteration]) : PyLong_FromLongLong(partials[iteration]);
 }
 
-static PyMethodDef pyq3c_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_KEYWORDS
+static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_KEYWORDS
 	// Ref: available flags: https://docs.python.org/3/c-api/structures.html#c.PyMethodDef
 	
 	// This is an array of PyMethodDef structs, NULL-terminated
@@ -633,30 +633,30 @@ static PyMethodDef pyq3c_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_
 	// METH_NOARGS -> no arguments
 	// METH_O -> one argument
 	// METH_VARARGS | METH_KEYWORDS -> f(self, args, kwargs )
-	{"init_q3c", (PyCFunction)pyq3c_init_q3c1, METH_VARARGS|METH_KEYWORDS, "Initialize prm, Q3C's main structure."},
-	{"nside", (PyCFunction)pyq3c_q3c_nside, METH_VARARGS, "Return the number of bins along the edge of each cube face."},
-	{"ang2ipix", (PyCFunction)pyq3c_q3c_ang2ipix, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value."},
-	{"ang2ipix_xy", (PyCFunction)pyq3c_q3c_ang2ipix_xy, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value, also returning (x,y) and the face number in a dictionary."},
-	{"ipix2ang", (PyCFunction)pyq3c_q3c_ipix2ang, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value to ra,dec tuple."},
-	{"ipix2xy", (PyCFunction)pyq3c_q3c_ipix2xy, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value to the (x,y) coordinate on the square face with the face number as a tuple: (facenum,x,y)."},
-	{"facenum", (PyCFunction)pyq3c_q3c_facenum, METH_VARARGS|METH_KEYWORDS, "Return the cube face number for the given coordinates."},
-	{"pixarea", (PyCFunction)pyq3c_q3c_pixarea, METH_VARARGS|METH_KEYWORDS, "Return the area of a given Q3C pixel for a given ipix and depth."},
-	{"distance", (PyCFunction)pyq3c_q3c_dist, METH_VARARGS|METH_KEYWORDS, "Calculates angular distance between two points on a sphere."},
-	{"sindist", (PyCFunction)pyq3c_q3c_sindist, METH_VARARGS|METH_KEYWORDS, "Calculates the sine of the angular distance between two points on a sphere."},
-	{"xy2ang", (PyCFunction)pyq3c_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
-//	{"xy2facenum", (PyCFunction)pyq3c_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
-	{"radial_query_it", (PyCFunction)pyq3c_q3c_radial_query_it, METH_VARARGS|METH_KEYWORDS, ""},
+	{"init_q3c", (PyCFunction)qlsc_init_q3c1, METH_VARARGS|METH_KEYWORDS, "Initialize prm, Q3C's main structure."},
+	{"nside", (PyCFunction)qlsc_q3c_nside, METH_VARARGS, "Return the number of bins along the edge of each cube face."},
+	{"ang2ipix", (PyCFunction)qlsc_q3c_ang2ipix, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value."},
+	{"ang2ipix_xy", (PyCFunction)qlsc_q3c_ang2ipix_xy, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value, also returning (x,y) and the face number in a dictionary."},
+	{"ipix2ang", (PyCFunction)qlsc_q3c_ipix2ang, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value to ra,dec tuple."},
+	{"ipix2xy", (PyCFunction)qlsc_q3c_ipix2xy, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value to the (x,y) coordinate on the square face with the face number as a tuple: (facenum,x,y)."},
+	{"facenum", (PyCFunction)qlsc_q3c_facenum, METH_VARARGS|METH_KEYWORDS, "Return the cube face number for the given coordinates."},
+	{"pixarea", (PyCFunction)qlsc_q3c_pixarea, METH_VARARGS|METH_KEYWORDS, "Return the area of a given Q3C pixel for a given ipix and depth."},
+	{"distance", (PyCFunction)qlsc_q3c_dist, METH_VARARGS|METH_KEYWORDS, "Calculates angular distance between two points on a sphere."},
+	{"sindist", (PyCFunction)qlsc_q3c_sindist, METH_VARARGS|METH_KEYWORDS, "Calculates the sine of the angular distance between two points on a sphere."},
+	{"xy2ang", (PyCFunction)qlsc_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
+//	{"xy2facenum", (PyCFunction)qlsc_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
+	{"radial_query_it", (PyCFunction)qlsc_q3c_radial_query_it, METH_VARARGS|METH_KEYWORDS, ""},
 	{NULL, NULL, 0, NULL}	// sentinel
 };
 
 // Ref: https://docs.python.org/3/c-api/module.html#c.PyModuleDef
-static struct PyModuleDef pyq3cmodule_definition = {
+static struct PyModuleDef qlsc_module_definition = {
 	PyModuleDef_HEAD_INIT,
 	"_q3c_wrapper",					// name of module
-	"A Python wrapper around Q3C.",	// docstring for the module
+	"A Python implementation of the Quadrilateralized Spherical Cube (QLSC).",	// docstring for the module
 	-1,						// size of per-interpreter state of the module,
 			                // or -1 if the module keeps state in global variables.
-	pyq3c_methods			// pointer to a table of module-level functions (PyMethodDef class)
+	qlsc_methods			// pointer to a table of module-level functions (PyMethodDef class)
 //	NULL,					// m_slots
 //	NULL,					// m_traverse
 //	NULL,					// m_clear, a clear function to call during GC clearing of the module object
@@ -666,7 +666,7 @@ static struct PyModuleDef pyq3cmodule_definition = {
 PyMODINIT_FUNC
 PyInit__q3c_wrapper(void)
 {
-	return PyModule_Create(&pyq3cmodule_definition);
+	return PyModule_Create(&qlsc_module_definition);
 }
 
 
