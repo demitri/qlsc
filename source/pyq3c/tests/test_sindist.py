@@ -2,7 +2,7 @@
 import pytest
 from numpy.testing import assert_approx_equal
 
-# See for C to assrt_approx_equal:
+# See for C to assert_approx_equal:
 # https://stackoverflow.com/questions/16839658/printf-width-specifier-to-maintain-precision-of-floating-point-value
 
 import pyq3c

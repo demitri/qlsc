@@ -66,7 +66,7 @@ finally:
 // ---------------------------------
 
 static PyObject *
-pyq3c_q3c_nsides(PyObject *self, PyObject *arg)
+pyq3c_q3c_nside(PyObject *self, PyObject *arg)
 {
 	PyObject *return_value = NULL;
 
@@ -215,22 +215,16 @@ pyq3c_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> 
 
 	PyObject* facenum_py = PyLong_FromLong((long)facenum);
 	PyObject* ipix_py = PyLong_FromLongLong(ipix);
-	PyObject* ra_py = PyFloat_FromDouble(ra);
-	PyObject* dec_py = PyFloat_FromDouble(dec);
 	PyObject* x_py = PyFloat_FromDouble(x);
 	PyObject* y_py = PyFloat_FromDouble(y);
 
 	PyDict_SetItemString(return_dict, "facenum", facenum_py);
-	PyDict_SetItemString(return_dict, "ra", ra_py);
-	PyDict_SetItemString(return_dict, "dec", dec_py);
 	PyDict_SetItemString(return_dict, "x", x_py);
 	PyDict_SetItemString(return_dict, "y", y_py);
 	PyDict_SetItemString(return_dict, "ipix", ipix_py);
 
 	Py_DECREF(facenum_py);
 	Py_DECREF(ipix_py);
-	Py_DECREF(ra_py);
-	Py_DECREF(dec_py);
 	Py_DECREF(x_py);
 	Py_DECREF(y_py);
 
@@ -329,13 +323,14 @@ pyq3c_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 //	q3c_ipix_t i2, i3, x0, y0;
 	
 	// return values
-	char face_num;
+	//char face_num;
+	int face_num;
 	q3c_coord_t x, y;
 
 	static char *kwlist[] = {"hprm", "ipix", NULL};
 	
     if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-    								 "OL",						// accept parameters of type double
+    								 "OL",						// object + longlong
     								 kwlist,					//
     								 &hprm_capsule, &ipix))
 	{
@@ -345,7 +340,13 @@ pyq3c_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
-	face_num = ipix / (hprm->nside)^2;
+	//face_num = ipix / (hprm->nside)^2;
+	face_num = (int)trunc(ipix/pow(hprm->nside,2)); // take care of types here...
+
+//	PySys_WriteStdout("x = %f\n", (double) (ipix / ((hprm->nside)^2)) );
+//	PySys_WriteStdout("ipix = %"PRId64"\n", ipix);
+//	PySys_WriteStdout("face_num = %d\n", face_num);
+//	PySys_WriteStdout("hprm->nside = %f\n", pow(hprm->nside,2));
 	
 	ipix_to_xy(hprm, ipix, &x, &y);
 	
@@ -355,7 +356,7 @@ pyq3c_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 static PyObject *
 pyq3c_q3c_pixarea(PyObject *module, PyObject *args, PyObject *kwargs)
 {
-	// external parameters
+	// external xy2angparameters
 	q3c_ipix_t ipix;
 	PyObject *hprm_capsule;
 	int depth;
@@ -533,6 +534,7 @@ pyq3c_q3c_xy2ang(PyObject *module, PyObject *args, PyObject *kwargs)
 	return Py_BuildValue("dd", ra, dec);
 }
 
+/* I don't really know what this does.
 static PyObject *
 pyq3c_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 {
@@ -557,8 +559,7 @@ pyq3c_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 		
 	return PyLong_FromLong( (long) result );
 }
-
-
+*/
 
 static PyObject *
 pyq3c_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
@@ -633,7 +634,7 @@ static PyMethodDef pyq3c_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_
 	// METH_O -> one argument
 	// METH_VARARGS | METH_KEYWORDS -> f(self, args, kwargs )
 	{"init_q3c", (PyCFunction)pyq3c_init_q3c1, METH_VARARGS|METH_KEYWORDS, "Initialize prm, Q3C's main structure."},
-	{"nsides", (PyCFunction)pyq3c_q3c_nsides, METH_VARARGS, "Return the number of sides."},
+	{"nside", (PyCFunction)pyq3c_q3c_nside, METH_VARARGS, "Return the number of bins along the edge of each cube face."},
 	{"ang2ipix", (PyCFunction)pyq3c_q3c_ang2ipix, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value."},
 	{"ang2ipix_xy", (PyCFunction)pyq3c_q3c_ang2ipix_xy, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value, also returning (x,y) and the face number in a dictionary."},
 	{"ipix2ang", (PyCFunction)pyq3c_q3c_ipix2ang, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value to ra,dec tuple."},
@@ -643,7 +644,7 @@ static PyMethodDef pyq3c_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_
 	{"distance", (PyCFunction)pyq3c_q3c_dist, METH_VARARGS|METH_KEYWORDS, "Calculates angular distance between two points on a sphere."},
 	{"sindist", (PyCFunction)pyq3c_q3c_sindist, METH_VARARGS|METH_KEYWORDS, "Calculates the sine of the angular distance between two points on a sphere."},
 	{"xy2ang", (PyCFunction)pyq3c_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
-	{"xy2facenum", (PyCFunction)pyq3c_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
+//	{"xy2facenum", (PyCFunction)pyq3c_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
 	{"radial_query_it", (PyCFunction)pyq3c_q3c_radial_query_it, METH_VARARGS|METH_KEYWORDS, ""},
 	{NULL, NULL, 0, NULL}	// sentinel
 };

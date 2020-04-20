@@ -8,6 +8,7 @@ be used as such.
 '''
 
 import math
+import collections
 import numpy as np
 from numpy import deg2rad, rad2deg, cos, sin, arctan2, sqrt, fmod, trunc, sign
 
@@ -40,7 +41,8 @@ def _ang2cartesian(ra=None,dec=None,points=None):
 	sin_ra = np.sin(ra)
 	return np.array([sin_dec * cos_ra, # x
 					 sin_dec * sin_ra, # y
-					 cos_dec])        # z
+					 cos_dec],         # z
+					 dtype=np.double)
 
 def _cartesian2ang(v):
 	'''
@@ -120,6 +122,39 @@ def _rotation_matrix_z(angle) -> np.matrix:
 		[       0,         0,      1        ]
 		])
 
+def _normalize_ra(ra):
+	'''
+	Normalize right ascension values in degrees to [0,360].
+	'''
+	is_list = isinstance(ra, list)
+	if is_list:
+		ra = np.array(ra, dtype=np.double)
+		
+	if isinstance(ra, np.ndarray):
+		if ra.dtype not in [np.float, np.double]:
+			ra = ra.astype(np.double)
+	
+	if isinstance(ra, collections.abc.Iterable):
+# 		idx = ra < 0
+# 		ra[idx] = np.fmod(ra,360) + 360
+# 		id ra >= 360
+# 		ra[idx] = fmod(ra,360)
+
+		idx = (ra < 0.) | (ra >=360.)
+		ra[idx] -= np.trunc(ra[idx]/360.)*360.
+		idx = ra < 0.
+		ra[idx] += 360.
+
+	else:
+		if ra < 0.:
+			ra = fmod(ra,360.) + 360.
+		elif ra >= 360.:
+			ra = fmod(ra,360.)
+	if is_list:
+		return  list(ra)
+	else:
+		return ra
+
 def _normalize_ang(points, copy=False): #, radians=False):
 	'''
 	Normalize ra,dec coordinates on a sphere to 0 <= α < 360 and -π <= δ <= π.
@@ -138,6 +173,7 @@ def _normalize_ang(points, copy=False): #, radians=False):
 	if copy:
 		points = np.copy(points)
 	
+	points = np.atleast_2d(points)
 #	if radians:
 #		pi = math.pi
 #	else:
@@ -173,7 +209,9 @@ def _normalize_ang(points, copy=False): #, radians=False):
 	dec[idx] =  pi/2 - fmod(dec[idx], pi/2)
 	ra[idx] =  ra[idx] + pi
 	
-	return points
+	points[:,0] = _normalize_ra(points[:,0])
+	
+	return np.squeeze(points)
 
 	# below is test code
 	

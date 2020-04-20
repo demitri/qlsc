@@ -1,5 +1,6 @@
 
 import os
+import math
 import pathlib
 import sqlite3
 import contextlib
@@ -25,39 +26,54 @@ except ImportError:
 
 from . import _q3c_wrapper # functions defined in "pyq3c_module.c" as named in the array "pyq3c_methods"
 from ._q3c_wrapper import radial_query_it, sindist
+from .utilities import _normalize_ang
 
 class Q3C:
 	'''
-	A class that describes a quadrilaterized sphere.
+	A class that describes a quadrilaterized spherical cube (QLSC).
 	
-	The quadrilaterized sphere is divided into six faces. A bin is the subdivided region on the sphere.
-	At this lowest resolution, the bin level is 0, there is 1 bin per face for a total of 6 bins.
+	The quadrilaterized sphere is divided into six faces. The bin level defines the number times a
+	face is subdivided. A bin level of 1 divides each face into four "pixels"; bin level two divides
+	each of those pixels again into four, etc.
+
+	At the lowest resolution where bin level=0 there is 1 bin per face for a total of 6 bins.
 	The next bin level 1 divides each face into four bins, i.e. a total of 24 bins.
 	Higher bin levels further divide each bin four more times.
 	
 	A scheme can be defined by the bin level where:
-		no. bins per face        = 2**(2*bin_level)
-		number of bins on sphere = no. bins * 6
+		no. bins per face        = (2**bin_level)**2
+		number of bins on sphere = no. bins per face * 6
 	
-	A Q3C object can be created with one (and only one) of "nside" (number of bins per face) or "bin_level".
 	Each bin has a pixel number called an "ipix", which is an integer encoded with the location of the bin.
 	
-	The default value of nside (1073741824, corresponding to 6,442,450,944 segments or bin_level=15)
-	is the one used by the Q3C PostgreSQL plugin. This value is used if 'nside' or 'bin_size' is not specified.
+	The default value of nside=1073741824 corresponds to 6,442,450,944 segments (i.e. bin_level=15)
+	is the one used by the [Q3C PostgreSQL plugin](https://github.com/segasai/q3c).
+	This value is used if neither 'nside' or 'bin_size' are specified.
 	
-	:param nside: number of quadtree subdivisions per face (of six faces)
 	:param bin_level: number of times each bin in each face is subdivided by four
 	'''		
-	def __init__(self, nside:int=None, bin_level:int=None):
+#	:param nside: number of quadtree subdivisions per face (of six faces)
+	def __init__(self, bin_level:int=30): # nside:int=None
 
-		if all([nside,bin_level]):
-			raise ValueError("Only one of 'nside' or 'bin_level' can be specified in the initialization.")
-		elif nside is None and bin_level is None:
-			nside = 1073741824
-			
-		if bin_level is not None:
-			nside = int(pow(2, 2*bin_level))
-
+#		if all([nside,bin_level]):
+#			raise ValueError("Only one of 'nside' or 'bin_level' can be specified in the initialization.")
+#		elif nside is None and bin_level is None:
+#			nside = 1073741824
+		
+		# The Q3C code only supports up to bin_level=30
+		if not (0 <= bin_level <= 30):
+			raise ValueError(f"The value for 'bin_level' must be an integer on [0,30]; was given '{bin_level}'.")
+#		if nside and not (0 <= nside <= int(pow(pow(2, 30), 2)):
+#			raise ValueError(f"The value for 'nside' must be an integer on [0,30]; was given '{bin_level}'.")
+		
+		# "nside" as defined by Q3C is the number of bins along one side of the cube face.
+		# This means the number of bins on a cube face is nside*nside, and the total
+		# number of bins is 6*nside*nside.
+		#
+		nside = int(pow(2, bin_level))
+		
+		self.bin_level = bin_level
+		
 		#self.sqlite_db = None
 		#self.main_dbcursor = None
 
@@ -67,14 +83,8 @@ class Q3C:
 		if self._hprm is None:
 			raise Exception("Internal Q3C data structure could not be created.")
 			
-# 	def ang2ipix(self, ra:float, dec:float) -> int:
-# 		'''
-# 		Convert an ra,dec position to an ipix number.
-# 		
-# 		:param ra: right ascension (degrees)
-# 		:param dec: declination (degrees)
-# 		'''
-# 		return _q3c_wrapper.ang2ipix(self._hprm, ra, dec)
+	def __repr__(self):
+		return f"<{self.__class__.__module__.split('.')[0]}.{self.__class__.__name__} at {hex(id(self))}, bin_level={self.bin_level}>"
 	
 	def ang2ipix(self, ra:float=None, dec:float=None, points=None):
 		'''
@@ -100,17 +110,19 @@ class Q3C:
 				raise ValueError("Only specify 'ra','dec' OR 'points'.")
 		
 		if isinstance(ra, collections.abc.Iterable):
-			# .. todo: ensure that ra,dec points are within the proper ranges; the C code will fail silently
-			if not(min(dec) >= -90 and max(dec) <= 90):
+			if isinstance(points, np.ndarray):
+				points = points.astype(np.double, copy=False) # was getting int64 when using, e.g. (0,45)
+			if not (min(dec) >= -90 and max(dec) <= 90):
 				raise ValueError("ang2ipix: dec out of range [-90,90]")
-			if not(min(ra) >= 0 and max(ra) <= 360):
+			if not (min(ra) >= 0 and max(ra) <= 360):
 				raise ValueError("ang2ipix: ra out of range [0,360]")
 			# ra is unwrapped in the C code, but should be checked here anyway
 		else:
-			if not(dec >= -90 and dec <= 90):
-				raise ValueError("ang2ipix: dec out of range [-90,90]")
-			if not(ra >= 0 and ra <= 360):
-				raise ValueError("ang2ipix: ra out of range [0,360]")
+			if not ((-90 <= dec <= 90) and (0 <= ra <= 360)):
+				ra, dec = _normalize_ang(np.array([ra,dec]))
+#				raise ValueError("ang2ipix: dec out of range [-90,90]")
+#			if not (0 <= ra <= 360):
+#				raise ValueError("ang2ipix: ra out of range [0,360]")
 		
 		if points is None:
 			return _q3c_wrapper.ang2ipix(self._hprm, ra, dec)
@@ -123,8 +135,19 @@ class Q3C:
 	def ang2ipix_xy(self, ra:float=None, dec:float=None, points=None) -> dict:
 		'''
 		Convert an ra,dec position to an ipix number; also returns the face number, and (x,y) location on the square face.
+		
+		:param ra: right ascension angle (degrees)
+		:param dec: declination angle (degrees), must be in [-90,90]
+		:param points: an array of ra,dec coordinates (shape: (n,2)) NOT YET SUPPORTED
+		:returns: a dictionary with the keys: ['facenum', 'ipix', 'x', 'y']
 		'''
 		
+		# The underlying C code forces dec > 90 to 90 and dec < -90 to 90.
+		# Either normalize the angle here or raise an exception.
+		# The underlying C code *does* unwrap RA.
+		if not (-90 <= dec <= 90):
+			raise ValueError(f"Values of 'dec' must be in the range [-90,90] (was given '{dec}').")
+			
 		return _q3c_wrapper.ang2ipix_xy(self._hprm, ra, dec)
 	
 
@@ -140,15 +163,7 @@ class Q3C:
 
 		# perform a bounds check
 		if not (0 <= ipix < self.nbins):
-			raise ValueError(f"The ipix number is out of bounds for this scheme: [0,{self.nbins-1}].")
-
-		# The underlying C code forces dec > 90 to 90 and dec < -90 to 90.
-		# Either normalize the angle here or raise an exception.
-		#if -90 <= dec <= 90:
-		#	raise ValueError(f"Values of 'dec' must be in the range [-90,90] (was given '{dec}').")
-			
-			
-		# The underlying C code *does* unwrap RA.
+			raise ValueError(f"The ipix number is out of bounds for this scheme; range: [0,{self.nbins-1}].")
 
 		return _q3c_wrapper.ipix2ang(self._hprm, ipix)
 	
@@ -162,68 +177,125 @@ class Q3C:
 		
 		return _q3c_wrapper.ipix2xy(self._hprm, ipix)
 	
-	def xy2ang(self, x:float=None, y:float=None, facenum:int=None) -> Tuple[float,float]:
+	def xy2ang(self, facenum:int=None, x:float=None, y:float=None, points:collections.abc.Iterable=None): # -> Tuple[float,float]:
 		'''
 		Convert an x,y coordinate pair on the given face number to (ra,dec).
+		
+		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
+		:param x: x coordinate on cube face
+		:param y: y coordinate on cube face
+		:param points: an array containing (x,y) coordinate pairs; shape = (n,2)
+		:returns: tuple of (ra,dec) corresponding to the location on the cube face
 		'''
 		# .. todo: validate ra,dec
 		
-		if not (0 <= facenum <= 5):
-			raise ValueError(f"Values of 'facenum' must be an integer between 0 and 5; was given '{facenum}'.")
+		if facenum is None:
+			raise ValueError("The cube face number ('facenum') must be provided.")
+		else:
+			if not isinstance(facenum, int):
+				# notmally would be ok to cast the value, but this is a safety net to catch 'x' values passed to facenum
+				raise ValueError("The value of facenum is expected to be an integer.")
+			if not (0 <= facenum <= 5):
+				raise ValueError(f"Values of 'facenum' must be an integer between 0 and 5; was given '{facenum}'.")
+		if all(v is not None for v in [x, y, points]): # zero is a possible value
+			raise ValueError(f"Specify only 'ra' and 'dec', or 'points'")
+		if points is None and (x is None or y is None):
+			raise ValueError(f"Values for 'x' and 'y' must be specified together; missing one (x={x}, y={y}).")
+			
 		
-		if not (-1 <= x <= 1) and not (-1 <= y <= 1):
-			raise ValueError("Values of 'x' and 'y' must be in the range [-1,1].")
-		
-		return _q3c_wrapper.xy2ang(x, y, facenum)
+		if points is None:
+			if not (-1 <= x <= 1) and not (-1 <= y <= 1):
+				raise ValueError("Values of 'x' and 'y' must be in the range [-1,1].")
+
+		if points is not None:
+			ang = np.zeros([len(points),2], dtype=np.double)
+			idx = 0
+			for p in points:
+				ang[idx,:] = _q3c_wrapper.xy2ang(p[0], p[1], facenum)
+				idx +=1 # seriously, fuck Numpy
+			return ang
+		else:
+			return _q3c_wrapper.xy2ang(x, y, facenum)
+	
+	def xy2ipix(self, facenum:int=None, x:float=None, y:float=None) -> int: #, points:collections.abc.Iterable):
+		'''
+		Convert an x,y coordinate pair on the given face number to the ipix value.
+		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
+		:param x: x coordinate on cube face
+		:param y: y coordinate on cube face
+		'''
+		ra,dec = self.xy2ang(x=x, y=y, facenum=facenum)
+		return self.ang2ipix(ra, dec)
 	
 	@property
-	def nsides(self) -> int:
+	def nside(self) -> int:
 		'''
-		Number of divisions per face.
+		Number of bins along one edge of the cube face.
 		'''
-		return _q3c_wrapper.nsides(self._hprm)
+		return _q3c_wrapper.nside(self._hprm)
 	
 	@property
 	def nbins(self) -> int:
 		'''
-		Returns the total number of bins in this scheme (number of divisions per face * 6).
+		Returns the total number of bins in this pixellation scheme (number of divisions per face * 6).
 		'''
-		return self.nsides * 6
+		return int(pow(self.nside,2)) * 6
 	
-	def face_number(self, ra:float, dec:float) -> int:
+	def face_number(self, ra:float, dec:float, ipix:int=None) -> int:
 		'''
 		Return the cube face number for the provided coordinate; in [0-5].
 		
 		:param ra: right ascension in degrees; must be in [0,360]
 		:param dec: declination in degrees; must be in [-90,90]
+		:param ipix: the pixel identifier number
+		:returns: the cube face number
 		'''
+		# be careful with all() and any() as 0 is a legitimate value
 		
-		if not -90 <= dec <= 90:
-			raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
-		if not -360 <= ra <= 360:
-			raise ValueError(f"The value of 'ra' must be normalized to [0,360]; was given '{ra}'.")
-		
+		if ipix and True in [x is not None for x in [ra,dec]]:
+			raise ValueError("Only specify 'ra','dec' OR 'ipix', not all three.")
+		if (ra is not None or dec is not None) and (not all([x is not None for x in [ra,dec]])):
+			raise ValueError(f"Both parameters 'ra' and 'dec' are required when one is provided (ra={ra}, dec={dec}).")
+		if ipix:
+			if not (0 <= ipix < self.nbins):
+				raise ValueError(f"The ipix number provided ('{ipix}') is outside the range [0,{self.nbins-1}].")
+		else:
+			# ra,dec provided
+			if not -90 <= dec <= 90:
+				raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
+			if not -360 <= ra <= 360:
+				raise ValueError(f"The value of 'ra' must be normalized to [0,360]; was given '{ra}'.")
+
+		if ipix:
+			ra,dec = self.ipix2ang(ipix)
+
 		return _q3c_wrapper.facenum(self._hprm, ra, dec)
 	
-	def pixarea(self, ipix:int, depth:int) -> float: # rename to "ipix_area"?
+	def ipix_area(self, ipix:int, depth:int) -> float:
 		'''
-		Return the area of a given Q3C pixel in steradians for a given ipix and depth.
+		Return the area of a given Q3C pixel in steradians for a given ipix.
 		
-		depth = 1  -> smallest pixel (1,729,382,256,910,270,000 pixels on sphere)
-		depth = 30 -> pixel is one whole face (6 on sphere)
+		NOTE: currently this method returns the average bin size and ignores the ipix and depth values!
 		
-		No. pixels on sphere = 6 * pixels per face
-		pixels per face = 2 ^ (2 * (30-depth))
-
-		pixel area = 4pi / no. pixels on sphere
+		Not all pixels are guaranteed to be the same size, but they are very close,
+		i.e. the size of any one pixel is a good approximation to any other.
 		
-		:param ipix:
-		:param depth:
+		pixel area ≈ 4π / no. pixels on sphere
+		
+		:param ipix: the pixel identifier number
+		:returns: the area of the specified pixel in steradians
 		'''
-		if not (1 <= depth <= 30):
-			raise ValueError(f"The depth provided {depth} is out of the range 1-30")
 		
-		return _q3c_wrapper.pixarea(self._hprm, ipix, depth)
+		return 4 * math.pi / self.nbins
+		
+		#if not (0 <= depth <= 30):
+		#	raise ValueError(f"The depth provided {depth} is out of the range 0-30")
+		
+		# The paramter call for the underlying C function is q3c_pixarea(hprm, ipix, depth).
+		# It's not clear why "depth" is a parameter since it should be read from hprm.
+		# I left the parameter exposed in the Python wrapper, but in this method will just pass bin_level.
+		
+		#return _q3c_wrapper.pixarea(self._hprm, ipix, depth)
 	
 	def ipixcenter(self, ra:float, dec:float, depth:int) -> int:
 		'''
@@ -237,6 +309,66 @@ class Q3C:
 		if not (1 <= depth <= 30):
 			raise ValueError(f"The depth provided {depth} is out of the range 1-30")
 		return ( _q3c_wrapper.ang2ipix(self._hprm, ra, dec) >> (2*depth) << (2*depth) ) + (1 << (2 * (depth-1))) - 1
+
+	def ipix2polygon(self, ipix:int=None, duplicate_endpoint=False):
+		'''
+		Returns the points that describe the polygon that define this pixel.
+		
+		All lines between each coordinate in the polygon should be drawn on great circles.
+		
+		:param ipix: the pixel identifier number
+		:param duplicate_endpoint: if True, repeat the first coordinate in the polygon as the last element
+		:returns: an array of ra,dec coordinates in degrees
+		'''
+		
+#		original_face = self.face_number(ipix=ipix)
+		
+		# find corresponding ipix value on face 1
+#		bins_per_face = self.nside ^ 2
+# 		if original_face == 1:
+# 			ipix_1 = original_face # corresponding ipix value on face 1
+# 		elif original_face == 0:
+# 			ipix_1 = ipix + bins_per_face
+# 		else:
+# 			ipix_1 = ipix - (original_face-1)*bins_per_face
+		
+		if ipix is None:
+			raise ValueError(f"An 'ipix' value must be specified.")
+		if not (0 <= ipix < self.nbins):
+			raise ValueError(f"The ipix value given ('{ipix}') is out of the valid range for this scheme: [0,{self.nbins-1}].")
+		
+		# array of bin edges, both x and y
+		#bins = np.linspace(-1,1,endpoint=True, dtype=np.double, num=self.nside*4+1)
+#		bins = np.linspace(-45,45,endpoint=True, dtype=np.double, num=self.nside*4+1)
+		
+		d = 2/self.nside # bin_length (d=delta)
+		
+		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
+		print("f=",facenum, x, y)
+		
+		if duplicate_endpoint:
+			polygon = np.array([
+					[  x ,  y  ],
+					[ x+d,  y  ],
+					[ x+d, y+d ],
+					[  x , y+d ],
+					[  x ,  y  ]
+				], dtype=np.double)
+		else:
+			polygon = np.array([
+					[  x ,  y  ],
+					[ x+d,  y  ],
+					[ x+d, y+d ],
+					[  x , y+d ]
+				], dtype=np.double)
+
+		print("x,y polygon: ", polygon)
+			
+		if duplicate_endpoint == True:
+			polygon = polygon[:-1]
+		
+		return self.xy2ang(facenum=facenum, points=polygon)
+		
 
 class Q3CIndex:
 	
