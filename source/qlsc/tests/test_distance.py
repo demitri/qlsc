@@ -20,4 +20,4 @@ def test_distance(ra1, ra2, dec1, dec2, distance):
 	'''
 	Test QLSC dist, the angular distance between two points on a sphere.
 	'''
-	assert_approx_equal(distance, qlsc.distance(ra1, ra2, dec1, dec2))
+	assert_approx_equal(distance, qlsc.q3c.distance(ra1, ra2, dec1, dec2))

@@ -24,14 +24,14 @@ try:
 except ImportError:
 	pandas_available = False
 
-from . import _q3c_wrapper # functions defined in "qlsc_c_module.c" as named in the array "qlsc_methods"
-from ._q3c_wrapper import radial_query_it, sindist
+# functions defined in "qlsc_c_module.c" as named in the array "qlsc_methods" are in the qlsc.q3c namespace
+from . import q3c
 from .utilities import _normalize_ang
 
 class QLSC:
 	'''
 	A class that describes a quadrilaterized spherical cube (QLSC).
-	
+	ggg
 	The quadrilaterized sphere is divided into six faces. The bin level defines the number times a
 	face is subdivided. A bin level of 1 divides each face into four "pixels"; bin level two divides
 	each of those pixels again into four, etc.
@@ -82,14 +82,14 @@ class QLSC:
 
 		# store hprm struct values - hprm is a pointer (struct) to main Q3C structure
 		# used by most Q3C calls
-		self._hprm = _q3c_wrapper.init_q3c(nside=nside)
+		self._hprm = q3c.init_q3c(nside=nside)
 		if self._hprm is None:
 			raise Exception("Internal Q3C data structure could not be created.")
 			
 	def __repr__(self):
 		return f"<{self.__class__.__module__.split('.')[0]}.{self.__class__.__name__} at {hex(id(self))}, bin_level={self.bin_level}>"
 	
-	def ang2ipix(self, ra:float=None, dec:float=None, points=None):
+	def ang2ipix(self, ra:float=None, dec:float=None, points:Iterable=None):
 		'''
 		Convert an ra,dec position to an ipix number.
 		
@@ -132,12 +132,12 @@ class QLSC:
 #				raise ValueError("ang2ipix: ra out of range [0,360]")
 		
 		if points is None:
-			return _q3c_wrapper.ang2ipix(self._hprm, ra, dec)
+			return q3c.ang2ipix(self._hprm, ra, dec)
 		else:
 			# .. todo:: modify C wrapper code to take numpy arrays directly
-			v = np.vectorize(_q3c_wrapper.ang2ipix)
+			v = np.vectorize(q3c.ang2ipix)
 			return v(self._hprm, points[:,0], points[:,1])
-			#return _q3c_wrapper.ang2ipix(self._hprm, points[:,0], points[:,1])
+			#return q3c.ang2ipix(self._hprm, points[:,0], points[:,1])
 
 	def ang2ipix_xy(self, ra:float=None, dec:float=None, points=None) -> dict:
 		'''
@@ -155,14 +155,14 @@ class QLSC:
 		if not (-90 <= dec <= 90):
 			raise ValueError(f"Values of 'dec' must be in the range [-90,90] (was given '{dec}').")
 			
-		return _q3c_wrapper.ang2ipix_xy(self._hprm, ra, dec)
+		return q3c.ang2ipix_xy(self._hprm, ra, dec)
 	
 
 	def ipix2ang(self, ipix:int) -> Tuple[float, float]:
 		'''
-		Convert an ipix number to ra,dec of the "lower left" corner of the pixel, in degrees.
+		Convert an ipix number to the ra,dec coordinate of the "lower left" corner of the pixel, in degrees.
 		
-		See the method :py:func:`ipixcenter2ang` to return the center of the pixel.
+		See the method :py:func:`ipix2ang_center` to return the center of the pixel.
 		
 		This method matches that of the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
 		
@@ -176,11 +176,11 @@ class QLSC:
 		if not (0 <= ipix < self.nbins):
 			raise ValueError(f"The ipix number is out of bounds for this scheme; range: [0,{self.nbins-1}].")
 
-		return _q3c_wrapper.ipix2ang(self._hprm, ipix)
+		return q3c.ipix2ang(self._hprm, ipix)
 
-	def ipixcenter2ang(self, ipix:int) -> Tuple[float, float]:
+	def ipix2ang_center(self, ipix:int) -> Tuple[float, float]:
 		'''
-		Convert an ipix number to ra,dec of the center of the pixel, in degrees.
+		Convert an ipix number to the ra,dec coordinate of the center of the pixel, in degrees.
 		
 		See the method :py:func:`ipix2ang` to return the "lower left" corner of the pixel
 		which matches what is returned by the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
@@ -213,7 +213,7 @@ class QLSC:
 		:returns: (facenum,x,y) as a tuple
 		'''
 		
-		return _q3c_wrapper.ipix2xy(self._hprm, ipix)
+		return q3c.ipix2xy(self._hprm, ipix)
 	
 	def xy2ang(self, facenum:int=None, x:float=None, y:float=None, points:collections.abc.Iterable=None): # -> Tuple[float,float]:
 		'''
@@ -249,11 +249,11 @@ class QLSC:
 			ang = np.zeros([len(points),2], dtype=np.double)
 			idx = 0
 			for p in points:
-				ang[idx,:] = _q3c_wrapper.xy2ang(p[0], p[1], facenum)
+				ang[idx,:] = q3c.xy2ang(p[0], p[1], facenum)
 				idx +=1 # seriously, fuck Numpy
 			return ang
 		else:
-			return _q3c_wrapper.xy2ang(x, y, facenum)
+			return q3c.xy2ang(x, y, facenum)
 	
 	def xy2ipix(self, facenum:int=None, x:float=None, y:float=None) -> int: #, points:collections.abc.Iterable):
 		'''
@@ -271,7 +271,7 @@ class QLSC:
 		'''
 		Number of bins along one edge of the cube face.
 		'''
-		return _q3c_wrapper.nside(self._hprm)
+		return q3c.nside(self._hprm)
 	
 	@property
 	def nbins(self) -> int:
@@ -317,7 +317,7 @@ class QLSC:
 		if ipix:
 			ra,dec = self.ipix2ang(ipix)
 
-		return _q3c_wrapper.facenum(self._hprm, ra, dec)
+		return q3c.facenum(self._hprm, ra, dec)
 	
 	def ipix_area(self, ipix:int, depth:int) -> float:
 		'''
@@ -343,7 +343,7 @@ class QLSC:
 		# It's not clear why "depth" is a parameter since it should be read from hprm.
 		# I left the parameter exposed in the Python wrapper, but in this method will just pass bin_level.
 		
-		#return _q3c_wrapper.pixarea(self._hprm, ipix, depth)
+		#return q3c.pixarea(self._hprm, ipix, depth)
 	
 	def ang2ipix_at_depth(self, ra:float, dec:float, depth:int) -> int:
 		'''
@@ -357,7 +357,7 @@ class QLSC:
 		'''
 		if not (1 <= depth <= 30):
 			raise ValueError(f"The depth provided {depth} is outside the integer range [1,30].")
-		return ( _q3c_wrapper.ang2ipix(self._hprm, ra, dec) >> (2*depth) << (2*depth) ) + (1 << (2 * (depth-1))) - 1
+		return ( q3c.ang2ipix(self._hprm, ra, dec) >> (2*depth) << (2*depth) ) + (1 << (2 * (depth-1))) - 1
 
 	def ipix2polygon(self, ipix:int=None, duplicate_endpoint=False):
 		'''

@@ -30,15 +30,17 @@ def get_property(prop:str, project:str):
 	result = re.search(r'{}\s*=\s*[\'"]([^\'"]*)[\'"]'.format(prop), open(project + '/__init__.py').read())
 	return result.group(1)
 
-sources = ["qlsc/qlsc_c_module.c", "q3c/q3cube.c", "q3c/q3c_poly.c"]
+sources = ["qlsc/c_code/qlsc_c_module.c", "qlsc/c_code/q3c/q3cube.c", "qlsc/c_code/q3c/q3c_poly.c"]
 data_files = []
 include_dirs = ['q3c']		# -I directories
 library_dirs = []			# -L directories
 libraries = []		# libraries to include
-define_macros = [('Q3C_VERSION', '"1.8.1"')] # equivalent of a bare #define in C source
+define_macros = [('Q3C_VERSION', '"2.0.0"')] # equivalent of a bare #define in C source
 extra_link_args = [] # e.g. ['-framework', 'OpenGL', '-framework', 'GLUT'])
 
-ext = Extension(name="qlsc._q3c_wrapper",
+# The name of the module being build is "q3c".
+# Place is under the "qlsl" package below in setup().
+c_extension = Extension(name="q3c",
 				sources=sources,
 				language=['C'],
 				include_dirs=include_dirs,
@@ -49,8 +51,9 @@ ext = Extension(name="qlsc._q3c_wrapper",
 description = ("A Python library around the Q3C code.")
 long_description = "-- add long description here --"
 
+# list of classifiers: https://pypi.org/classifiers/
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: GNU General Public License (GPL)",
     "Topic :: Scientific/Engineering :: Astronomy",
     "Intended Audience :: Science/Research"
@@ -73,7 +76,8 @@ setup(
     #install_requires=[],
     #packages=find_packages(),
     data_files=data_files,
-    ext_modules=[ext], # alternative: cythonize(etc), needs "from Cython.Build import cythonize"
+    ext_package="qlsc", # will compile the methods from the extension to the namespace "qlsc"
+    ext_modules=[c_extension], # alternative: cythonize(etc), needs "from Cython.Build import cythonize"
     include_dirs=['q3c'],
     packages=['qlsc']
 )

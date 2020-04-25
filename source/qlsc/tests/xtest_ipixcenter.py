@@ -16,18 +16,18 @@ depth_out_of_range_expected_results = [
 ]
 
 @pytest.mark.parametrize("ra, dec, depth, ipix", expected_results)
-def test_ipixcenter(ra, dec, depth, ipix):
+def test_ipix2ang_center(ra, dec, depth, ipix):
 	'''
 	Test QLSC ipixcenter.
 	'''
 	q = qlsc.QLSC()
-	assert ipix == q.ipixcenter(ra, dec, depth)
+	assert ipix == q.ipix2ang_center(ra, dec, depth)
 
 @pytest.mark.parametrize("ra, dec, depth, ipix", depth_out_of_range_expected_results)
-def test_ipixcenter_depth_range(ra, dec, depth, ipix):
+def test_ipix2ang_center_depth_range(ra, dec, depth, ipix):
 	'''
 	Test QLSC ipixcenter depth in correct range.
 	'''
 	with pytest.raises(ValueError):
 		q = qlsc.QLSC()
-		q.ipixcenter(ra, dec, depth) # depth should be int > 0
+		q.ipix2ang_center(ra, dec, depth) # depth should be int > 0

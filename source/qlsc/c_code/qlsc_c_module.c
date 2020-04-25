@@ -1,7 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
-#include "common.h"
+#include "q3c/common.h"
 //#include "my_bits.h"
 
 // character parameter values
@@ -652,7 +652,7 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 // Ref: https://docs.python.org/3/c-api/module.html#c.PyModuleDef
 static struct PyModuleDef qlsc_module_definition = {
 	PyModuleDef_HEAD_INIT,
-	"_q3c_wrapper",					// name of module
+	"qlsc_c",					// name of module
 	"A Python implementation of the Quadrilateralized Spherical Cube (QLSC).",	// docstring for the module
 	-1,						// size of per-interpreter state of the module,
 			                // or -1 if the module keeps state in global variables.
@@ -664,7 +664,7 @@ static struct PyModuleDef qlsc_module_definition = {
 };
 
 PyMODINIT_FUNC
-PyInit__q3c_wrapper(void)
+PyInit_q3c(void) // must be named "PyInit_" + name of extension (without package name)
 {
 	return PyModule_Create(&qlsc_module_definition);
 }

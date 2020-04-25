@@ -25,12 +25,12 @@ expected_results_30 = [
 expected_results = expected_results_30
 
 @pytest.mark.parametrize("bin_level, ipix, ra, dec", expected_results)
-def test_ipixcenter2ang(bin_level, ipix, ra, dec):
+def test_ipix2ang_center(bin_level, ipix, ra, dec):
 	'''
 	Test QLSC ipixcenter2ang.
 	'''
 	q = QLSC(bin_level=bin_level) # use default nside value
-	ra_out, dec_out = q.ipixcenter2ang(ipix)
+	ra_out, dec_out = q.ipix2ang_center(ipix)
 	
 	assert_approx_equal(ra, ra_out)
 	assert_approx_equal(dec, dec_out)

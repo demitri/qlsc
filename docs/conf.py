@@ -13,7 +13,17 @@
 import os
 import sys
 from datetime import datetime
-sys.path.insert(0, os.path.abspath('../source/qlsc'))
+from unittest.mock import MagicMock
+
+sys.path.insert(0, os.path.abspath('../source'))
+ 
+# class Mock(MagicMock):
+# 	@classmethod
+# 	def __getattr__(cls, name):
+# 		return MagicMock()
+# 		
+# MOCK_MODULES = ['qlsc']
+# sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
 
 import qlsc
 
@@ -25,7 +35,7 @@ copyright = '2020, Demitri Muna'
 author = 'Demitri Muna'
 
 # The full version, including alpha/beta/rc tags
-release = qlsc.__version__
+release = "1.0.0"
 
 
 # -- General configuration ---------------------------------------------------
@@ -53,7 +63,7 @@ intersphinx_cache_limit = 5
 
 intersphinx_mapping = {
 	'astropy'    : ('https://astropy.readthedocs.io/en/stable', None),
-	'sqlalchemy' : ('https://docs.sqlalchemy.org/en/latest/', None),
+	'sqlalchemy' : ('https://docs.sqlalchemy.org/en/13/', None),
 	'numpy'      : ('https://docs.scipy.org/doc/numpy/', None)
 }
 
