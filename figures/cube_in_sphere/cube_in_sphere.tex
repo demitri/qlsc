@@ -1,0 +1,266 @@
+% Written by Demitri Muna.
+% Based on this StackExchange answer:
+% https://tex.stackexchange.com/questions/537573/how-can-i-draw-great-circles-on-a-diagram-using-specific-coordinates-with-arbitr/537948?noredirect=1#comment1363556_537948
+
+\documentclass[tikz,border=3mm]{standalone}
+\usepackage{tikz-3dplot}
+\usetikzlibrary{fpu}
+\usepackage{tikz-3dplot-circleofsphere}
+
+\makeatletter
+
+\usepackage{xparse}
+
+\def\RadToDeg{{180/3.14159265358979323846264338327950288}}
+\def\DegToRad{{3.14159265358979323846264338327950288/180}}
+%\newcommand{\qlscXyToRaDec}[3] {% face,x,y
+%	\def
+%}
+
+% ref: https://tex.stackexchange.com/a/279500/162934
+\newcommand{\sphToCart}[3]
+        {
+          \def\rpar{#1}
+          \def\thetapar{#2}
+          %\def\phipar{#3}
+          \def\phipar{90+(-#3)} % convert angle to declination
+
+          \pgfmathsetmacro{\x}{\rpar*sin(\phipar)*cos(\thetapar)}
+          \pgfmathsetmacro{\y}{\rpar*sin(\phipar)*sin(\thetapar)}
+          \pgfmathsetmacro{\z}{\rpar*cos(\phipar)}
+        }
+        
+\pgfmathdeclarefunction{isfore}{3}{%
+\begingroup%
+\pgfkeys{/pgf/fpu,/pgf/fpu/output format=fixed}%
+\pgfmathparse{%
+sign(((\the\pgf@yx)*(\the\pgf@zy)-(\the\pgf@yy)*(\the\pgf@zx))*(#1)+
+((\the\pgf@zx)*(\the\pgf@xy)-(\the\pgf@xx)*(\the\pgf@zy))*(#2)+
+((\the\pgf@xx)*(\the\pgf@yy)-(\the\pgf@yx)*(\the\pgf@xy))*(#3))}%
+\pgfmathsmuggle\pgfmathresult\endgroup%
+}%
+
+\tikzset{great circle arc/.cd,
+    theta1/.initial=0,
+    phi1/.initial=0,
+    theta2/.initial=0,
+    phi2/.initial=30,
+    r/.initial=R,
+    fore/.style={draw=white,semithick},
+    back/.style={draw=gray,thick,dashed,opacity=0.55}}
+
+\newcommand\GreatCircleArc[2][]{%
+\tikzset{great circle arc/.cd,#2}%
+\def\pv##1{\pgfkeysvalueof{/tikz/great circle arc/##1}}%
+ % Cartesian coordinates of the first point (A) 
+\pgfmathsetmacro\tikz@td@Ax{\pv{r}*cos(\pv{theta1})*cos(\pv{phi1})}%
+\pgfmathsetmacro\tikz@td@Ay{\pv{r}*cos(\pv{theta1})*sin(\pv{phi1})}%
+\pgfmathsetmacro\tikz@td@Az{\pv{r}*sin(\pv{theta1})}%
+ % Cartesian coordinates of the second point (B) 
+\pgfmathsetmacro\tikz@td@Bx{\pv{r}*cos(\pv{theta2})*cos(\pv{phi2})}%
+\pgfmathsetmacro\tikz@td@By{\pv{r}*cos(\pv{theta2})*sin(\pv{phi2})}%
+\pgfmathsetmacro\tikz@td@Bz{\pv{r}*sin(\pv{theta2})}%
+ % cross product C=AxB 
+\pgfmathsetmacro\tikz@td@Cx{(\tikz@td@Ay)*(\tikz@td@Bz)-(\tikz@td@By)*(\tikz@td@Az)}%
+\pgfmathsetmacro\tikz@td@Cy{(\tikz@td@Az)*(\tikz@td@Bx)-(\tikz@td@Bz)*(\tikz@td@Ax)}%
+\pgfmathsetmacro\tikz@td@Cz{(\tikz@td@Ax)*(\tikz@td@By)-(\tikz@td@Bx)*(\tikz@td@Ay)}%
+ % normalize C to have length r
+\pgfmathsetmacro\pgfutil@tempa{sqrt((\tikz@td@Cx)*(\tikz@td@Cx)+(\tikz@td@Cy)*(\tikz@td@Cy)+(\tikz@td@Cz)*(\tikz@td@Cz))/\pv{r}}%
+\pgfmathsetmacro\tikz@td@Cx{\tikz@td@Cx/\pgfutil@tempa}%
+\pgfmathsetmacro\tikz@td@Cy{\tikz@td@Cy/\pgfutil@tempa}%
+\pgfmathsetmacro\tikz@td@Cz{\tikz@td@Cz/\pgfutil@tempa}%
+ % angle between A and B
+\pgfmathsetmacro\tikz@td@AdotB{((\tikz@td@Ax)*(\tikz@td@Bx)+
+    (\tikz@td@Ay)*(\tikz@td@By)+(\tikz@td@Az)*(\tikz@td@Bz))/(\pv{r}*\pv{r})}% 
+\pgfmathsetmacro\tikz@td@angle{acos(\tikz@td@AdotB)}%   
+ % cross product D=AxC
+\pgfmathsetmacro\tikz@td@Dx{(\tikz@td@Ay)*(\tikz@td@Cz)-(\tikz@td@Cy)*(\tikz@td@Az)}%
+\pgfmathsetmacro\tikz@td@Dy{(\tikz@td@Az)*(\tikz@td@Cx)-(\tikz@td@Cz)*(\tikz@td@Ax)}%
+\pgfmathsetmacro\tikz@td@Dz{(\tikz@td@Ax)*(\tikz@td@Cy)-(\tikz@td@Cx)*(\tikz@td@Ay)}%
+\pgfmathsetmacro\pgfutil@tempa{sqrt((\tikz@td@Dx)*(\tikz@td@Dx)+(\tikz@td@Dy)*(\tikz@td@Dy)+(\tikz@td@Dz)*(\tikz@td@Dz))/\pv{r}}%
+\pgfmathsetmacro\tikz@td@Dx{\tikz@td@Dx/\pgfutil@tempa}%
+\pgfmathsetmacro\tikz@td@Dy{\tikz@td@Dy/\pgfutil@tempa}%
+\pgfmathsetmacro\tikz@td@Dz{\tikz@td@Dz/\pgfutil@tempa}%
+ %\typeout{A=(\tikz@td@Ax,\tikz@td@Ay,\tikz@td@Az),B=(\tikz@td@Bx,\tikz@td@By,\tikz@td@Bz),C=(\tikz@td@Cx,\tikz@td@Cy,\tikz@td@Cz)}
+ %\typeout{\tikz@td@AdotB,\tikz@td@angle}
+\edef\pgfutil@tempa{0}%
+\pgfmathtruncatemacro{\pgfutil@tempd}{isfore(\tikz@td@Ax,\tikz@td@Ay,\tikz@td@Az)}%
+\ifnum\pgfutil@tempd=-1\relax
+\edef\tikz@td@lsthidcoords{(\tikz@td@Ax,\tikz@td@Ay,\tikz@td@Az)}%
+\edef\tikz@td@lstviscoords{}%
+\else
+\edef\tikz@td@lsthidcoords{}%
+\edef\tikz@td@lstviscoords{(\tikz@td@Ax,\tikz@td@Ay,\tikz@td@Az)}%
+\fi
+\pgfmathtruncatemacro\pgfutil@tempb{acos(\tikz@td@AdotB)}%
+\pgfmathtruncatemacro\pgfutil@tempc{sign(\pgfutil@tempb)}%
+\loop
+\pgfmathsetmacro{\tmpx}{cos(\pgfutil@tempa)*\tikz@td@Ax-\pgfutil@tempc*sin(\pgfutil@tempa)*\tikz@td@Dx}%
+\pgfmathsetmacro{\tmpy}{cos(\pgfutil@tempa)*\tikz@td@Ay-\pgfutil@tempc*sin(\pgfutil@tempa)*\tikz@td@Dy}%
+\pgfmathsetmacro{\tmpz}{cos(\pgfutil@tempa)*\tikz@td@Az-\pgfutil@tempc*sin(\pgfutil@tempa)*\tikz@td@Dz}%
+\pgfmathtruncatemacro{\pgfutil@tempd}{isfore(\tmpx,\tmpy,\tmpz)}%
+\ifnum\pgfutil@tempd=-1\relax
+\edef\tikz@td@lsthidcoords{\tikz@td@lsthidcoords\space(\tmpx,\tmpy,\tmpz)}%
+\else
+\edef\tikz@td@lstviscoords{\tikz@td@lstviscoords\space(\tmpx,\tmpy,\tmpz)}%
+\fi
+\edef\pgfutil@tempa{\the\numexpr\pgfutil@tempa+1}%
+\ifnum\pgfutil@tempa<\the\numexpr\pgfutil@tempc*\pgfutil@tempb\relax
+\repeat
+\pgfmathtruncatemacro{\pgfutil@tempd}{isfore(\tikz@td@Bx,\tikz@td@By,\tikz@td@Bz)}%
+\ifnum\pgfutil@tempd=-1\relax
+\edef\tikz@td@lsthidcoords{\tikz@td@lsthidcoords\space(\tikz@td@Bx,\tikz@td@By,\tikz@td@Bz)}%
+\else
+\edef\tikz@td@lstviscoords{\tikz@td@lstviscoords\space(\tikz@td@Bx,\tikz@td@By,\tikz@td@Bz)}%
+\fi
+\ifx\tikz@td@lsthidcoords\pgfutil@empty%
+\else
+\draw[great circle arc/back] plot coordinates {\tikz@td@lsthidcoords};%
+\fi
+\ifx\tikz@td@lstviscoords\pgfutil@empty%
+\else
+\draw[great circle arc/fore, #1] plot coordinates {\tikz@td@lstviscoords};%
+\fi
+}
+
+% ------------------------------------------------------------------------
+
+\newcommand\pgfmathsinandcos[3]{%
+  \pgfmathsetmacro#1{sin(#3)}%
+  \pgfmathsetmacro#2{cos(#3)}%
+}
+
+%
+% \LongitudePlane, \LatitudePlane
+%
+%   defines a plane with the name of the first parameter
+%
+\newcommand\LongitudePlane[2][current plane]{%
+  \pgfmathsinandcos\sinEl\cosEl{\Elevation} % elevation
+  \pgfmathsinandcos\sint\cost{#2} % azimuth
+  \tikzset{#1/.estyle={cm={\cost,\sint*\sinEl,0,\cosEl,(0,0)}}}
+}
+\newcommand\LatitudePlane[2][current plane]{%
+  \pgfmathsinandcos\sinEl\cosEl{\Elevation} % elevation
+  \pgfmathsinandcos\sint\cost{#2} % latitude
+  \pgfmathsetmacro\ydelta{\cosEl*\sint}
+  \tikzset{#1/.estyle={cm={\cost,0,0,\cost*\sinEl,(0,\ydelta)}}} %
+}
+
+
+% m = mandatory argument, O{x} = optional argument with default value
+% examples:
+% \DrawLongitudeCircle[45] % longitude circle at 45°
+% \DrawLongitudeCircle[45][blue] % longitude circle at 45°, color blue
+%
+% \DrawLongitudeCircle
+%   - depends on \Elevation, \R being defined
+\NewDocumentCommand{\DrawLongitudeCircle}{ m O{black}}{%
+  \LongitudePlane{#1}
+  \tikzset{current plane/.prefix style={scale=\R}}
+  \pgfmathsetmacro\angVis{atan(sin(#1)*cos(\Elevation)/sin(\Elevation))} %
+  \draw[current plane,thin,#2]  (\angVis:1)     arc (\angVis:\angVis+180:1);
+  \draw[current plane,thin,#2,dashed,opacity=0.45] (\angVis-180:1) arc (\angVis-180:\angVis:1);
+}
+
+%
+% \DrawLatitudeCircle
+% 
+\NewDocumentCommand{\DrawLatitudeCircle}{ m O{black}}{%
+  \LatitudePlane{#1}
+  \tikzset{current plane/.prefix style={scale=\R}}
+  \pgfmathsetmacro\sinVis{sin(#1)/cos(#1)*sin(\Elevation)/cos(\Elevation)}
+  \pgfmathsetmacro\angVis{asin(min(1,max(\sinVis,-1)))}
+  \draw[current plane,thin,#2] (\angVis:1) arc (\angVis:-\angVis-180:1);
+  \draw[current plane,thin,dashed,#2,opacity=0.45] (180-\angVis:1) arc (180-\angVis:\angVis:1);
+}
+
+\makeatother
+
+\definecolor{steelblue}{rgb}{0.273,0.501,0.703} % 70,130,180
+
+% ============================================
+
+\begin{document}
+
+\def\R{3}
+\def\Elevation{20}
+
+
+\begin{tikzpicture}[declare function={R=\R;},bullet/.style={circle,fill,inner sep=2pt}, scale=2.5]
+
+% draw sphere
+\shade[ball color=lightgray, opacity=0.5] (0,0,0) circle(\R cm);
+%\shade[ball color = white,transform canvas={rotate=-35}] (0,0,0) circle[radius=R];
+
+\tdplotsetmaincoords{80}{110} % coord1: 90=head on, 0=top down (but can't go to zero)
+
+\def\qsccorner{35.264389682754654}
+\def\rzero{{\R/sqrt(3)}}
+
+\begin{scope}[tdplot_main_coords]
+	
+	% front face
+	\coordinate (A) at (\rzero, -\rzero, \rzero);
+	\coordinate (B) at (\rzero, -\rzero, -\rzero);
+	\coordinate (C) at (\rzero, \rzero, -\rzero);
+	\coordinate (D) at (\rzero, \rzero, \rzero);
+
+	% rear face
+	\coordinate (E) at (-\rzero, \rzero, -\rzero);
+	\coordinate (F) at (-\rzero, \rzero, \rzero);
+	\coordinate (G) at (-\rzero, -\rzero, \rzero);
+	\coordinate (H) at (-\rzero, -\rzero, -\rzero);
+
+   \sphToCart{\R}{90}{45};
+	\coordinate (P) at (\x, \y, \z);
+
+	\coordinate (J) at ({\R/sqrt(3)}, 0, 0);
+	\coordinate (K) at (0, {\R/sqrt(3)}, 0);
+	\coordinate (L) at (0, 0, {\R/sqrt(3)});
+
+	% draw cube inscribed by sphere
+	\begin{scope}[steelblue, thick]
+   	\draw[] (A) -- (B) ; % node[anchor=south] {B};
+   	\draw[] (B) -- (C) ; % node[anchor=south] {C};
+   	\draw[] (C) -- (D) ; % node[anchor=south] {D};
+   	\draw[] (D) -- (A) ; % node[anchor=south] {A};
+   
+   	\draw[] (C) -- (E) ; % node[anchor=south] {E};
+   	\draw[] (D) -- (F) ; % node[anchor=south] {F};
+   	\draw[] (F) -- (E) ;
+   
+   	\draw[] (E) -- (H) ; % node[anchor=south] {H};
+   	\draw[] (F) -- (G) ; % node[anchor=south] {G};
+   	\draw[] (G) -- (H) ;
+   	\draw[] (G) -- (A) ;
+   	\draw[] (H) -- (B) ;
+	\end{scope}
+	
+	%top
+   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=-45, theta2=\qsccorner,  phi2=45}
+   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1= 45, theta2=\qsccorner,  phi2=135}
+   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=135, theta2=\qsccorner,  phi2=225}
+   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=225, theta2=\qsccorner,  phi2=-45}
+
+	%sides
+   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=45,  theta2=-\qsccorner, phi2=45}
+   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=135, theta2=-\qsccorner, phi2=135}
+   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=225, theta2=-\qsccorner, phi2=225}
+   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=-45, theta2=-\qsccorner, phi2=-45}
+
+   %\GreatCircleArc[black, thin] {theta1= 45, phi1=0, theta2=-45, phi2=0}
+   %\GreatCircleArc[black, thin] {theta1= 0, phi1=-45, theta2=0, phi2=45}
+
+	% bottom
+   \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=-45, theta2=-\qsccorner,  phi2=45}
+   \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1= 45, theta2=-\qsccorner,  phi2=135}
+   \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=135, theta2=-\qsccorner,  phi2=225}
+   \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=225, theta2=-\qsccorner,  phi2=-45}
+  	
+\end{scope}
+
+
+\end{tikzpicture}
+\end{document}
+
