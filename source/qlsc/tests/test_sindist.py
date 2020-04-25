@@ -20,4 +20,4 @@ def test_sindist(ra1, ra2, dec1, dec2, distance):
 	'''
 	Test QLSC sindist, the sine of the angular distance between two points on a sphere.
 	'''
-	assert_approx_equal(distance, qlsc.sindist(ra1, ra2, dec1, dec2))
+	assert_approx_equal(distance, qlsc.q3c.sindist(ra1, ra2, dec1, dec2))

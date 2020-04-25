@@ -1,4 +1,5 @@
 
+#from . import q3c
 from . import q3c
 
 def distance(ra1, dec1, ra2, dec2) -> float:
@@ -10,7 +11,7 @@ def distance(ra1, dec1, ra2, dec2) -> float:
 	:param ra2: right ascension, second coordinate (degrees)
 	:param dec2: declination, second coordinate (degrees)
 	'''
-	return q3c.distance(ra1, dec1, ra2, dec2)
+	return qlsc.q3c.distance(ra1, dec1, ra2, dec2)
 
 def sindist(ra1, dec1, ra2, dec2) -> float:
 	'''
@@ -21,7 +22,7 @@ def sindist(ra1, dec1, ra2, dec2) -> float:
 	:param ra2: right ascension, second coordinate (degrees)
 	:param dec2: declination, second coordinate (degrees)
 	'''
-	return q3c.sindist(ra1, dec1, ra2, dec2)
+	return qlsc.q3c.sindist(ra1, dec1, ra2, dec2)
 
 def xy2facenum(x:float, y:float, facenum:int) -> int:
 	'''
@@ -36,4 +37,4 @@ def xy2facenum(x:float, y:float, facenum:int) -> int:
 	:param facenum: the face number that is the reference for the provided (x,y)
 	:returns: the face number for the given (x,y) coordinates
 	'''
-	return q3c.xy2facenum(x, y, facenum)
+	return qlsc.q3c.xy2facenum(x, y, facenum)

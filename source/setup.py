@@ -40,6 +40,7 @@ extra_link_args = [] # e.g. ['-framework', 'OpenGL', '-framework', 'GLUT'])
 
 # The name of the module being build is "q3c".
 # Place is under the "qlsl" package below in setup().
+# Ref: https://docs.python.org/3/distutils/setupscript.html#extension-names-and-packages
 c_extension = Extension(name="q3c",
 				sources=sources,
 				language=['C'],

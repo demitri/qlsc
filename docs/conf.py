@@ -15,15 +15,18 @@ import sys
 from datetime import datetime
 from unittest.mock import MagicMock
 
+# import from local files rather than an installed version:
 sys.path.insert(0, os.path.abspath('../source'))
- 
-# class Mock(MagicMock):
-# 	@classmethod
-# 	def __getattr__(cls, name):
-# 		return MagicMock()
-# 		
-# MOCK_MODULES = ['qlsc']
-# sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
+
+
+# Exclude C extension since readthedocs can't build it.
+# Ref: https://read-the-docs.readthedocs.io/en/latest/faq.html#i-get-import-errors-on-libraries-that-depend-on-c-modules
+class Mock(MagicMock):
+	@classmethod
+	def __getattr__(cls, name):
+		return MagicMock()
+MOCK_MODULES = ['qlsc.q3c']
+sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
 
 import qlsc
 

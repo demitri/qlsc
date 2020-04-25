@@ -24,8 +24,10 @@ try:
 except ImportError:
 	pandas_available = False
 
-# functions defined in "qlsc_c_module.c" as named in the array "qlsc_methods" are in the qlsc.q3c namespace
 from . import q3c
+
+# functions defined in "qlsc_c_module.c" as named in the array "qlsc_methods" are in the qlsc.q3c namespace
+#from . import q3c
 from .utilities import _normalize_ang
 
 class QLSC:
