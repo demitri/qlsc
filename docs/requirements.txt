@@ -1,3 +1,3 @@
-numpy>=1.18
+# External packages required to build the documentation
 sphinx_autodoc_typehints>=1.10.3
 
