@@ -41,14 +41,17 @@ class QLSC:
 	Higher bin levels further divide each bin four more times.
 	
 	A scheme can be defined by the bin level where:
-		no. bins per face        = (2**bin_level)**2
-		number of bins on sphere = no. bins per face * 6
+
+		.. code-block:: 
+
+			no. bins per face        = (2**bin_level)**2
+			number of bins on sphere = no. bins per face * 6
 	
 	Each bin has a pixel number called an "ipix", which is an integer encoded with the location of the bin.
 	
-	The default value of nside=1073741824 corresponds to 6,442,450,944 segments (i.e. bin_level=15)
-	is the one used by the [Q3C PostgreSQL plugin](https://github.com/segasai/q3c).
-	This value is used if neither 'nside' or 'bin_size' are specified.
+	The default value of `bin_level` = 30 that divides the sphere into 6,442,450,944 bins (i.e. nside=1,073,741,824),
+	is the one used by the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
+	This value is used if neither `nside` or `bin_size` are specified.
 	
 	:param bin_level: number of times each bin in each face is subdivided by four
 	'''		
@@ -91,20 +94,24 @@ class QLSC:
 		Convert an ra,dec position to an ipix number.
 		
 		Example usage:
-			ang2ipix(45,60)
-			ang2ipix(ra=45,dec=60)
-			and2ipix(points=np.array([[45,60],[0,55]])
+		
+		.. code-block:: python
+		
+			ipix = ang2ipix(45,60)
+			ipix = ang2ipix(ra=45,dec=60)
+			ipix = and2ipix(points=np.array([[45,60],[0,55]])
 		
 		:param ra: right ascension (degrees); must be in [0,360]
 		:param dec: declination (degrees); must be in [-90,90]
 		:param points: an array of [ra,dec] points, shape=(n,2)
-		:returns: int if a single point is provided, an array of ints if an array of points is provided
+		:returns: the ipix integer if a single point is provided, an array of ipix integers if an array of points is provided
 		'''
 		if points is None:
 			# check "ra","dec" are both set
 			if True in [x is None for x in [ra,dec]]: # can't use any/all with possible "0" values
 				raise ValueError(f"Values for 'ra','dec' must be specified. {ra},{dec}")
 		else:
+			raise NotImplementedError("ang2ipix does yet support a list of points.")
 			# check neither "ra","dec" are set
 			if ra is not None or dec is not None:
 				raise ValueError("Only specify 'ra','dec' OR 'points'.")
@@ -127,7 +134,7 @@ class QLSC:
 		if points is None:
 			return _q3c_wrapper.ang2ipix(self._hprm, ra, dec)
 		else:
-			# .. todo: modify C wrapper code to take numpy arrays directly
+			# .. todo:: modify C wrapper code to take numpy arrays directly
 			v = np.vectorize(_q3c_wrapper.ang2ipix)
 			return v(self._hprm, points[:,0], points[:,1])
 			#return _q3c_wrapper.ang2ipix(self._hprm, points[:,0], points[:,1])
@@ -139,7 +146,7 @@ class QLSC:
 		:param ra: right ascension angle (degrees)
 		:param dec: declination angle (degrees), must be in [-90,90]
 		:param points: an array of ra,dec coordinates (shape: (n,2)) NOT YET SUPPORTED
-		:returns: a dictionary with the keys: ['facenum', 'ipix', 'x', 'y']
+		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]
 		'''
 		
 		# The underlying C code forces dec > 90 to 90 and dec < -90 to 90.
@@ -155,9 +162,9 @@ class QLSC:
 		'''
 		Convert an ipix number to ra,dec of the "lower left" corner of the pixel, in degrees.
 		
-		See the method "ipix2ang_center" to return the center of the pixel.
+		See the method :py:func:`ipixcenter2ang` to return the center of the pixel.
 		
-		This method matches that of the Q3C PostgreSQL plugin.
+		This method matches that of the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
 		
 		:param ipix: ipix number
 		:returns: ra,dec in degrees as a tuple of the lower left corner of the pixel
@@ -175,8 +182,8 @@ class QLSC:
 		'''
 		Convert an ipix number to ra,dec of the center of the pixel, in degrees.
 		
-		See the method "ipix2ang" to return the "lower left" corner of the pixel
-		which matches what is returned by the Q3C PostgreSQL plugin.
+		See the method :py:func:`ipix2ang` to return the "lower left" corner of the pixel
+		which matches what is returned by the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
 		
 		The pixel "center" here is defined in the x,y coordinates;
 		the point projected on the sphere is the one returned.
@@ -218,7 +225,7 @@ class QLSC:
 		:param points: an array containing (x,y) coordinate pairs; shape = (n,2)
 		:returns: tuple of (ra,dec) corresponding to the location on the cube face
 		'''
-		# .. todo: validate ra,dec
+		# .. todo:: validate ra,dec
 		
 		if facenum is None:
 			raise ValueError("The cube face number ('facenum') must be provided.")
@@ -251,6 +258,7 @@ class QLSC:
 	def xy2ipix(self, facenum:int=None, x:float=None, y:float=None) -> int: #, points:collections.abc.Iterable):
 		'''
 		Convert an x,y coordinate pair on the given face number to the ipix value.
+		
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
 		:param x: x coordinate on cube face
 		:param y: y coordinate on cube face
@@ -274,7 +282,16 @@ class QLSC:
 	
 	def face_number(self, ra:float, dec:float, ipix:int=None) -> int:
 		'''
-		Return the cube face number for the provided coordinate; in [0-5].
+		Return the cube face number for the provided coordinate.
+		
+		Cube faces are numbered as the following:
+		
+		|  face 0 = top
+		|  face 1 = -45° ≤ α < 45
+		|  face 2 = 45° ≤ α < 135
+		|  face 3 = 135° ≤ α < 225
+		|  face 4 = 225° ≤ α < 315
+		|  face 5 = bottom
 		
 		:param ra: right ascension in degrees; must be in [0,360]
 		:param dec: declination in degrees; must be in [-90,90]
@@ -328,17 +345,18 @@ class QLSC:
 		
 		#return _q3c_wrapper.pixarea(self._hprm, ipix, depth)
 	
-	def ipixcenter(self, ra:float, dec:float, depth:int) -> int:
+	def ang2ipix_at_depth(self, ra:float, dec:float, depth:int) -> int:
 		'''
+		Return the ipix value at the specified coordinate for any given bin level.
 		Returns the ipix value of the pixel center at certain pixel depth covering the specified (ra,dec). [??]
 	
 		:param ra: right ascension (degrees); must be in [0,360]
 		:param dec: declination (degrees); must be in [-90,90]
-		:param depth: ; must be in range [1-30]
+		:param depth: ; must be in the integer range [1-30]
 		:returns: 
 		'''
 		if not (1 <= depth <= 30):
-			raise ValueError(f"The depth provided {depth} is out of the range 1-30")
+			raise ValueError(f"The depth provided {depth} is outside the integer range [1,30].")
 		return ( _q3c_wrapper.ang2ipix(self._hprm, ra, dec) >> (2*depth) << (2*depth) ) + (1 << (2 * (depth-1))) - 1
 
 	def ipix2polygon(self, ipix:int=None, duplicate_endpoint=False):
@@ -354,7 +372,7 @@ class QLSC:
 		if ipix is None:
 			raise ValueError(f"An 'ipix' value must be specified.")
 		if not (0 <= ipix < self.nbins):
-			raise ValueError(f"The ipix value given ('{ipix}') is out of the valid range for this scheme: [0,{self.nbins-1}].")
+			raise ValueError(f"The ipix value given ('{ipix}') is out of the valid integer range for this scheme: [0,{self.nbins-1}].")
 		
 		# array of bin edges, both x and y
 		#bins = np.linspace(-1,1,endpoint=True, dtype=np.double, num=self.nside*4+1)
@@ -386,10 +404,15 @@ class QLSC:
 		
 
 class QLSCIndex:
+	'''
 	
-	def __init__(self, qlsc:QLSC=QLSC()):
-		'''
-		'''
+	:param qlsc: an instance of :py:class:`QLSC`
+	'''
+	def __init__(self, qlsc:QLSC):
+		
+		if qlsc is None:
+			raise ValueError("A QLSC object must be provided to define the pixel resolution of the sphere.")
+		
 		self.qlsc = qlsc
 
 		self.ra_key = "ra"
@@ -409,7 +432,7 @@ class QLSCIndex:
 	@data_source.setter
 	def data_source(self, new_value):
 		'''
-		Setter for the 'data_source' property.
+		Setter for the :py:func:`data_source` property.
 		Accepted values:
 			* Default value: create an in-memory SQLite database.
 			* A path-like object pointing to an SQLite file:
@@ -509,11 +532,11 @@ class QLSCIndex:
 		:param dec: an Iterable (e.g. list) of declination points in degrees
 		:param points: an Iterable of tuples of (ra,dec) pairs
 		'''
-		if not any([ra,dec,points]):
+		if all([x is None for x in [ra,dec,points]]):
 			raise ValueError("'ra','dec' OR 'points' must be specified.")
-		if all([ra, dec, points]):
+		if all([x is True for x in [ra, dec, points]]):
 			raise ValueError("Only 'ra','dec' OR 'points' can be specified.")
-		elif points is None and not all([ra,dec]):
+		elif points is None and any([x is None for x in [ra,dec]]):
 			raise ValueError("If 'ra' or dec' is given, then other parameter must also be provided.")
 		
 		try:
@@ -521,7 +544,7 @@ class QLSCIndex:
 			with self.data_source:
 				with contextlib.closing(self.data_source.cursor()) as cursor:
 					query = f"INSERT INTO {self.database_tablename} ({self.ra_key}, {self.dec_key}) VALUES (?, ?)"
-					if ra:
+					if ra is not None:
 						for i in range(len(ra)):
 							cursor.execute(query, (ra[i], dec[i]))
 							count += 1
@@ -550,49 +573,68 @@ class QLSCIndex:
 			raise NotImplementedError()
 		
 	
-	def radial_query(self, center_ra:float, center_dec:float, radius:float):
+	def radial_query(self, ra:float, dec:float, radius:float) -> np.ndarray: #, idx:bool=False):
 		'''
+		Given an ra,dec coordinate and a radius (all in degrees), return the points that fall in the cone search.
+		
+		.. todo:: create option to return an identifier
 		
 		:param ra: right ascension (degrees)
 		:param dec: declination (degrees)
-		:param ra_center:  (degrees)
-		:param dec_center:  (degrees)
 		:param radius: radius (degrees)
+		:returns: an array of matches, shape (n,2)
 		'''
-				
+#		:param center_ra:  (degrees)
+#		:param center_dec:  (degrees)
+#		:param idx: if True, returns an array of Boolean values whether each element matches or not
+		
 		matches = list()
-
+		#matches = np.zeros((len(data), 2)) # fill with boolean values
+											# - problem is this can get huge, also, we're not necessarily working with ndarrays
+		
 		if isinstance(self.data_source, sqlite3.Connection):
 			with contextlib.closing(self._data_source.cursor()) as cursor:
 				for ra, dec in cursor.execute(f"SELECT {self.ra_key}, {self.dec_key} FROM qlsc_table"):
 					if self._radial_match(ra, dec, center_ra, center_dec, radius):
 					   matches.append((ra,dec))
+					   #matches.append(idx)
 		
 		elif isinstance(self.data_source, numpy.ndarray):
 			data = self.data_source
-			for idx in range(len(data)):
+			for i in range(len(data)):
 				ra = data[ra_key][i]
 				dec = data[dec_key][i]
 				if self._radial_match(ra, dec, center_ra, center_dec, radius):
-					matches.append((ra,dec))
-			
+					#matches.append((ra,dec))
+					matches.append(i)
+
 		elif pandas_available and isinstance(self.data_source, pandas.DataFrame):
 			data = self.data_source
-			for idx in range(len(data)):
+			for i in range(len(data)):
 				ra = data[ra_key][i]
 				dec = data[dec_key][i]
 				if self._radial_match(ra, dec, center_ra, center_dec, radius):
-					matches.append((ra,dec))
+					#matches.append((ra,dec))
+					matches.append(i)
 		
 		elif astropy_available and isinstance(self.data_source, astropy.table.Table):
 			data = self.data_source
-			for idx in range(len(data)):
+			for i in range(len(data)):
 				ra = data[ra_key][i]
 				dec = data[dec_key][i]
 				if self._radial_match(ipix, ra, dec, center_ra, center_dec, radius):
-					matches.append((ra,dec))
+					#matches.append((ra,dec))
+					matches.append(i)
 		
-		return matches
+#		if idx:
+#			# return list of indices that match
+#			print(f"matches = {matches}")
+#			return np.array(matches)
+#		else:
+			# return array of matches
+#			return np.take(data, matches) # select the elements that match
+
+		return np.array(matches)
 
 	def _radial_match(self, ra, dec, center_ra, center_dec, radius):
 		'''

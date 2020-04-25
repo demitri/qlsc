@@ -1,10 +1,10 @@
 
-q = Q3C()
-q.database = "wise_index.sqlite3" # interp as SQLite3 db
+q = QLSC()
+q.database = "wise_index.sqlite3" # interpret as SQLite3 db
 q.ra_key = "ra"
 q.dec_key = "dec"
 
-q = Q3C()
+q = QLSC()
 q.database = <np structured table>
 q.ra_key = "ra"
 q.dec_key = "dec"
