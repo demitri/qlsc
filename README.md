@@ -6,6 +6,13 @@ Note that while this package is designed for astronomical use (it focusses on ri
 
 API documentation can be found here: [https://qlsc.readthedocs.io/en/latest/](https://qlsc.readthedocs.io/en/latest/)
 
+## Why Use QLSC?
+
+* You have a large number of points or regions on a sphere that you want to subdivide into approximately equal area divisions.
+* You are an astronomer with a catalog that you want to perform cone searches on, but don't want to install a full database to do so.
+* You want a spherical projection scheme without all that polar singularity residue.
+* You want a scheme that divides a sphere into regions that are easy to conceptualize, draw, and work with.
+
 ## Installation
 
 #### Install from source
@@ -13,7 +20,7 @@ API documentation can be found here: [https://qlsc.readthedocs.io/en/latest/](ht
     git clone https://github.com/demitri/qlsc.git
     cd qlsc/source
     python setup.py install
-   
+  
 ## 30 Second Introduction
 
 If you’re not familiar with the QLSC scheme it would be better to start below. There are two classes defined in this package, `QLSC` and `QLSCIndex`. The QLSC scheme projects each of the six faces of a cube onto a sphere. Segmentation is performed on the cube fased and done in levels, where each level divides each bin into four. For example, `bin_level=2` divides each bin into four, then of those into four again, which is 2^(2*`bin_level`) (i.e. 16) bins per cube face, or 96 total bins. ("Pixels" and "bin" are used somewhat interchangably.)
@@ -28,7 +35,9 @@ q.ang2ipix(45,45)     # ra,dec -> ipix number
 q.ipix2ang_center(42) # ipix number -> ra,dec at center of pixel
 q.ipix2polygon(42)    # returns the points on the sphere describing
                       # the pixel (joined by great circles)
-``` 
+```
+
+Examples are provided in the directory "examples" that show how the scheme and indexing can be used.
 
 ## The Quadrilateralized Spherical Cube
 
@@ -61,12 +70,14 @@ QLSC has preliminary support for indexing, but this should be considered a proof
 
 Geospatial/cone queries in the form of a cone search are supported, but search time taken is proportional to the number of points provided. Searches are perfomed by using the `QLSCIndex` class. Examples are provided in the [examples](https://github.com/demitri/qlsc/tree/master/examples) directory.
 
-## References
+## References & Links
 
 * [Original Chan, O'Neill 1975 paper](https://ntrl.ntis.gov/NTRL/dashboard/searchResults/titleDetail/ADA010232.xhtml)
 * [Abridged F.K. Chan paper - A Quadrilateralized Spherical Cube Earth Data Base](https://ntrs.nasa.gov/archive/nasa/casi.ntrs.nasa.gov/19810002572.pdf)
 * [Koposov, Bartunov Q3C ADASS proceedings paper](https://ui.adsabs.harvard.edu/abs/2006ASPC..351..735K/abstract)
 * [Stack Overflow - Is the quadrilateralized spherical cube map projection the same as Snyder's cubic equal area map projection?](https://gis.stackexchange.com/questions/40957/is-the-quadrilateralized-spherical-cube-map-projection-the-same-as-snyders-cubi) (with comments from Ken Chan)
+* [Wikipedia - Quadrilateralized spherical cube](https://en.wikipedia.org/wiki/Quadrilateralized_spherical_cube)
+* [COBE Quadrilateralized Spherical Cube](https://lambda.gsfc.nasa.gov/product/cobe/skymap_info_new.cfm)
 
 
 [![Documentation Status](https://readthedocs.org/projects/qlsc/badge/?version=latest)](https://qlsc.readthedocs.io/en/latest/?badge=latest)
