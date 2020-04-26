@@ -4,8 +4,6 @@ The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for 
 
 Note that while this package is designed for astronomical use (it focusses on right ascension and declination), it could be just as easily be used for latitude and longitude coordinates, as long as you’re ok with a perfectly spherical Earth (though QLSC was designed to be used with the real Earth). Future updates may better facilitate this, but contributions are welcome.
 
-API documentation can be found here: [https://qlsc.readthedocs.io/en/latest/](https://qlsc.readthedocs.io/en/latest/)
-
 ## Why Use QLSC?
 
 * You have a large number of points or regions on a sphere that you want to subdivide into approximately equal area divisions.
@@ -20,6 +18,11 @@ API documentation can be found here: [https://qlsc.readthedocs.io/en/latest/](ht
     git clone https://github.com/demitri/qlsc.git
     cd qlsc/source
     python setup.py install
+
+## API Documentation
+  
+API documentation can be found here: [https://qlsc.readthedocs.io/en/latest/](https://qlsc.readthedocs.io/en/latest/)
+
   
 ## 30 Second Introduction
 
