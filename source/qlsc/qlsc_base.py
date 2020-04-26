@@ -25,6 +25,7 @@ except ImportError:
 	pandas_available = False
 
 from . import q3c
+from .q3c import radial_query_it, sindist
 
 # functions defined in "qlsc_c_module.c" as named in the array "qlsc_methods" are in the qlsc.q3c namespace
 #from . import q3c
@@ -435,13 +436,14 @@ class QLSCIndex:
 	def data_source(self, new_value):
 		'''
 		Setter for the :py:func:`data_source` property.
+		
 		Accepted values:
 			* Default value: create an in-memory SQLite database.
 			* A path-like object pointing to an SQLite file:
 				* If not found, an SQLite file will be created.
 				* If a file is present, it will be opened.
 			* An SQLite URI, which allows additional read options (e.g. read-only mode).
-			* Numpy structured array. This will require the "ra_key" and "dec_key" properties to be set (if not the defaults of "ra", "dec").
+			* TODO: Numpy structured array. This will require the "ra_key" and "dec_key" properties to be set (if not the defaults of "ra", "dec").
 			* TODO: astropy.table.Table (https://astropy.readthedocs.io/en/stable/api/astropy.table.Table.html#astropy.table.Table)
 			* TODO: pandas.DataFrame (https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame)
 		'''
@@ -449,7 +451,7 @@ class QLSCIndex:
 		if isinstance(new_value, sqlite3.Connection):
 			self._data_source.close()
 		
-		# if a string or path-like object, interpret as an SQLite database
+		# if a string or path-like object, interpret as an SQLite database path
 		if isinstance(new_value, (str, pathlib.Path)):
 
 			new_database = True
@@ -593,6 +595,9 @@ class QLSCIndex:
 		matches = list()
 		#matches = np.zeros((len(data), 2)) # fill with boolean values
 											# - problem is this can get huge, also, we're not necessarily working with ndarrays
+		
+		center_ra = ra
+		center_dec = dec
 		
 		if isinstance(self.data_source, sqlite3.Connection):
 			with contextlib.closing(self._data_source.cursor()) as cursor:

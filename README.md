@@ -55,6 +55,12 @@ The distortion may appear to be significant, but at much higher bin levels it is
 
 For most users, working in ipix values and ra,dec coordinates will accomplish most anything you might need. For those who might be performing more complex calculations, I recommend working in the native coordinates of the face plane. Each face (at any division level) has its 2D coordinate system origin at the cube face center. Both the *x* and *y* axes range from -1 to +1. Methods are provided to translate between *xy* coordinates, ipix value, and ra/dec coordinates. The source code for the [`ipix2polygon()`](https://qlsc.readthedocs.io/en/latest/api.html#qlsc.QLSC.ipix2polygon) method provides an illustrative example.
 
+## Geospatial/Cone Search Support
+
+QLSC has preliminary support for indexing, but this should be considered a proof of concept. There is no current support for database-style indexing along the lines of what Q3C provides, but this is planned. Do not expect any API stability in this class at this point, but it is usable for reasonably-sized datasets (1e5 points, no problem, 1e6 points... could take a little while, but works).
+
+Geospatial/cone queries in the form of a cone search are supported, but search time taken is proportional to the number of points provided. Searches are perfomed by using the `QLSCIndex` class. Examples are provided in the [examples](https://github.com/demitri/qlsc/tree/master/examples) directory.
+
 ## References
 
 * [Original Chan, O'Neill 1975 paper](https://ntrl.ntis.gov/NTRL/dashboard/searchResults/titleDetail/ADA010232.xhtml)
