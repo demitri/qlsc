@@ -7,6 +7,11 @@ from distutils.core import setup, Extension
 #from setuptools import setup, Extension
 #from setuptools import find_packages
 
+import numpy as np
+
+# directions on including NumPy in a C extension:
+# Ref: https://numpy.org/doc/stable/reference/c-api/array.html#importing-the-api
+
 #copt = {}
 #lopt = {}
 
@@ -32,10 +37,11 @@ def get_property(prop:str, project:str):
 
 sources = ["qlsc/c_code/qlsc_c_module.c", "qlsc/c_code/q3c/q3cube.c", "qlsc/c_code/q3c/q3c_poly.c"]
 data_files = []
-include_dirs = ['q3c']		# -I directories
+include_dirs = ['q3c', np.get_include()]		# -I directories
 library_dirs = []			# -L directories
 libraries = []		# libraries to include
-define_macros = [('Q3C_VERSION', '"2.0.0"')] # equivalent of a bare #define in C source
+define_macros = [('Q3C_VERSION', '"2.0.0"'), # equivalent of a bare #define in C source
+				 ('NPY_NO_DEPRECATED_API', 'NPY_1_18_API_VERSION')] # warn if using a deprecated NumPy API, defined in numpy/numpyconfig.h
 extra_link_args = [] # e.g. ['-framework', 'OpenGL', '-framework', 'GLUT'])
 
 # The name of the module being build is "q3c".

@@ -19,7 +19,7 @@ except ImportError:
 	astropy_available = False
 
 try:
-	import pandas
+	import pandas as pd
 	pandas_available = True
 except ImportError:
 	pandas_available = False
@@ -421,9 +421,10 @@ class QLSCIndex:
 		self.ra_key = "ra"
 		self.dec_key = "dec"
 		self.database_tablename = "qlsc_table"
+		self.qlsc_schema_version = "1"
 
-		self._data_source = sqlite3.connect(":memory:")
-		self._init_sqlite_db()
+		self._data_source = None
+		self.data_source = ":memory:" #sqlite3.connect(":memory:")
 		
 	@property
 	def data_source(self):
@@ -447,46 +448,53 @@ class QLSCIndex:
 			* TODO: astropy.table.Table (https://astropy.readthedocs.io/en/stable/api/astropy.table.Table.html#astropy.table.Table)
 			* TODO: pandas.DataFrame (https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame)
 		'''
-		# do we have an existing database open?
+		
+		# .. todo:: when opening a new sqlite database, check the metadata to see if it's ours
+		
+		if new_value == self._data_source:
+			return
+			
 		if isinstance(new_value, sqlite3.Connection):
-			self._data_source.close()
+			# we're being given a new database - do we have an existing database open?
+			if isinstance(self._data_source, sqlite3.Connection):
+				self._data_source.close()
 		
 		# if a string or path-like object, interpret as an SQLite database path
-		if isinstance(new_value, (str, pathlib.Path)):
+		if new_value == ":memory:" or isinstance(new_value, (str, pathlib.Path)):
 
-			new_database = True
-			is_uri = new_value.startswith("file:")
-			if is_uri:
-				scheme, netloc, path, params, query, fragment = urlparse(new_value)
-
+			is_new_database = True
 			if new_value == ":memory:":
 				self._data_source = sqlite3.connect(new_value)
 				
 			else:
+				is_uri = new_value.startswith("file:")
+				if is_uri:
+					scheme, netloc, path, params, query, fragment = urlparse(new_value)
+
 				if is_uri:
 					filepath = path
 				else:
 					filepath = new_value
-				new_database = not os.path.exists(filepath)
+				is_new_database = not os.path.exists(filepath)
 					
 				try:
 					self._data_source = sqlite3.connect(new_value, uri=True)
 				except sqlite3.OperationalError as e:
 					if new_database:
-						raise Exception("Unable to create database at specified path.")
+						raise Exception(f"Unable to create database at specified path ('{new_value}').")
 					else:
-						raise Exception(f"Found file at path 'new_value', but unable to open.")
+						raise Exception(f"Found file at path '{new_value}', but unable to open as an SQLite database.")
 						
-				if new_database:
-					self._init_sqlite_db()
+			if is_new_database:
+				self._init_sqlite_db()
 						
-		elif isinstance(new_value, numpy.ndarray):
-			self._data_source = new_value
-		elif astropy_available and isinstance(new_value, astropy.table.Table):
-			self._data_source = new_value
-			raise NotImplementedError("not tested")
-		elif pandas_available and isinstance(new_value, pandas.DataFrame):
-			raise NotImplementedError("not tested")
+# 		elif isinstance(new_value, numpy.ndarray):
+# 			self._data_source = new_value
+# 		elif astropy_available and isinstance(new_value, astropy.table.Table):
+# 			self._data_source = new_value
+# 			raise NotImplementedError("not tested")
+# 		elif pandas_available and isinstance(new_value, pandas.DataFrame):
+# 			raise NotImplementedError("not tested")
 		elif new_value is None:	
 			raise ValueError("The data source cannot be set to 'None'.")
 	
@@ -501,7 +509,7 @@ class QLSCIndex:
 		'''
 		#self.sqlite_db = sqlite3.connect(':memory:')
 		#con.create_function("ang2ipix", 1, self.ang2ipix)
-		assert isinstance(self.data_source, sqlite3.Connection), "_init_sqlite_db called on an object that isn't an SQLite database connection!"
+		assert isinstance(self.data_source, sqlite3.Connection), f"_init_sqlite_db called on an object that isn't an SQLite database connection! {'self.data_source'} (type={type(self.data_source)})"
 		
 		#self.data_source.create_function("qlsc_ang2ipix", 3, self.qlsc.ang2ipix)
 
@@ -510,31 +518,61 @@ class QLSCIndex:
 		
 		#self.data_source.create_function("qlsc_ang2ipix", 2, plus)
 
+		self._data_source.isolation_level = None # require BEGIN/COMMIT for transactions
+
 		with contextlib.closing(self.data_source.cursor()) as cursor:
-			cursor.execute(f"CREATE TABLE {self.database_tablename} ({self.ra_key} REAL, {self.dec_key} REAL)") # ipix
-			#cursor.execute(f"CREATE INDEX ipix_idx ON {self.database_tablename} (ipix)")
 
-# 			cursor.execute("SELECT qlsc_ang2ipix(12, 34)")
-# 			ipix = cursor.fetchone()[0]
-# 			print(ipix)
+			cursor.execute(f'''
+				CREATE TABLE {self.database_tablename} (
+                    ipix INTEGER,
+                    {self.ra_key} REAL,
+                    {self.dec_key} REAL,
+                    key TEXT UNIQUE);''')
 
-	def add_point(self, ra:float=None, dec:float=None):
+			cursor.execute(f'''CREATE INDEX ipix_idx ON {self.database_tablename}(ipix); ''')
+                    
+            # Create a metadata table - COUNT(*) on SQLite databases always does a full scan,
+            # so keep track of rows count here.
+            # Could add additional information here.
+			cursor.execute(f'''
+            	CREATE TABLE qlsc_metadata (
+	            	row_count INTEGER,
+	            	qlsc_version TEXT,
+	            	date_created TEXT
+	            );''')
+			
+			cursor.execute(f'''
+				INSERT INTO qlsc_metadata
+					(row_count, qlsc_version, date_created) VALUES
+					(0, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+				''', (self.qlsc_schema_version))
+
+
+	def add_point(self, ra:float=None, dec:float=None, key:str=None):
 		'''
+		Add a single coordinate point to the index.
 		
+		:param ra: a single right ascension value, in degrees
+		:param dec: a single declination value, in degrees
+		:param key: a unique identifier for the coordinate (optional)
 		'''
 		try:
 			with self.data_source:
 				with contextlib.closing(self.data_source.cursor()) as cursor:
-					cursor.execute(f"INSERT INTO {self.database_tablename} ({self.ra_key}, {self.dec_key}) VALUES (?, ?)", (ra, dec)) #, self.ang2ipix(ra,dec))
+					cursor.execute(f"INSERT INTO {self.database_tablename} (ipix, {self.ra_key}, {self.dec_key}) VALUES (?, ?, ?)",
+									(self.qlsc.ang2ipix(ra,dec), ra, dec))
+					cursor.execute("UPDATE qlsc_metadata SET row_count = row_count + 1;")
 		except sqlite3.IntegrityError:
 			raise NotImplementedError()
 
-	def add_points(self, ra:Iterable=None, dec:Iterable=None, points:Iterable[Tuple]=None):
+	def add_points(self, ra:Iterable=None, dec:Iterable=None, points:Iterable[Tuple]=None, key:Iterable[str]=None):
 		'''
+		Add a collection of points to the index.
 		
-		:param ra: an Iterable (e.g. list) of right ascension points in degrees
-		:param dec: an Iterable (e.g. list) of declination points in degrees
+		:param ra: an Iterable (e.g. NumPy array) of right ascension points in degrees
+		:param dec: an Iterable of declination points in degrees
 		:param points: an Iterable of tuples of (ra,dec) pairs
+		:param key: an Iterable of unique identifiers for each point
 		'''
 		if all([x is None for x in [ra,dec,points]]):
 			raise ValueError("'ra','dec' OR 'points' must be specified.")
@@ -543,25 +581,73 @@ class QLSCIndex:
 		elif points is None and any([x is None for x in [ra,dec]]):
 			raise ValueError("If 'ra' or dec' is given, then other parameter must also be provided.")
 		
+		if np.isscalar(ra):
+			ra = np.asarray(ra)
+#		elif isinstance(ra, list):
+#			ra = np.array(list)
+			
+		if np.isscalar(dec):
+			dec = np.asarray(dec)
+#		elif isinstance(dec, list):
+#			dec = np.array(list)
+
+		if key is not None and key.isscalar(key):
+			key = np.asarray(key)
+		
+#		if pandas_available:
+#			if isinstance(ra, pandas.core.series.Series):
+#				ra = ra.values # extract ndarray
+#			if isinstance(dec, pandas.core.series.Series):
+#				dec = dec.values # extract ndarray
+#			if isinstance(key, pandas.core.series.Series):
+#				key = key.values # extract ndarray
+		
+		# .. todo: handle if duplicate keys added
+		
 		try:
-			count = 0
+#			row_count = None
+			#count = 0
+			#max_insert_per_transaction = 1e7
+
+			ipix = self.qlsc.ang2ipix(ra, dec)
+
 			with self.data_source:
 				with contextlib.closing(self.data_source.cursor()) as cursor:
-					query = f"INSERT INTO {self.database_tablename} ({self.ra_key}, {self.dec_key}) VALUES (?, ?)"
-					if ra is not None:
-						for i in range(len(ra)):
-							cursor.execute(query, (ra[i], dec[i]))
-							count += 1
-							if count > 50000:
-								self.data_source.commit()
-								count = 0
+					
+					cursor.execute("BEGIN")
+					if key is None:
+						query = f"INSERT INTO {self.database_tablename} (ipix, {self.ra_key}, {self.dec_key}) VALUES (?, ?, ?)"
+						cursor.executemany(query, zip((ipix, ra, dec))) # pass list of tuples (e.g. use zip)
 					else:
-						for ra,dec in points:
-							cursor.execute(query, (ra, dec))
-							count += 1
-							if count > 50000:
-								self.data_source.commit()
-								count = 0
+						query = f"INSERT INTO {self.database_tablename} (ipix, {self.ra_key}, {self.dec_key}, key) VALUES (?, ?, ?, ?)"
+						cursor.executemany(query, zip((ipix, ra, dec, key)))
+					
+# 					if ra is not None:
+# 						row_count = len(ra)
+# 						ipix = self.qlsc.ang2ipix(ra, dec)
+# 						cursor.executemany(query, (ipix, ra, dec)) # pass list of tuples (e.g. use zip)
+# #						for i in range(len(ra)):
+# #							cursor.execute(query, (self.qlsc.ang2ipix(ra[i], dec[i]), ra[i], dec[i]))
+# #							count += 1
+# #							if count > 1e7:
+# #								self.data_source.commit()
+# #								count = 0
+# 					else:
+# 						row_count = len(points)
+# 						for ra,dec in points:
+# 							cursor.execute(query, (self.qlsc.ang2ipix(ra, dec), ra, dec))
+# 							#count += 1
+# 							#if count > 1e7:
+# 							#	self.data_source.commit()
+# 							#	count = 0
+
+					row_count = len(ipix)
+							
+					assert row_count is not None, "forgot to set row count"
+					print(f"row_count={row_count}")
+					cursor.execute("UPDATE qlsc_metadata SET row_count = row_count + ?", (row_count,)) # single element tuple
+					cursor.execute("COMMIT")
+
 		except sqlite3.IntegrityError:
 			raise NotImplementedError()
 	
@@ -570,14 +656,16 @@ class QLSCIndex:
 		''' Return the number of points in the index. '''
 		if isinstance(self.data_source, sqlite3.Connection):
 			with contextlib.closing(self.data_source.cursor()) as cursor:
-				cursor.execute(f"SELECT COUNT(*) FROM {self.database_tablename}")
-				return cursor.fetchone()[0]
-				
+				#cursor.execute(f"SELECT COUNT(*) FROM {self.database_tablename}")
+				cursor.execute(f"SELECT row_count FROM qlsc_metadata")
+				row_count = cursor.fetchone()[0]
+				print(f"row_count: {row_count}")
+				return row_count
 		else:
 			raise NotImplementedError()
 		
 	
-	def radial_query(self, ra:float, dec:float, radius:float) -> np.ndarray: #, idx:bool=False):
+	def radial_query(self, ra:float, dec:float, radius:float, return_key:bool=False) -> np.ndarray: #, idx:bool=False):
 		'''
 		Given an ra,dec coordinate and a radius (all in degrees), return the points that fall in the cone search.
 		
@@ -586,11 +674,15 @@ class QLSCIndex:
 		:param ra: right ascension (degrees)
 		:param dec: declination (degrees)
 		:param radius: radius (degrees)
+		:param return_key: if set to True, returns the key value as provided when added to the index
 		:returns: an array of matches, shape (n,2)
 		'''
 #		:param center_ra:  (degrees)
 #		:param center_dec:  (degrees)
 #		:param idx: if True, returns an array of Boolean values whether each element matches or not
+		
+		if abs(dec) > 90:
+			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
 		
 		matches = list()
 		#matches = np.zeros((len(data), 2)) # fill with boolean values
@@ -600,38 +692,61 @@ class QLSCIndex:
 		center_dec = dec
 		
 		if isinstance(self.data_source, sqlite3.Connection):
-			with contextlib.closing(self._data_source.cursor()) as cursor:
-				for ra, dec in cursor.execute(f"SELECT {self.ra_key}, {self.dec_key} FROM qlsc_table"):
-					if self._radial_match(ra, dec, center_ra, center_dec, radius):
-					   matches.append((ra,dec))
-					   #matches.append(idx)
-		
-		elif isinstance(self.data_source, numpy.ndarray):
-			data = self.data_source
-			for i in range(len(data)):
-				ra = data[ra_key][i]
-				dec = data[dec_key][i]
-				if self._radial_match(ra, dec, center_ra, center_dec, radius):
-					#matches.append((ra,dec))
-					matches.append(i)
 
-		elif pandas_available and isinstance(self.data_source, pandas.DataFrame):
-			data = self.data_source
-			for i in range(len(data)):
-				ra = data[ra_key][i]
-				dec = data[dec_key][i]
-				if self._radial_match(ra, dec, center_ra, center_dec, radius):
-					#matches.append((ra,dec))
-					matches.append(i)
+# 			with contextlib.closing(self._data_source.cursor()) as cursor:
+# 				for ra, dec in cursor.execute(f"SELECT {self.ra_key}, {self.dec_key} FROM qlsc_table"):
+# 					if self._radial_match(ra, dec, center_ra, center_dec, radius):
+# 					   matches.append((ra,dec))
+# 				print(matches)
+# 				matches = list()
+# 					   #matches.append(idx)
+# 			print("","===================","")
+
+			#np.array(cursor.fetchall())
+
+			fulls, partials = q3c.radial_query(self.qlsc._hprm, center_ra, center_dec, radius)
+			ipix_statements = list()
+			for min_ipix,max_ipix in fulls:
+				ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
+			for min_ipix,max_ipix in partials:
+				ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
+			wheres = "({0})".format(" OR ".join(ipix_statements))
+			query = f"SELECT ra,dec,key FROM {self.database_tablename} WHERE {wheres}"
+			#print(query)
+			cone_radius = pow(sin(deg2rad(radius)/2.), 2)
+			with contextlib.closing(self._data_source.cursor()) as cursor:
+				print(cursor.execute(query))
+				for ra, dec,key in cursor.execute(query):
+					# filter out points outside radius
+					if sindist(ra, dec, center_ra, center_dec) < cone_radius:
+						matches.append((ra,dec,key))
 		
-		elif astropy_available and isinstance(self.data_source, astropy.table.Table):
-			data = self.data_source
-			for i in range(len(data)):
-				ra = data[ra_key][i]
-				dec = data[dec_key][i]
-				if self._radial_match(ipix, ra, dec, center_ra, center_dec, radius):
-					#matches.append((ra,dec))
-					matches.append(i)
+# 		elif isinstance(self.data_source, numpy.ndarray):
+# 			data = self.data_source
+# 			for i in range(len(data)):
+# 				ra = data[ra_key][i]
+# 				dec = data[dec_key][i]
+# 				if self._radial_match(ra, dec, center_ra, center_dec, radius):
+# 					#matches.append((ra,dec))
+# 					matches.append(i)
+# 
+# 		elif pandas_available and isinstance(self.data_source, pandas.DataFrame):
+# 			data = self.data_source
+# 			for i in range(len(data)):
+# 				ra = data[ra_key][i]
+# 				dec = data[dec_key][i]
+# 				if self._radial_match(ra, dec, center_ra, center_dec, radius):
+# 					#matches.append((ra,dec))
+# 					matches.append(i)
+# 		
+# 		elif astropy_available and isinstance(self.data_source, astropy.table.Table):
+# 			data = self.data_source
+# 			for i in range(len(data)):
+# 				ra = data[ra_key][i]
+# 				dec = data[dec_key][i]
+# 				if self._radial_match(ipix, ra, dec, center_ra, center_dec, radius):
+# 					#matches.append((ra,dec))
+# 					matches.append(i)
 		
 #		if idx:
 #			# return list of indices that match
@@ -641,7 +756,7 @@ class QLSCIndex:
 			# return array of matches
 #			return np.take(data, matches) # select the elements that match
 
-		return np.array(matches)
+		return np.array([matches])
 
 	def _radial_match(self, ra, dec, center_ra, center_dec, radius):
 		'''
@@ -651,6 +766,10 @@ class QLSCIndex:
 		# index is ra,dec in, ipix out
 		ipix = self.qlsc.ang2ipix(ra, dec)
 		hprm = self.qlsc._hprm
+# 		print(f"iter={0}, full=1 : {radial_query_it(hprm,center_ra,center_dec,radius,0,1)}")
+# 		print(f"iter={1}, full=1 : {radial_query_it(hprm,center_ra,center_dec,radius,1,1)}")
+# 		print(f"iter={0}, full=0 : {radial_query_it(hprm,center_ra,center_dec,radius,0,0)}")
+# 		print(f"iter={1}, full=1 : {radial_query_it(hprm,center_ra,center_dec,radius,1,0)}")
 		return ((ipix>=radial_query_it(hprm,center_ra,center_dec,radius,0,1)  and ipix<radial_query_it(hprm,center_ra,center_dec,radius,1,1)) or \
 			    (ipix>=radial_query_it(hprm,center_ra,center_dec,radius,2,1)  and ipix<radial_query_it(hprm,center_ra,center_dec,radius,3,1)) or \
 			    (ipix>=radial_query_it(hprm,center_ra,center_dec,radius,4,1)  and ipix<radial_query_it(hprm,center_ra,center_dec,radius,5,1)) or \

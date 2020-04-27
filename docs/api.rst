@@ -18,3 +18,8 @@ QLSC Index
 .. autoclass:: QLSCIndex
    :members:
    :inherited-members:
+
+Point Generation
+----------------
+
+.. autofunction:: qlsc.generate.sunflower_points_on_sphere

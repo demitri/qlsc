@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <numpy/ndarrayobject.h> // needed to work with NumPy arrays
 
 #include "q3c/common.h"
 //#include "my_bits.h"
@@ -562,6 +563,97 @@ qlsc_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 */
 
 static PyObject *
+qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	PyObject *hprm_capsule;
+	q3c_coord_t ra_cen, dec_cen, radius;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	q3c_ipix_t partials_padded[2 * Q3C_NPARTIALS];
+	q3c_ipix_t fulls_padded[2 * Q3C_NFULLS];
+	q3c_ipix_t *partials, *fulls;
+	int fulls_filler_pos, partials_filler_pos, max_idx;
+	npy_intp dims[2]; // aka const long *
+	int fulls_length = 2 * Q3C_NFULLS;
+	int partials_length = 2 * Q3C_NPARTIALS;
+	
+	// returned values
+	PyArrayObject *np_fulls;
+	PyArrayObject *np_partials;
+
+	//static q3c_coord_t ra_cen_buf, dec_cen_buf, radius_buf;
+	
+	static char *kwlist[] = {"hprm", "ra", "dec", "radius", NULL};
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "Oddd", // object + 2 doubles
+									 kwlist,
+									 &hprm_capsule, &ra_cen, &dec_cen, &radius))
+	{
+		// unable to parse inputs -> raise exception
+		PySys_WriteStdout("unable to parse input, returning NULL\n");
+		return NULL;
+	}
+
+	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+
+	ra_cen = UNWRAP_RA(ra_cen);
+	if (q3c_fabs(dec_cen) > 90)
+	{
+		// this should be handled on the Python side
+		PySys_WriteStdout("'dec' value out of range - todo: raise exception'\n");
+	}
+
+	// generate the full, partials arrays
+	q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls_padded, partials_padded);
+
+	// q3c_radial_query() calls array_filler() which adds (-1,1)
+	// pairs to fill out the arrays. We don't need them here, so we'll
+	// find number of actual data points and dynamically create arrays of the needed size.
+	fulls_filler_pos = 0;
+	max_idx = fulls_length;
+	while (fulls_filler_pos < max_idx && fulls_padded[fulls_filler_pos] != 1 && fulls_padded[fulls_filler_pos+1] != 1)
+		fulls_filler_pos += 2;
+
+	partials_filler_pos = 0;
+	max_idx = partials_length;
+	while (partials_filler_pos < max_idx && partials_padded[partials_filler_pos] != 1 && partials_padded[partials_filler_pos+1] != 1)
+		partials_filler_pos += 2;
+	
+	// allocate memory for the arrays
+	fulls    = malloc(fulls_filler_pos * sizeof(q3c_ipix_t));
+	partials = malloc(partials_filler_pos * sizeof(q3c_ipix_t));
+
+	// copy the data since the padded arrays are on the stack and will be the wrong length
+	//void * memcpy ( void * destination, const void * source, size_t num );
+	memcpy(fulls, fulls_padded, fulls_filler_pos * sizeof(q3c_ipix_t));
+	memcpy(partials, partials_padded, partials_filler_pos * sizeof(q3c_ipix_t));
+
+	// Create NumPy arrays and return them.
+	// Since the values being returned are ipix ranges, make it a 2D array.
+	// data types: https://numpy.org/doc/stable/reference/c-api/dtype.html
+	//
+	dims[0] = fulls_filler_pos/2;
+	dims[1] = 2;
+	np_fulls = (PyArrayObject *)PyArray_SimpleNewFromData(2, 			// int nd - length of dims array
+														  dims, 		// npy_intp* dims (for 1D, could just be an int)
+														  NPY_INT64, 	// int typenum,
+														  fulls); 		// void* data
+	PyArray_ENABLEFLAGS(np_fulls, NPY_ARRAY_OWNDATA); // set ownership of data: free when ndarray is garbage collected
+
+	dims[0] = partials_filler_pos/2;
+	np_partials = (PyArrayObject *)PyArray_SimpleNewFromData(2, 			// int nd - length of dims array
+															 dims, 			// npy_intp* dims (for 1D, could just be an int)
+															 NPY_INT64, 	// int typenum,
+															 partials); 	// void* data
+	PyArray_ENABLEFLAGS(np_partials, NPY_ARRAY_OWNDATA);
+
+	// return as tuple
+	return Py_BuildValue("OO", np_fulls, np_partials);
+}
+
+static PyObject *
 qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
@@ -595,12 +687,14 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	ra_cen = UNWRAP_RA(ra_cen);
 	if (q3c_fabs(dec_cen) > 90)
 	{
+		// this should be caught on the Python side, not here
 		PySys_WriteStdout("'dec' value out of range - todo: raise exception'\n");
 	}
 	
 	if (invocation == 0) {
-		;
+		; //PySys_WriteStdout("qlsc_q3c_radial_query_it called, invocation = 0\n");
 	} else {
+		//PySys_WriteStdout("qlsc_q3c_radial_query_it called, invocation = 1, full=%d\n", full_flag);
 		if ((ra_cen == ra_cen_buf) && (dec_cen == dec_cen_buf) &&
 			radius == radius_buf)
 		{
@@ -611,6 +705,7 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 		}
 	}
 	
+	//PySys_WriteStdout("q3c_radial_query called\n");
 	q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls, partials);
 	
 	// cache values
@@ -646,6 +741,7 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"xy2ang", (PyCFunction)qlsc_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
 //	{"xy2facenum", (PyCFunction)qlsc_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
 	{"radial_query_it", (PyCFunction)qlsc_q3c_radial_query_it, METH_VARARGS|METH_KEYWORDS, ""},
+	{"radial_query", (PyCFunction)qlsc_q3c_radial_query, METH_VARARGS|METH_KEYWORDS, ""},
 	{NULL, NULL, 0, NULL}	// sentinel
 };
 
@@ -666,6 +762,7 @@ static struct PyModuleDef qlsc_module_definition = {
 PyMODINIT_FUNC
 PyInit_q3c(void) // must be named "PyInit_" + name of extension (without package name)
 {
+	import_array(); // initialize NumPy, see: https://numpy.org/doc/stable/reference/c-api/array.html#importing-the-api
 	return PyModule_Create(&qlsc_module_definition);
 }
 

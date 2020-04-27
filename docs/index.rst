@@ -29,6 +29,14 @@ for a description of the QLSC scheme and how to use the code.
    :maxdepth: 2
    :caption: Contents:
 
+Generating Sample Points
+------------------------
+
+.. toctree::
+   :maxdepth: 2
+
+   generate_sample_points
+
 API Reference
 -------------
 
