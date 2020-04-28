@@ -119,6 +119,10 @@ class QLSC:
 			if ra is not None or dec is not None:
 				raise ValueError("Only specify 'ra','dec' OR 'points'.")
 		
+		print(f"flags: {ra.flags}")
+		print(f"(ra,dec) = {type(ra)},{type(dec)}")
+		return q3c.ang2ipix(self._hprm, ra, dec)
+
 		if isinstance(ra, collections.abc.Iterable):
 			if isinstance(points, np.ndarray):
 				points = points.astype(np.double, copy=False) # was getting int64 when using, e.g. (0,45)
@@ -134,13 +138,14 @@ class QLSC:
 #			if not (0 <= ra <= 360):
 #				raise ValueError("ang2ipix: ra out of range [0,360]")
 		
-		if points is None:
-			return q3c.ang2ipix(self._hprm, ra, dec)
-		else:
-			# .. todo:: modify C wrapper code to take numpy arrays directly
-			v = np.vectorize(q3c.ang2ipix)
-			return v(self._hprm, points[:,0], points[:,1])
-			#return q3c.ang2ipix(self._hprm, points[:,0], points[:,1])
+#		if points is None:
+		print(f"flags: {ra.flags}")
+		return q3c.ang2ipix(self._hprm, ra, dec)
+#		else:
+# 			# .. todo:: modify C wrapper code to take numpy arrays directly
+# 			v = np.vectorize(q3c.ang2ipix)
+# 			return v(self._hprm, points[:,0], points[:,1])
+# 			#return q3c.ang2ipix(self._hprm, points[:,0], points[:,1])
 
 	def ang2ipix_xy(self, ra:float=None, dec:float=None, points=None) -> dict:
 		'''
@@ -610,6 +615,7 @@ class QLSCIndex:
 			#max_insert_per_transaction = 1e7
 
 			ipix = self.qlsc.ang2ipix(ra, dec)
+			print(f"ipix = {ipix}")
 
 			with self.data_source:
 				with contextlib.closing(self.data_source.cursor()) as cursor:

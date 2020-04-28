@@ -10,6 +10,19 @@
 
 #define Q3C_STRUCT_POINTER_BUFFER "Q3C_prm_struct_pointer"
 
+void *get_item_pointer(int ndim, void *buf, Py_ssize_t *strides,
+   Py_ssize_t *suboffsets, Py_ssize_t *indices) {
+   char *pointer = (char*)buf;
+   int i;
+   for (i = 0; i < ndim; i++) {
+	   pointer += strides[i] * indices[i];
+	   if (suboffsets[i] >=0 ) {
+		   pointer = *((char**)pointer) + suboffsets[i];
+	   }
+   }
+   return (void*)pointer;
+}
+
 // ---------------------------------
 // prm (main Q3C structure) routines
 // ---------------------------------
@@ -94,18 +107,34 @@ qlsc_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
 //qlsc_q3c_ang2ipix(PyObject *module, PyObject *args) // -> cast as PyCFunction
 {
 	// external parameters
-	q3c_coord_t ra;
-	q3c_coord_t dec;
+	// -------------------
 	PyObject *hprm_capsule;
+	q3c_coord_t ra, dec;
 	
+	// used for numpy values
+	// ---------------------
+	PyObject *np_ra, *np_dec;
+
 	// internal variables
+	// ------------------
 	struct q3c_prm *hprm;
+	int array_form = 0; // set to 1 if the inputs are numpy arrays
 	q3c_ipix_t ipix = 0;
 	static int invocation;
 	static q3c_coord_t ra_buf, dec_buf;
 	static q3c_ipix_t ipix_buf;
+	//Py_ssize_t n; // number of points
 
+	// returned values
+	// ---------------
+	PyArrayObject *np_ipix;
+	
 	static char *kwlist[] = {"hprm", "ra", "dec", NULL};
+
+	// We accept one of two parameter signatures:
+	//  ang2ipix ( <object>, <double>, <double> )
+	// and
+	//  ang2ipix ( <object>, <ndarray:double>, <ndarray:double> )
 
 	//PySys_WriteStdout("about to parse input\n");
     if (!PyArg_ParseTupleAndKeywords(args, kwargs,
@@ -113,45 +142,195 @@ qlsc_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
     								 kwlist,
     								 &hprm_capsule, &ra, &dec))
 	{
-		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
-        return NULL;
+		// AN ERROR HAS BEEN SET HERE!
+		// Clear it since we're going to try to continue.
+		PyErr_Clear();
+		
+		// unable to parse inputs
+		// not two doubles; see if we've been given NumPy arrays:
+		if (PyArg_ParseTupleAndKeywords(args, kwargs,
+										 "OOO",	// 3 objects
+										 kwlist,
+										 &hprm_capsule, &np_ra, &np_dec))
+		{
+			// success - found three objects
+			array_form = 1;
+		} else {
+			PyErr_SetString(PyExc_TypeError, "Could not determine type for ra or dec: either use scalar values or NumPy arrays.");
+			return NULL; // -> raise exception
+		}
 	}
 
-	//PySys_WriteStdout("ra,dec = %.6f, %.6f\n", ra, dec);
-	
 	// TODO: look for examples where attribute names are pre-cached.
 	//PyObject *hprm_attr_name = PyUnicode_FromString("_hprm");
 	//PySys_WriteStdout("has attr: %d\n", PyObject_HasAttr(self, hprm_attr_name));
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
-	
-	if (invocation==0)
-	{
-		;
-	}
-	else
-	{
-		if ((ra == ra_buf) && (dec == dec_buf))
-		{
-			PyLong_FromLongLong(ipix_buf);
-		}
-	}
-	if ((!isfinite(ra)) || (!isfinite(dec)))
-	{
-		Py_RETURN_NONE;
-	}
+
+	if (array_form) {
 		
-	q3c_ang2ipix(hprm, ra, dec, &ipix);
+		Py_buffer ra_view, dec_view;
+		q3c_ipix_t *ipix_array; // hold the calculated ipix values
 
-	ra_buf = ra;
-	dec_buf = dec;
-	ipix_buf = ipix;
-	invocation=1;
+		// NUMPY ARRAY VERSION
+		
+		// Good reference for this stuff: https://documentation.help/Python-3.7/buffer.html
+		
+		//
+		// Create views from the numpy objects from which we can access the C array and other info.
+		// Ensure that the memory is contigguous and that the object reports its data type.
+		// Successful calls to PyObject_GetBuffer must be balanced by PyBuffer_Release!
+		// PyObject_GetBuffer returns 0 on success, -1 otherwise.
+		//
+		// PyBUF_FULL_RO = (PyBUF_INDIRECT | PyBUF_STRIDES | PyBUF_FORMAT)
+		//
+		if (PyObject_GetBuffer(np_ra, &ra_view, PyBUF_FULL_RO) == -1)
+			return NULL;
+		if (PyObject_GetBuffer(np_dec, &dec_view, PyBUF_FULL_RO) == -1) {
+			PyBuffer_Release(&ra_view);
+			return NULL;
+		}
 
-	//PySys_WriteStdout("ipix = %" PRId64 "\n", ipix);
+		// check the data type is double for ra,dec
+		if (strcmp(ra_view.format, "d") != 0 || strcmp(dec_view.format, "d") != 0) {
+			PyErr_SetString(PyExc_TypeError, "'ra' and 'dec' arrays must be of type np.double.");
+			goto ang2ipix_array_early_exit;
+		}
+		
+		// check arrays are the same length
+		// Py_ssize_t *shape
+		if (ra_view.shape[0] != dec_view.shape[0]) {
+			PyErr_SetString(PyExc_ValueError, "'ra' and 'dec' arrays must be the same length.");
+			goto ang2ipix_array_early_exit;
+		}
 
-    return PyLong_FromLongLong(ipix);
+		// check that the arrays are 1D - don't do this here; we'll accept slices where the array is complex
+		//		if ((ra_view.ndim != 1) || (ra_view.ndim != 1)) {
+		//			PyErr_SetString(PyExc_ValueError, "'ra' and 'dec' must be 1D arays.");
+		//			goto ang2ipix_array_early_exit;
+		//		}
+
+		Py_ssize_t n = ra_view.shape[0]; // number of points
+
+		// Debugging.
+//		Py_ssize_t *strides = ra_view.strides;
+//		PySys_WriteStdout("ndim: %d\n", ra_view.ndim);
+//		PySys_WriteStdout("ra,dec: dim[0] = (%zd,%zd)\n", ra_view.shape[0], dec_view.shape[0]);
+//		PySys_WriteStdout("stride: %zd\n", strides[0]);
+//		PySys_WriteStdout("contiguous? %d\n", strides[0] == sizeof(double));
+//		if (ra_view.suboffsets)
+//			PySys_WriteStdout("suboffset: %zd\n", ra_view.suboffsets[0]);
+		
+//		double *arr = ra_view.buf;
+//		PySys_WriteStdout("First element %f\n", arr[0]);
+//		for (int i=0; i < n; i++) {
+//			PySys_WriteStdout("%f\n", *(double*)((char*)arr + i * strides[0]));
+//		}
+		
+		q3c_coord_t *ra_buffer = ra_view.buf; // pointer to C array
+		q3c_coord_t *dec_buffer = dec_view.buf;
+
+		if (ra_view.suboffsets || dec_view.suboffsets) {
+			// complex array! requires special handling
+			
+			PyErr_SetString(PyExc_NotImplementedError, "This is a particularly complex array! Please send reproducible code to the author to support this type of array. In the meantime, pass a simpler (e.g. 1D) array to this function.");
+			goto ang2ipix_array_early_exit;
+
+			// The documentation says these are PIL-style arrays (Python Imaging Library).
+			// This seems way out of scope for this kind of function, but the code
+			// would look something like this. Not clear what the "indices" paramter is.
+			//
+			// An example of usage is here: https://github.com/python/cpython/blob/master/Objects/abstract.c#L611
+			//
+			// This is a start on the code, but it's more complicated than this.
+//			q3c_coord_t *ra_ptr;
+//			q3c_coord_t *dec_ptr;
+//			for (int i=0; i < n; i++) {
+//				ra_ptr  = get_item_pointer(ra_view.ndim, ra_buffer, ra_view.strides, ra_view.suboffsets, <indices>??);
+//				dec_ptr = get_item_pointer(dec_view.ndim, dec_buffer, dec_view.strides, dec_view.suboffsets, <indices>??);
+//				q3c_ang2ipix(hprm, *((double *)ra_ptr), *((double *)dec_ptr), &ipix_array[i]);
+//			}
+			
+		} else if ((ra_view.strides[0] != sizeof(q3c_coord_t)) || dec_view.strides[0] != sizeof(q3c_coord_t)) {
+			// handle strides
+			
+			ipix_array = malloc(n * sizeof(q3c_ipix_t)); // allocate the ipix values array
+			
+			Py_ssize_t ra_stride  = ra_view.strides[0];
+			Py_ssize_t dec_stride = dec_view.strides[0];
+			q3c_coord_t ra, dec;
+			for (int i=0; i < n; i++) {
+				ra = *(double*)((char*)ra_buffer + i * ra_stride);
+				dec = *(double*)((char*)dec_buffer + i * dec_stride);
+				//PySys_WriteStdout("ra,dec = (%f,%f)\n", ra, dec);
+				q3c_ang2ipix(hprm, ra, dec, &ipix_array[i]);
+			}
+			
+		} else {
+			// standard C array, contiguous data
+			
+			ipix_array = malloc(n * sizeof(q3c_ipix_t)); // allocate the ipix values array
+			
+			for (int i=0; i < n; i++) {
+				q3c_ang2ipix(hprm, ra_buffer[i], dec_buffer[i], &ipix_array[i]);
+				//PySys_WriteStdout("C ra,dec = (%f,%f) -> %lld\n", ra_buffer[i], dec_buffer[i], ipix_array[i]);
+			}
+		}
+
+		// create a new NumPy array with the ipix values
+		npy_intp dims[1];
+		dims[0] = n;
+		np_ipix = (PyArrayObject *)PyArray_SimpleNewFromData(1, 			// int nd - length of dims array
+															 dims, 			// npy_intp* dims (for 1D, could just be an int)
+															 NPY_INT64, 	// int typenum,
+															 ipix_array); 	// void* data
+		PyArray_ENABLEFLAGS(np_ipix, NPY_ARRAY_OWNDATA);
+
+		PyBuffer_Release(&ra_view);
+		PyBuffer_Release(&dec_view);
+		
+		// if there is an error at this point, print it
+		//PyErr_Print();
+		
+		// return numpy array
+		return Py_BuildValue("O", np_ipix);
+
+ang2ipix_array_early_exit:
+		// release references, bail
+		PyBuffer_Release(&ra_view);
+		PyBuffer_Release(&dec_view);
+		return NULL;
+	}
+	else {
+		// SCALAR VERSION
+
+		if (invocation==0)
+		{
+			;
+		}
+		else
+		{
+			if ((ra == ra_buf) && (dec == dec_buf))
+			{
+				PyLong_FromLongLong(ipix_buf);
+			}
+		}
+		if ((!isfinite(ra)) || (!isfinite(dec)))
+		{
+			Py_RETURN_NONE;
+		}
+			
+		q3c_ang2ipix(hprm, ra, dec, &ipix);
+
+		ra_buf = ra;
+		dec_buf = dec;
+		ipix_buf = ipix;
+		invocation=1;
+
+		//PySys_WriteStdout("ipix = %" PRId64 "\n", ipix);
+		return PyLong_FromLongLong(ipix);
+	}
+
 }
 
 static PyObject *
