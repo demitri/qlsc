@@ -97,12 +97,6 @@ For most users, working in ipix values and ra,dec coordinates will accomplish mo
 
 The pixel numbering scheme is in *[z-order](https://en.wikipedia.org/wiki/Z-order_curve)*; please refer to the Chan paper for details and diagrams.
 
-## Geospatial/Cone Search Support
-
-QLSC has preliminary support for indexing, but this should be considered a proof of concept. There is no current support for database-style indexing along the lines of what Q3C provides, but this is planned. Do not expect any API stability in this class at this point, but it is usable for reasonably-sized datasets (1e5 points, no problem, 1e6 points... could take a little while, but works).
-
-Geospatial/cone queries in the form of a cone search are supported, but search time taken is proportional to the number of points provided. Searches are perfomed by using the `QLSCIndex` class. Examples are provided in the [examples](https://github.com/demitri/qlsc/tree/master/examples) directory.
-
 ## References & Links
 
 * [Original Chan, O'Neill 1975 paper](https://ntrl.ntis.gov/NTRL/dashboard/searchResults/titleDetail/ADA010232.xhtml)
