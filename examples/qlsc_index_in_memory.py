@@ -12,8 +12,8 @@ import numpy as np
 
 input_file = "1e5_wise.txt"
 
-# create a sphere with 6,144 bins (6 * 2**(2*bin_level))
-qlsc = QLSC(bin_level=5)
+# create a sphere with 6,144 bins (6 * 2**(2*depth))
+qlsc = QLSC(depth=5)
 
 # create an index:
 # by default, an in memory SQLite database is used

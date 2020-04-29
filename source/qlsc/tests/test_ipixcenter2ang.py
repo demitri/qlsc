@@ -4,7 +4,7 @@ from numpy.testing import assert_approx_equal
 
 from qlsc import QLSC
 
-# bin_level, ipix, ra, dec
+# depth, ipix, ra, dec
 expected_results_30 = [
 	(2, 0, 315.0, 43.31385665828306),
 	(2, 3, 315.0, 70.52877936550931),
@@ -24,12 +24,12 @@ expected_results_30 = [
 
 expected_results = expected_results_30
 
-@pytest.mark.parametrize("bin_level, ipix, ra, dec", expected_results)
-def test_ipix2ang_center(bin_level, ipix, ra, dec):
+@pytest.mark.parametrize("depth, ipix, ra, dec", expected_results)
+def test_ipix2ang_center(depth, ipix, ra, dec):
 	'''
 	Test QLSC ipixcenter2ang.
 	'''
-	q = QLSC(bin_level=bin_level) # use default nside value
+	q = QLSC(depth=depth) # use default nside value
 	ra_out, dec_out = q.ipix2ang_center(ipix)
 	
 	assert_approx_equal(ra, ra_out)

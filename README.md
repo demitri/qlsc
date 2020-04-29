@@ -1,6 +1,6 @@
 # QLSC: Quadrilateralized Spherical Cube for Python
 
-The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. *qlsc* is an implemenation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s [Q3C](https://github.com/segasai/q3c), a PostgreSQL extension that implements QLSC indexing.
+The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. *QLSC* is an implemenation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s [Q3C](https://github.com/segasai/q3c), a PostgreSQL extension that implements QLSC indexing. In addition to sphere segmentation, this package provides the catalog indexing functionality of Q3C without the need to install a PostgreSQL database.
 
 Note that while this package is designed for astronomical use (it focusses on right ascension and declination), it could be just as easily be used for latitude and longitude coordinates, as long as you’re ok with a perfectly spherical Earth (though QLSC was designed to be used with the real Earth). Future updates may better facilitate this, but contributions are welcome.
 
@@ -24,23 +24,49 @@ Note that while this package is designed for astronomical use (it focusses on ri
 API documentation can be found here: [https://qlsc.readthedocs.io/en/latest/](https://qlsc.readthedocs.io/en/latest/)
 
   
-## 30 Second Introduction
+## 30 Second Segmentation Introduction
 
-If you’re not familiar with the QLSC scheme it would be better to start below. There are two classes defined in this package, `QLSC` and `QLSCIndex`. The QLSC scheme projects each of the six faces of a cube onto a sphere. Segmentation is performed on the cube fased and done in levels, where each level divides each bin into four. For example, `bin_level=2` divides each bin into four, then of those into four again, which is 2^(2*`bin_level`) (i.e. 16) bins per cube face, or 96 total bins. ("Pixels" and "bin" are used somewhat interchangably.)
+If you’re not familiar with the QLSC scheme it would be better to start below. There are two classes defined in this package, `QLSC` and `QLSCIndex`. The QLSC scheme projects each of the six faces of a cube onto a sphere. Segmentation is performed on the cube fased and done in levels, where each level divides each bin into four. For example, `depth=2` divides each bin into four, then of those into four again, which is 2^(2*`depth`) (i.e. 16) bins per cube face, or 96 total bins. ("Pixels" and "bin" are used somewhat interchangably.)
 
 The class can convert between (ra,dec) positions and the pixel number (*ipix*).
 
 ```python
 from qlsc import QLSC
     
-q = QLSC(bin_level=2)
+q = QLSC(depth=2)
 q.ang2ipix(45,45)     # ra,dec -> ipix number
 q.ipix2ang_center(42) # ipix number -> ra,dec at center of pixel
 q.ipix2polygon(42)    # returns the points on the sphere describing
                       # the pixel (joined by great circles)
 ```
 
-Examples are provided in the directory "examples" that show how the scheme and indexing can be used.
+## 30 Second Cone Search Introduction
+
+Performing cone searches is as simple as creating a `QLSCIndex` index object and populating it with coordinates. The highest sphere segmentation resolution is selected by default, but a lower resolution can be chosen. By default, the index is stored in memory, but a file may be chosen so that the index can be reused as a script is rerun or by multiple scripts. Points are added in α,δ coordinates in degrees. Once points are added to the index you can perform a cone search.
+
+The example below uses an included function to generate any number of points evenly distributed on a sphere (useful for testing).
+
+```python
+from qlsc import QLSCIndex
+from qlsc.generate import sunflower_points_on_sphere
+
+index = QLSCIndex() # created in memory
+
+# add points from a NumPy array
+points = sunflower_points_on_sphere(n=1e5)
+index.add_points(points=points)
+
+# or individually
+index.add_point(12., 34.)
+
+# keys can also be attached to points
+index.add_point(56, 78, key="a catalog ID")
+
+# cone search at center α=56, δ=-40
+matches = index.radial_query(ra=56., dec=-40.)
+```
+
+Further examples are provided in the directory "examples" that show how the scheme and indexing can be used.
 
 ## The Quadrilateralized Spherical Cube
 
@@ -48,7 +74,7 @@ The quadrilateralized spherical cube was first devised in 1975 in a technical re
 
 ![](figures/cube_in_sphere/cube_in_sphere.png)
 
-The six cube faces are then projected onto the sphere via transforms defined in the paper. This is the lowest resolution. Higher resolutions are achieved in steps: each step divides the bin, or pixel, into four. The first step will have four bins per face, the next will have 16, etc. The code refers to these as "bin levels" (number of times the bin has been subdivided), where the diagram above is `bin_level=0`. The Q3C PostgreSQL extension uses a bin level of 30, which is 1,152,921,504,606,846,976 bins per cube face (six times that over the full sphere) corresponding to ~0.08 μ" square per pixel. The QLSC package supports any bin level from 0 to 30.
+The six cube faces are then projected onto the sphere via transforms defined in the paper. This is the lowest resolution. Higher resolutions are achieved in steps: each step divides the bin, or pixel, into four. The first step will have four bins per face, the next will have 16, etc. The code refers to these as "bin levels" (number of times the bin has been subdivided), where the diagram above is `depth=0`. The Q3C PostgreSQL extension uses a bin level of 30, which is 1,152,921,504,606,846,976 bins per cube face (six times that over the full sphere) corresponding to ~0.08 μ" square per pixel. The QLSC package supports any bin level from 0 to 30.
 
 | Cube Face Number | RA Range | Face Center    |
 |:----------------:| :------: | :------------: |
@@ -59,7 +85,7 @@ The six cube faces are then projected onto the sphere via transforms defined in 
 |  4          | 225° ≤ δ ≤ 315° | α = 270°, δ = 0° |
 |  5          | bottom face | α = 0°, δ = -90° |
 
-The diagram shows face 1 divided at `bin_level=2` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
+The diagram shows face 1 divided at `depth=2` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
 
 ![](figures/cube_subdivisions/cube_subdivisions.png)
 

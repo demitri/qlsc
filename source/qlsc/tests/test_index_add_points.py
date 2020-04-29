@@ -9,7 +9,7 @@ def test_add_points_radec_keyword_parameter():
 	'''
 	Test QLSC.add_points using ra,dec and keyword parameters.
 	'''
-	q30 = QLSC(bin_level=30)
+	q30 = QLSC(depth=30)
 	idx = QLSCIndex(qlsc=q30)
 	
 	sample_points = sunflower_points_on_sphere(n=100)
@@ -25,7 +25,7 @@ def test_add_points_with_single_array():
 	'''
 	Test QLSC.add_point using position parameters.
 	'''
-	q30 = QLSC(bin_level=30)
+	q30 = QLSC(depth=30)
 	idx = QLSCIndex(qlsc=q30)
 	
 	sample_points = sunflower_points_on_sphere(n=100)
@@ -39,7 +39,7 @@ def test_add_points_duplicate_points_ignored():
 	Test that duplicate ra,dec pairs are ignored.
 	'''
 	
-	q30 = QLSC(bin_level=30)
+	q30 = QLSC(depth=30)
 	idx = QLSCIndex(qlsc=q30)
 	
 	sample_points = sunflower_points_on_sphere(n=100)

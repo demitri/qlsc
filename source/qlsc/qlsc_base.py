@@ -53,30 +53,32 @@ class QLSC:
 
 		.. code-block:: 
 
-			no. bins per face        = (2**bin_level)**2
+			no. bins per face        = (2**depth)**2
 			number of bins on sphere = no. bins per face * 6
 	
 	Each bin has a pixel number called an "ipix", which is an integer encoded with the location of the bin.
 	
-	The default value of `bin_level` = 30 that divides the sphere into 6,442,450,944 bins (i.e. nside=1,073,741,824),
+	The default value of `depth` = 30 that divides the sphere into 6,442,450,944 bins (i.e. nside=1,073,741,824),
 	is the one used by the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
 	This value is used if neither `nside` or `bin_size` are specified.
 	
-	:param bin_level: number of times each bin in each face is subdivided by four
+	:param depth: number of times each bin in each face is subdivided by four
 	'''
-	def __init__(self, bin_level:int=30):
+	def __init__(self, depth:int=30):
 
-		# The Q3C code only supports up to bin_level=30
-		if not (0 <= bin_level <= 30):
-			raise ValueError(f"The value for 'bin_level' must be an integer on [0,30]; was given '{bin_level}'.")
+		print("created")
+
+		# The Q3C code only supports up to depth=30
+		if not (0 <= depth <= 30):
+			raise ValueError(f"The value for 'depth' must be an integer on [0,30]; was given '{depth}'.")
 		
 		# "nside" as defined by Q3C is the number of bins along one side of the cube face.
 		# This means the number of bins on a cube face is nside*nside, and the total
 		# number of bins is 6*nside*nside.
 		#
-		nside = int(pow(2, bin_level))
+		nside = int(pow(2, depth))
 		
-		self.bin_level = bin_level
+		self.depth = depth
 		
 		# store hprm struct values - hprm is a pointer (struct) to main Q3C structure used by most Q3C calls
 		self._hprm = q3c.init_q3c(nside=nside)
@@ -84,7 +86,7 @@ class QLSC:
 			raise Exception("Internal Q3C data structure could not be created.")
 			
 	def __repr__(self):
-		return f"<{self.__class__.__module__.split('.')[0]}.{self.__class__.__name__} at {hex(id(self))}, bin_level={self.bin_level}>"
+		return f"<{self.__class__.__module__.split('.')[0]}.{self.__class__.__name__} at {hex(id(self))}, depth={self.depth}>"
 	
 	def ang2ipix(self, ra:Union[float,Iterable]=None, dec:Union[float,Iterable]=None, points:Iterable=None) -> Union[float,np.ndarray]:
 		'''
@@ -340,7 +342,7 @@ class QLSC:
 		
 		# The paramter call for the underlying C function is q3c_pixarea(hprm, ipix, depth).
 		# It's not clear why "depth" is a parameter since it should be read from hprm.
-		# I left the parameter exposed in the Python wrapper, but in this method will just pass bin_level.
+		# I left the parameter exposed in the Python wrapper, but in this method will just pass depth.
 		
 		#return q3c.pixarea(self._hprm, ipix, depth)
 	
@@ -410,7 +412,7 @@ class QLSCIndex:
 	
 	.. code-block:: python
 		
-		qlsc = QLSC(bin_level=30)
+		qlsc = QLSC(depth=30)
 		sdss_catalog = QLSCIndex(qlsc=qlsc, filepath='/path/to/save/file.qlscidx')
 		
 	The filename and extension can be anything, but `.qlscidx` is suggested to remember what kind of file it is.
@@ -425,10 +427,11 @@ class QLSCIndex:
 	:param qlsc: an instance of :py:class:`QLSC` set to the desired segmentation level
 	:param index_file: the file path where a persistent index will be stored; the default is to create the index in memory
 	'''
-	def __init__(self, qlsc:QLSC, filepath:os.PathLike=None):
+	def __init__(self, qlsc:QLSC=None, filepath:os.PathLike=None):
 		
 		if qlsc is None:
-			raise ValueError("A QLSC object must be provided to define the pixel resolution of the sphere.")
+			# select the highest resolution by default
+			qslc = QLSC(depth=30)
 		
 		self.qlsc = qlsc
 		self._db = None # SQLite database connection
@@ -625,7 +628,7 @@ class QLSCIndex:
 					cursor.execute(query, (ipix, ra, dec, key))
 				cursor.execute("COMMIT")
 
-	def add_points(self, ra:Iterable=None, dec:Iterable=None, points:Iterable[Tuple]=None, key:Iterable[str]=None):
+	def add_points(self, ra:Iterable=None, dec:Iterable=None, points:Iterable[Tuple]=None, keys:Iterable[str]=None):
 		'''
 		Add a collection of points to the index.
 		
@@ -652,6 +655,14 @@ class QLSCIndex:
 		elif points is None and any([x is None for x in [ra,dec]]):
 			raise ValueError("If 'ra' or dec' is given, then other parameter must also be provided.")
 		
+		if keys is not None:
+			if points is not None:
+				if len(points) != len(keys):
+					raise ValueError(f"The number of points provided ({len(points)}) does not match the number of keys ({len(keys)}).")
+			else:
+				if len(ra) != len(dec) != len(keys):
+					raise ValueError(f"The number of ra,dec coordinates provided ({len(ra)},{len(dec)}) does not match the number of keys ({len(keys)}).")
+
 #		if pandas_available:
 #			if isinstance(ra, pandas.core.series.Series):
 #				ra = ra.values # extract ndarray
@@ -675,14 +686,14 @@ class QLSCIndex:
 				with contextlib.closing(self._db.cursor()) as cursor:
 					
 					cursor.execute("BEGIN")
-					if key is None:
+					if keys is None:
 						query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec) VALUES (?, ?, ?)"
 						# use individual lists instead of something like np.dstack- we don't want
 						# the 64-bit ipix integers converted to floats and risk changing the value due to rounding
 						cursor.executemany(query, zip(ipix, ra, dec)) # pass list of tuples (e.g. use zip)
 					else:
 						query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec, key) VALUES (?, ?, ?, ?)"
-						cursor.executemany(query, zip(ipix, ra, dec, key))
+						cursor.executemany(query, zip(ipix, ra, dec, keys))
 					
 					cursor.execute("COMMIT")
 

@@ -8,7 +8,7 @@ def test_add_point_keyword_parameter():
 	'''
 	Test QLSC.add_point using keyword parameters.
 	'''
-	q30 = QLSC(bin_level=30)
+	q30 = QLSC(depth=30)
 	idx = QLSCIndex(qlsc=q30)
 	
 	ra = 12
@@ -25,7 +25,7 @@ def test_add_point_position_parameter():
 	'''
 	Test QLSC.add_point using position parameters.
 	'''
-	q30 = QLSC(bin_level=30)
+	q30 = QLSC(depth=30)
 	idx = QLSCIndex(qlsc=q30)
 	
 	ra = 12
@@ -42,7 +42,7 @@ def test_add_point_retrieve_key():
 	'''
 	Test that a key added with a point is returned.
 	'''
-	q30 = QLSC(bin_level=30)
+	q30 = QLSC(depth=30)
 	idx = QLSCIndex(qlsc=q30)
 	
 	ra = 12
@@ -64,7 +64,7 @@ def test_add_point_duplicate_points_ignored():
 	Test that duplicate ra,dec pairs are ignored.
 	'''
 	
-	q30 = QLSC(bin_level=30)
+	q30 = QLSC(depth=30)
 	idx = QLSCIndex(qlsc=q30)
 	
 	ra = 12

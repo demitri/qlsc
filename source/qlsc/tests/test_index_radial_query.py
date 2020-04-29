@@ -12,7 +12,7 @@ def test_radial_query():
 	Test a radial query.
 	'''
 
-	q30 = QLSC(bin_level=30)
+	q30 = QLSC(depth=30)
 	idx = QLSCIndex(qlsc=q30)
 	
 	sample_points = sunflower_points_on_sphere(n=5e5)

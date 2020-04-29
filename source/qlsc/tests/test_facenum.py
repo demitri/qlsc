@@ -3,7 +3,7 @@ import pytest
 
 from qlsc import QLSC
 
-# bin_level, ra, dec, facenum
+# depth, ra, dec, facenum
 expected_results = [
 	(30, 0, 0, 1),
 	(30, 45, 0, 2),
@@ -19,10 +19,10 @@ expected_results = [
 	(30, 99, -89, 5)
 ]
 
-@pytest.mark.parametrize("bin_level, ra, dec, facenum", expected_results)
-def test_facenum(bin_level, ra, dec, facenum):
+@pytest.mark.parametrize("depth, ra, dec, facenum", expected_results)
+def test_facenum(depth, ra, dec, facenum):
 	'''
 	Test QLSC ang2ipix.
 	'''
-	q = QLSC(bin_level=bin_level)
+	q = QLSC(depth=depth)
 	assert facenum == q.face_number(ra, dec)

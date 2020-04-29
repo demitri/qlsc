@@ -23,7 +23,7 @@ generates 1000 points and plots them:
 
 	# generate points for plotting
 	points = sunflower_points_on_sphere(n=500, radians=True)
-	# convert points to (x,y,z)
+	# convert points to (x,y,z) to plot
 	phi   = points[:,1] # math convention
 	theta = points[:,0]
 	x = np.sin(theta) * np.cos(phi)

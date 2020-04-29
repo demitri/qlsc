@@ -8,7 +8,7 @@ from numpy.testing import assert_allclose #, assert_approx_equal
 
 from qlsc import QLSC
 
-# bin_level, ipix, [[ra1,dec1], ... , [ran,decn]]
+# depth, ipix, [[ra1,dec1], ... , [ran,decn]]
 
 # bin level 0
 qlsc0_expected_results = [
@@ -44,10 +44,10 @@ qlsc30_expected_results = [
 
 expected_results = qlsc0_expected_results + qlsc2_expected_results + qlsc10_expected_results + qlsc30_expected_results
 
-@pytest.mark.parametrize("bin_level, ipix, polygon", expected_results)
-def test_ipix2polygon(bin_level, ipix, polygon):
+@pytest.mark.parametrize("depth, ipix, polygon", expected_results)
+def test_ipix2polygon(depth, ipix, polygon):
 	'''
 	Test QLSC ipix2polygon.
 	'''
-	q = QLSC(bin_level=bin_level)
+	q = QLSC(depth=depth)
 	assert_allclose(polygon, q.ipix2polygon(ipix))

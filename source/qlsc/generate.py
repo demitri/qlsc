@@ -2,7 +2,7 @@
 import math
 import numpy as np
 
-def sunflower_points_on_sphere(n=1000, radians:bool=False, polar_angle_from_zenith:bool=False):
+def sunflower_points_on_sphere(n:int=1000, radians:bool=False, polar_angle_from_zenith:bool=False):
 	'''
 	Generate a list of points on a sphere using the golden spiral method.
 	

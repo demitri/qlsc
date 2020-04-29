@@ -96,7 +96,7 @@ def test_xy2ang(facenum, x, y, ra, dec):
 	'''
 	Test QLSC xy2facenum. This is independent of bin size.
 	'''
-	q = QLSC(bin_level=1) # the bin level doesn't matter
+	q = QLSC(depth=1) # the bin level doesn't matter
 	ra_out, dec_out = q.xy2ang(facenum=facenum, x=x, y=y)
 	assert_approx_equal(ra, ra_out)
 	assert_approx_equal(dec, dec_out)
