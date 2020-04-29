@@ -74,7 +74,7 @@ The quadrilateralized spherical cube was first devised in 1975 in a technical re
 
 ![](figures/cube_in_sphere/cube_in_sphere.png)
 
-The six cube faces are then projected onto the sphere via transforms defined in the paper. This is the lowest resolution. Higher resolutions are achieved in steps: each step divides the bin, or pixel, into four. The first step will have four bins per face, the next will have 16, etc. The code refers to these as "bin levels" (number of times the bin has been subdivided), where the diagram above is `depth=0`. The Q3C PostgreSQL extension uses a bin level of 30, which is 1,152,921,504,606,846,976 bins per cube face (six times that over the full sphere) corresponding to ~0.08 μ" square per pixel. The QLSC package supports any bin level from 0 to 30.
+The six cube faces are then projected onto the sphere via transforms defined in the paper. This is the lowest resolution. Higher resolutions are achieved in steps: each step divides the bin, or pixel, into four. The first step will have four bins per face, the next will have 16, etc. The code refers to the level of subdivision as "depth" (number of times the bin has been subdivided), where the diagram above is `depth=0`. The Q3C PostgreSQL extension uses a depth of 30, which is 1,152,921,504,606,846,976 bins per cube face (six times that over the full sphere) corresponding to ~0.08 μ" square per pixel. The QLSC package supports any depth from 0 to 30.
 
 | Cube Face Number | RA Range | Face Center    |
 |:----------------:| :------: | :------------: |
@@ -89,9 +89,9 @@ The diagram shows face 1 divided at `depth=2` and the projection of each pixel o
 
 ![](figures/cube_subdivisions/cube_subdivisions.png)
 
-The distortion may appear to be significant, but at much higher bin levels it is not as severe. Also, it doesn't matter. The scheme is advantageous in that there are no discontinuities at the poles, and the indexing scheme is optimized for fast database queries. While not all pixels are the same size, they are very nearly so, and for the purposes this scheme is used for, this is not a requirement.
+The distortion may appear to be significant, but at much higher depth values it is not as severe. (Also, it's immaterial.) The scheme is advantageous in that there are no discontinuities at the poles, and the indexing scheme is optimized for fast database queries. While not all pixels are the same size, they are very nearly so, and for the purposes this scheme is used for, this is not a requirement.
 
-For most users, working in ipix values and ra,dec coordinates will accomplish most anything you might need. For those who might be performing more complex calculations, I recommend working in the native coordinates of the face plane. Each face (at any division level) has its 2D coordinate system origin at the cube face center. Both the *x* and *y* axes range from -1 to +1. Methods are provided to translate between *xy* coordinates, ipix value, and ra/dec coordinates. The source code for the [`ipix2polygon()`](https://qlsc.readthedocs.io/en/latest/api.html#qlsc.QLSC.ipix2polygon) method provides an illustrative example.
+For most users, working in ipix values and ra,dec coordinates will accomplish most anything needed. For those who might be performing more complex calculations, I recommend working in the native coordinates of the face plane. Each face (at any division level) has its 2D coordinate system origin at the cube face center. Both the *x* and *y* axes range from -1 to +1. Methods are provided to translate between *xy* coordinates, ipix value, and ra/dec coordinates. The source code for the [`ipix2polygon()`](https://qlsc.readthedocs.io/en/latest/api.html#qlsc.QLSC.ipix2polygon) method provides an illustrative example.
 
 ### Pixel Numbering
 
