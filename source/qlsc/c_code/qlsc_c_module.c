@@ -644,7 +644,8 @@ qlsc_q3c_sindist(PyObject *module, PyObject *args, PyObject *kwargs)
 									 &ra1, &dec1, &ra2, &dec2))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
+		//PySys_WriteStdout("unable to parse input, returning NULL\n");
+		PyErr_SetString(PyExc_TypeError, "Encountered unexpected parameters or types.");
 		return NULL;
 	}
 

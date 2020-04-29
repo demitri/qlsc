@@ -9,6 +9,8 @@ be used as such.
 
 import math
 import collections
+from typing import Union
+
 import numpy as np
 from numpy import deg2rad, rad2deg, cos, sin, arctan2, sqrt, fmod, trunc, sign
 
@@ -151,11 +153,14 @@ def _normalize_ra(ra):
 		elif ra >= 360.:
 			ra = fmod(ra,360.)
 	if is_list:
-		return  list(ra)
+		return list(ra)
 	else:
 		return ra
 
-def _normalize_ang(points, copy=False): #, radians=False):
+def _normalize_ang(ra:Union[collections.abc.Iterable,float]=None,
+				   dec:Union[collections.abc.Iterable,float]=None,
+				   points:collections.abc.Iterable=None,
+				   copy:bool=False): #, radians=False):
 	'''
 	Normalize ra,dec coordinates on a sphere to 0 <= α < 360 and -π <= δ <= π.
 	
@@ -163,25 +168,100 @@ def _normalize_ang(points, copy=False): #, radians=False):
 	However, normalizing the declination (e.g. δ = -140) may result in a change
 	in right ascension by 180 degrees.
 	
+	There are two usage patterns; one is to modify the points in the arrays provided:
+	
+	.. code-block:: python
+	
+	     _normalize_ang(points) # no return value, points modified in place
+	     
+	and the other is to return new arrays with the normalized coordinates:
+	
+	.. code-block:: python
+	
+	     new_points = _normalize_ang(points) # 'points' is left unmodified
+
+	Note that this function only works on float data types (specifically, ``np.float32``, ``np.float64``).
+	Passing an array of integer values will raise an exception since this method does not
+	want to modify given arrays unless specifically requested. Thus,
+	
+	.. code-block:: python
+	
+	     _normalize_ang(int_points) # raises exception
+	     new_points = _normalize_ang(int_points, copy=True) # works, new array dtype = np.double
+
+	The returned form will be a single array with shape (n,2). Also note that the number of values
+	returned will match the number of values passed in:
+
+	.. code-block:: python
+
+		ra, dec = _normalize_ang(ra=ra, dec=dec)
+		points  = _normalize_ang(points=points)
+	
+	:param ra: an array of right ascension points (degrees)
+	:param dec: an array of declination points (degrees)
 	:param points: an array of α,δ points, array shape (n,2)
 	:param copy: work on and return a copy of the array without modifying the original
-	:param radians: True is the coordinate units are in radians, degrees otherwise NOT YET SUPPORTED
 	'''
+#	:param radians: True is the coordinate units are in radians, degrees otherwise NOT YET SUPPORTED
 	
 	# .. todo: add support for radians
+
+	if (ra is not None or dec is not None) and points is not None:
+		raise ValueError("Cannot specify 'points' with 'ra' or 'dec'.")
+	if True in [x is None for x in [ra,dec]] and points is None:
+		raise ValueError("Only one of 'ra' or 'dec' was set; they should be set together.")
 	
-	if copy:
-		points = np.copy(points)
+	return_scalar = False
+	if ra is not None:
+		if np.isscalar(ra):
+			ra = np.array([ra], dtype=np.double)
+			dec = np.array([dec], dtype=np.double)
+			return_scalar = True
 	
-	points = np.atleast_2d(points)
+	if copy is False:
+		# check that the data types are floating point
+		if ra is not None:
+			if not all([x.dtype in [np.float32,np.float64] for x in [ra,dec]]):
+				ValueError("The 'ra','dec' values are not floating point (i.e. np.float32 or np.float64); set 'copy=True' to get around this.")
+		else:
+			if points is not None and points.dtype not in [np.float32,np.float64]:
+				ValueError("The 'points' values are not floating point (i.e. np.float32 or np.float64); set 'copy=True' to get around this.")
+	
+	# are we returning (ra,dec) or (points)?
+	return_ra_dec = None
+	
+	if points is not None:
+		points = np.atleast_2d(points)
+		if copy:
+			if points.dtype not in [np.float32,np.float64]:
+				points = np.copy(points).astype(np.float64)
+			else:
+				points = np.copy(points)
+		ra  = points[:,0]
+		dec = points[:,1]
+		return_ra_dec = False
+	else:
+		# points is None, ra.dec defined
+		if len(ra) != len(dec):
+			raise ValueError(f"The lengths of 'ra' and 'dec' are not equal ({len(ra)}, {len(dec)}).")
+		if copy:
+			if ra.dtype not in [np.float32,np.float64]:
+				ra  = np.copy(ra).astype(np.float64)
+			else:
+				ra  = np.copy(ra)
+			if dec.dtype not in [np.float32,np.float64]:
+				dec = np.copy(dec).astype(np.float64)
+			else:
+				dec = np.copy(dec)
+		return_ra_dec = True
+			
 #	if radians:
 #		pi = math.pi
 #	else:
 	pi = 180.
 	
-	ra  = points[:,0]
-	dec = points[:,1]
-	
+	# normalize dec
+	# -------------
 	# normalize angles ≥ 360°
 	idx = abs(np.trunc(dec/(2*pi))) > 0
 	dec[idx] =  fmod(dec[idx], (2*pi))
@@ -209,9 +289,23 @@ def _normalize_ang(points, copy=False): #, radians=False):
 	dec[idx] =  pi/2 - fmod(dec[idx], pi/2)
 	ra[idx] =  ra[idx] + pi
 	
-	points[:,0] = _normalize_ra(points[:,0])
+	# normalize ra
+	# ------------
+	idx = (ra < 0.) | (ra >=360.)
+	ra[idx] -= np.trunc(ra[idx]/360.)*360.
+	idx = ra < 0.
+	ra[idx] += 360.
 	
-	return np.squeeze(points)
+	if return_scalar:
+		return ra[0], dec[0]
+		
+	#return np.squeeze(points)
+	if copy:
+		if return_ra_dec:
+			return ra, dec
+		else:
+			return np.squeeze(np.dstack((ra, dec)))
+	# if not copied, nothing needs to be returned
 
 	# below is test code
 	

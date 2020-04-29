@@ -6,6 +6,8 @@ def sunflower_points_on_sphere(n=1000, radians:bool=False, polar_angle_from_zeni
 	'''
 	Generate a list of points on a sphere using the golden spiral method.
 	
+	The default values return points that can be taken as ra,dec in degrees.
+	
 	Points can be returned where the polar angle θ is measured from the zenith
 	where 0 ≤ 0 ≤ π (``polar_angle_from_zenith=True``) or else from the reference
 	plane where -π/2 ≤ θ ≤ π/2 (``polar_angle_from_zenith=False``).
