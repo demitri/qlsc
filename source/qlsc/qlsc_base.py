@@ -66,7 +66,7 @@ class QLSC:
 	'''
 	def __init__(self, depth:int=30):
 
-		print("created")
+		# k = depth in Chan paper
 
 		# The Q3C code only supports up to depth=30
 		if not (0 <= depth <= 30):
@@ -266,6 +266,41 @@ class QLSC:
 		'''
 		ra,dec = self.xy2ang(x=x, y=y, facenum=facenum)
 		return self.ang2ipix(ra, dec)
+			
+	def ipix_down(self, ipix:int) -> Iterable[int]:
+		'''
+		Returns the four ipix values at the next higher depth.
+		
+		:param ipix: the ipix value at the resolution of this object's scheme.
+		'''
+		if self.depth == 30:
+			raise ValueError("QLSC doesn't support depth values greater than 30.")
+		elif not (0 <= ipix < self.nbins):
+			raise ValueError(f"ipix value out of range for this depth; should be in [0,{self.nbins}).")
+		else:
+			new_ipix = ipix <<  2 # same as -> int(ipix * 2**(self.nside))
+			return list(range(new_ipix, new_ipix+4))
+		
+	def ipix_up(self, ipix:int):
+		'''
+		Returns the ipix value value at the next lower depth.
+
+		:param ipix: the ipix value at the resolution of this object's scheme.
+		'''
+		if self.depth == 0:
+			raise ValueError("Already at lowest depth (0).")
+		elif not (0 <= ipix < self.nbins):
+			raise ValueError(f"ipix value out of range for this depth; should be in [0,{self.nbins}).")
+		else:
+			return ipix >> 2
+	
+	def ipix2face(self, ipix:int) -> int:
+		'''
+		Return the face number the given ipix value falls on.
+		'''
+		if not (0 <= ipix < self.nbins):
+			raise ValueError(f"ipix value out of range for this depth; should be in [0,{self.nbins}).")
+		return ipix // math.pow(self.nside, 2)
 	
 	@property
 	def nside(self) -> int:

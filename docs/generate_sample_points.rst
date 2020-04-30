@@ -8,7 +8,7 @@ Included with QLSC is a function called :py:func:`sunflower_points_on_sphere<qls
 the specified number of points roughly evenly distributed on a sphere. (The code is taken
 from this `Stack Overflow answer <https://stackoverflow.com/a/44164075/2712652>`_.)
 
-The format of the points can be returned as appropriate for their use case. For example, it's
+The format of the points can be returned as appropriate for their use case. For example,
 it's convenient to return the values in radians for plotting. This is a simple example that
 generates 1000 points and plots them:
 
