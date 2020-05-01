@@ -56,13 +56,15 @@ c_extension = Extension(name="q3c",
 				define_macros=define_macros,
 				libraries=libraries)
 
-description = ("A Python library around the Q3C code.")
-long_description = "-- add long description here --"
+description = ("A Python implementation of the quadrilateralized spherical cube scheme.")
+long_description = '''The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. QLSC is an implementation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s Q3C, a PostgreSQL extension that implements QLSC indexing. In addition to sphere segmentation, this package provides the catalog indexing functionality of Q3C without the need to install a PostgreSQL database.
+
+This package also enables fast local cone searches on astronomical catalogs without the need to install any other dependencies, supporting essentially unlimited numbers of coordinates (i.e. if you're familiar with Q3C, the same can be performed without PostgreSQL).'''
 
 # list of classifiers: https://pypi.org/classifiers/
 classifiers = [
-    "Development Status :: 4 - Beta",
-    "License :: OSI Approved :: GNU General Public License (GPL)",
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
     "Topic :: Scientific/Engineering :: Astronomy",
     "Intended Audience :: Science/Research"
 ]
@@ -79,7 +81,7 @@ setup(
     #classifiers=classifiers,
     url="https://github.com/demitri/qlsc",
     author="Demitri Muna",
-    author_email="demitri@scicoder.org",
+    author_email="demitri@trillianverse.org",
     #setup_requires=['wheel'], # needed to package for distribution
     #install_requires=[],
     #packages=find_packages(),

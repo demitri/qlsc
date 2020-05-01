@@ -4,7 +4,7 @@
 
 ## Introduction
 
-The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. *QLSC* is an implemenation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s [Q3C](https://github.com/segasai/q3c), a PostgreSQL extension that implements QLSC indexing. In addition to sphere segmentation, this package provides the catalog indexing functionality of Q3C without the need to install a PostgreSQL database.
+The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. *QLSC* is an implementation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s [Q3C](https://github.com/segasai/q3c), a PostgreSQL extension that implements QLSC indexing. In addition to sphere segmentation, this package provides the catalog indexing functionality of Q3C without the need to install a PostgreSQL database.
 
 Note that while this package is designed for astronomical use (it focusses on right ascension and declination), it could be just as easily be used for latitude and longitude coordinates, as long as you’re ok with a perfectly spherical Earth (though QLSC was designed to be used with the real Earth). Future updates may better facilitate this, but contributions are welcome.
 
@@ -33,7 +33,7 @@ API documentation can be found here: [https://qlsc.readthedocs.io/en/latest/](ht
   
 ## 60 Second Segmentation Introduction
 
-If you’re not familiar with the QLSC scheme it would be better to start below. There are two classes defined in this package, `QLSC` and `QLSCIndex`. The QLSC scheme projects each of the six faces of a cube onto a sphere. Segmentation is performed on the cube fased and done in levels, where each level divides each bin into four. For example, `depth=2` divides each bin into four, then of those into four again, which is 2^(2*`depth`) (i.e. 16) bins per cube face, or 96 total bins. ("Pixels" and "bin" are used somewhat interchangably.)
+If you’re not familiar with the QLSC scheme it would be better to start below. There are two classes defined in this package, `QLSC` and `QLSCIndex`. The QLSC scheme projects each of the six faces of a cube onto a sphere. Segmentation is performed on the cube faces and performed in levels, where each level divides each bin into four. For example, `depth=2` divides each bin into four, then of those into four again, which is 2^(2*`depth`) (i.e. 16) bins per cube face, or 96 total bins. ("Pixels" and "bin" are used somewhat interchangeably.)
 
 The class can convert between (ra,dec) positions and the pixel number (*ipix*).
 
@@ -92,7 +92,7 @@ The six cube faces are then projected onto the sphere via transforms defined in 
 |  4          | 225° ≤ δ ≤ 315° | α = 270°, δ = 0° |
 |  5          | bottom face | α = 0°, δ = -90° |
 
-THe diagram below shows the pixel numbering scheme over the entire sphere for `depth=2`. Note the path of the numbering scheme: this is called *[z-order](https://en.wikipedia.org/wiki/Z-order_curve)* which has the benefit that ipix numbers that are close to one another are also close spatially.
+The diagram below shows the pixel numbering scheme over the entire sphere for `depth=2`. Note the path of the numbering scheme: this is called *[z-order](https://en.wikipedia.org/wiki/Z-order_curve)* which has the benefit that ipix numbers that are close to one another are also close spatially.
 
 ![](figures/ipix_grid/ipix_grid.png)
 
