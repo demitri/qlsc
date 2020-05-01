@@ -1,8 +1,15 @@
 # QLSC: Quadrilateralized Spherical Cube for Python
 
+[![Documentation Status](https://readthedocs.org/projects/qlsc/badge/?version=latest)](https://qlsc.readthedocs.io/en/latest/?badge=latest)
+
+## Introduction
+
 The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. *QLSC* is an implemenation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s [Q3C](https://github.com/segasai/q3c), a PostgreSQL extension that implements QLSC indexing. In addition to sphere segmentation, this package provides the catalog indexing functionality of Q3C without the need to install a PostgreSQL database.
 
 Note that while this package is designed for astronomical use (it focusses on right ascension and declination), it could be just as easily be used for latitude and longitude coordinates, as long as you’re ok with a perfectly spherical Earth (though QLSC was designed to be used with the real Earth). Future updates may better facilitate this, but contributions are welcome.
+
+Author: Demitri Muna  
+Copyright © 2020 Demitri Muna, except for the embedded Q3C code which is copyright Sergey Koposov.
 
 ## Why Use QLSC?
 
@@ -89,7 +96,7 @@ THe diagram below shows the pixel numbering scheme over the entire sphere for `d
 
 ![](figures/ipix_grid/ipix_grid.png)
 
-The diagram below shows face 1 divided at `depth=2` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
+The diagram below shows face 1 divided at `depth=1` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
 
 ![](figures/cube_subdivisions/cube_subdivisions.png)
 
@@ -110,7 +117,3 @@ The pixel numbering scheme is in *[z-order](https://en.wikipedia.org/wiki/Z-orde
 * [Stack Overflow - Is the quadrilateralized spherical cube map projection the same as Snyder's cubic equal area map projection?](https://gis.stackexchange.com/questions/40957/is-the-quadrilateralized-spherical-cube-map-projection-the-same-as-snyders-cubi) (with comments from Ken Chan)
 * [Wikipedia - Quadrilateralized spherical cube](https://en.wikipedia.org/wiki/Quadrilateralized_spherical_cube)
 * [COBE Quadrilateralized Spherical Cube](https://lambda.gsfc.nasa.gov/product/cobe/skymap_info_new.cfm)
-
-
-[![Documentation Status](https://readthedocs.org/projects/qlsc/badge/?version=latest)](https://qlsc.readthedocs.io/en/latest/?badge=latest)
-
