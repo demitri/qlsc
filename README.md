@@ -24,7 +24,7 @@ Note that while this package is designed for astronomical use (it focusses on ri
 API documentation can be found here: [https://qlsc.readthedocs.io/en/latest/](https://qlsc.readthedocs.io/en/latest/)
 
   
-## 30 Second Segmentation Introduction
+## 60 Second Segmentation Introduction
 
 If you’re not familiar with the QLSC scheme it would be better to start below. There are two classes defined in this package, `QLSC` and `QLSCIndex`. The QLSC scheme projects each of the six faces of a cube onto a sphere. Segmentation is performed on the cube fased and done in levels, where each level divides each bin into four. For example, `depth=2` divides each bin into four, then of those into four again, which is 2^(2*`depth`) (i.e. 16) bins per cube face, or 96 total bins. ("Pixels" and "bin" are used somewhat interchangably.)
 
@@ -40,7 +40,7 @@ q.ipix2polygon(42)    # returns the points on the sphere describing
                       # the pixel (joined by great circles)
 ```
 
-## 30 Second Cone Search Introduction
+## 60 Second Cone Search Introduction
 
 Performing cone searches is as simple as creating a `QLSCIndex` index object and populating it with coordinates. The highest sphere segmentation resolution is selected by default, but a lower resolution can be chosen. By default, the index is stored in memory, but a file may be chosen so that the index can be reused as a script is rerun or by multiple scripts. Points are added in α,δ coordinates in degrees. Once points are added to the index you can perform a cone search.
 
@@ -50,9 +50,9 @@ The example below uses an included function to generate any number of points eve
 from qlsc import QLSCIndex
 from qlsc.generate import sunflower_points_on_sphere
 
-index = QLSCIndex() # created in memory
+index = QLSCIndex() # created in memory, defaults to highest resolution
 
-# add points from a NumPy array
+# add ra,dec points from a NumPy array (shape (n,2))
 points = sunflower_points_on_sphere(n=1e5)
 index.add_points(points=points)
 
@@ -60,7 +60,7 @@ index.add_points(points=points)
 index.add_point(12., 34.)
 
 # keys can also be attached to points
-index.add_point(56, 78, key="a catalog ID")
+index.add_point(56.59625, 78.00866, key="a catalog ID")
 
 # cone search at center α=56, δ=-40
 matches = index.radial_query(ra=56., dec=-40.)
@@ -85,11 +85,16 @@ The six cube faces are then projected onto the sphere via transforms defined in 
 |  4          | 225° ≤ δ ≤ 315° | α = 270°, δ = 0° |
 |  5          | bottom face | α = 0°, δ = -90° |
 
-The diagram shows face 1 divided at `depth=2` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
+THe diagram below shows the pixel numbering scheme over the entire sphere for `depth=2`. Note the path of the numbering scheme: this is called *[z-order](https://en.wikipedia.org/wiki/Z-order_curve)* which has the benefit that ipix numbers that are close to one another are also close spatially.
+
+![](figures/ipix_grid/ipix_grid.png)
+
+The diagram below shows face 1 divided at `depth=2` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
 
 ![](figures/cube_subdivisions/cube_subdivisions.png)
 
-The distortion may appear to be significant, but at much higher depth values it is not as severe. (Also, it's immaterial.) The scheme is advantageous in that there are no discontinuities at the poles, and the indexing scheme is optimized for fast database queries. While not all pixels are the same size, they are very nearly so, and for the purposes this scheme is used for, this is not a requirement.
+The scheme is advantageous in that there are no discontinuities at the poles, and the indexing scheme is optimized for fast database queries. While not all pixels cover the same area, they are equal to within a few percent.
+
 
 For most users, working in ipix values and ra,dec coordinates will accomplish most anything needed. For those who might be performing more complex calculations, I recommend working in the native coordinates of the face plane. Each face (at any division level) has its 2D coordinate system origin at the cube face center. Both the *x* and *y* axes range from -1 to +1. Methods are provided to translate between *xy* coordinates, ipix value, and ra/dec coordinates. The source code for the [`ipix2polygon()`](https://qlsc.readthedocs.io/en/latest/api.html#qlsc.QLSC.ipix2polygon) method provides an illustrative example.
 
