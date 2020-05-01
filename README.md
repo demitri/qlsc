@@ -105,10 +105,6 @@ The scheme is advantageous in that there are no discontinuities at the poles, an
 
 For most users, working in ipix values and ra,dec coordinates will accomplish most anything needed. For those who might be performing more complex calculations, I recommend working in the native coordinates of the face plane. Each face (at any division level) has its 2D coordinate system origin at the cube face center. Both the *x* and *y* axes range from -1 to +1. Methods are provided to translate between *xy* coordinates, ipix value, and ra/dec coordinates. The source code for the [`ipix2polygon()`](https://qlsc.readthedocs.io/en/latest/api.html#qlsc.QLSC.ipix2polygon) method provides an illustrative example.
 
-### Pixel Numbering
-
-The pixel numbering scheme is in *[z-order](https://en.wikipedia.org/wiki/Z-order_curve)*; please refer to the Chan paper for details and diagrams.
-
 ## References & Links
 
 * [Original Chan, O'Neill 1975 paper](https://ntrl.ntis.gov/NTRL/dashboard/searchResults/titleDetail/ADA010232.xhtml)
