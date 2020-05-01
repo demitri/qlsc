@@ -3,6 +3,7 @@
 #from setuptools.command.build_ext import build_ext
 
 import re
+import setuptools
 from distutils.core import setup, Extension
 #from setuptools import setup, Extension
 #from setuptools import find_packages
@@ -49,7 +50,7 @@ extra_link_args = [] # e.g. ['-framework', 'OpenGL', '-framework', 'GLUT'])
 # Ref: https://docs.python.org/3/distutils/setupscript.html#extension-names-and-packages
 c_extension = Extension(name="q3c",
 				sources=sources,
-				language=['C'],
+				language='C',
 				include_dirs=include_dirs,
 				library_dirs=library_dirs,
 				define_macros=define_macros,
@@ -79,7 +80,7 @@ setup(
     url="https://github.com/demitri/qlsc",
     author="Demitri Muna",
     author_email="demitri@scicoder.org",
-    #setup_requires=[],
+    #setup_requires=['wheel'], # needed to package for distribution
     #install_requires=[],
     #packages=find_packages(),
     data_files=data_files,
