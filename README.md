@@ -100,7 +100,7 @@ The diagram below shows the pixel numbering scheme over the entire sphere for `d
 
 ![](figures/ipix_grid/ipix_grid.png)
 
-The diagram below shows face 1 divided at `depth=1` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
+The diagram below shows face 1 divided at `depth=2` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
 
 ![](figures/cube_subdivisions/cube_subdivisions.png)
 

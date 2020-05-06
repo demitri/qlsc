@@ -73,6 +73,50 @@ def sunflower_points_on_sphere(n:int=1000, radians:bool=False, polar_angle_from_
 	else:
 		return np.rad2deg(points)
 
+# def fibonacci_sphere(samples=1,randomize=False, return_spherical=False):
+# 	'''
+# 	Returns [x,y,z] coordinates points on a sphere.
+# 	
+# 	Ref: https://stackoverflow.com/a/26127012/2712652
+# 	'''
+# 	rnd = 1.
+# 	if randomize:
+# 		rnd = random.random() * samples
+# 
+# 	points = np.zeros(shape=(samples,3)) # [x,y,z]
+# 	offset = 2./samples
+# 	increment = math.pi * (3. - math.sqrt(5.));
+# 
+# 	i = np.arange(samples)
+# 	points[:,1] = ((i * offset) - 1) + (offset / 2); # y
+# 	r = np.sqrt(1 - pow(points[:,1],2))
+# 	phi = ((i + rnd) % samples) * increment
+# 	
+# 	# EXTRA CODE NOT TESTED
+# 	theta = np.arcsin(-1.0 + 2.0 * (i+rnd) / (samples+1));
+# 
+# 	if return_spherical:
+# 		r = np.zeros((samples,2))
+# 		r[:,0] = phi
+# 		r[:,1] = theta
+# 		return np.rad2deg(r)
+# 	else:
+# 		points[:,0] = np.cos(phi) * r # x
+# 		points[:,2] = np.sin(phi) * r # z
+# 		return points
 
 
+#points = fibonacci_sphere(samples=1000,randomize=False)
 
+# to plot points:
+#import matplotlib.pyplot as plt
+#from mpl_toolkits.mplot3d import Axes3D
+# fig = plt.figure()
+# ax = fig.add_subplot(111, projection='3d')
+# ax.scatter(points[:,0], points[:,1], points[:,2])
+# plt.show()
+
+
+# points = fibonacci_sphere(samples=1000, return_spherical=True)
+# for p in points:
+# 	print(p)

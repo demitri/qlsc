@@ -341,4 +341,116 @@ def _normalize_ang(ra:Union[collections.abc.Iterable,float]=None,
 # 	
 # 	print(points)
 
+def great_circle_intersection(circle1_points=None, circle2_points=None,
+							  return_spherical=True,
+							  closest_to=None):
+	'''
+	Given two great circles, find the two points where they intersect.
+	
+	Example usage:
+	
+	great_circle_intersection(circle1_points=[[0,45],[0,90]], circle2_points=[[0,0],[0,45]])
+	
+	Ref: https://stackoverflow.com/questions/2954337/great-circle-rhumb-line-intersection
+
+	:param circle1_points: two points on circle 1, degrees
+	:param circle2_points: two points on circle 2, degrees
+	:param return_spherical: if True, returns points in spherical coordinates (degrees), otherwise Cartesian
+	:param closest_to: if a point is provided, only return the intersection point that is closes to this one
+	:returns: 
+	'''
+	
+	# array to hold coordinates
+	# [[ra1_1, dec1_1], # point 1 circle 1
+	#  [ra1_2, dec1_2], # point 2 circle 1
+	#  [ra2_1, dec2_1], # point 1 circle 2
+	#  [ra2_2, dec2_2], # point 2 circle 2
+	
+	coords = np.array([circle1_points[0],
+					   circle1_points[1],
+					   circle2_points[0],
+					   circle2_points[1]])
+
+	#print(coords)
+	#sys.exit(0)
+
+	coords = deg2rad(coords)
+	
+	################################################
+	#### Intersection of two great circles.
+	# Points on great circle 1.
+# 	ra1 = deg2rad(-45)
+# 	dec1 = deg2rad(45)
+# 
+# 	ra2 = deg2rad(45)
+# 	dec2 = deg2rad(45)
+# 
+# 	# Points on great circle 2.
+# 	cra1 = deg2rad(22.5)
+# 	cdec1 = deg2rad(0)
+# 
+# 	cra2 = deg2rad(22.5)
+# 	cdec2 = deg2rad(22.5)
+
+	# 1. Put in Cartesian coordinates
+
+	# [[x,y,z],
+	#  [x,y,z],
+	#  [x,y,z],
+	#  [x,y,z]]
+	
+	cart = np.zeros((4,3))
+
+	cart[:,0] = np.sin(coords[:,1]) * np.cos(coords[:,0]) # x
+	cart[:,1] = np.sin(coords[:,1]) * np.sin(coords[:,0]) # y
+	cart[:,2] = np.cos(coords[:,1])                       # z
+
+# 	x1 = sin(dec1) * cos(ra1)
+# 	y1 = sin(dec1) * sin(ra1)
+# 	z1 = cos(dec1)
+# 
+# 	x2 = sin(dec2) * cos(ra2)
+# 	y2 = sin(dec2) * sin(ra2)
+# 	z2 = cos(dec2)
+# 
+# 
+# 	cx1 = sin(cdec1) * cos(cra1)
+# 	cy1 = sin(cdec1) * sin(cra1)
+# 	cz1 = cos(cdec1)
+# 
+# 	cx2 = sin(cdec2) * cos(cra2)
+# 	cy2 = sin(cdec2) * sin(cra2)
+# 	cz2 = cos(cdec2)
+
+	# 2. Get normal to planes containing great circles.
+	#    It's the cross product of vector to each point from the origin.
+
+#	N1 = cross([x1, y1, z1], [x2, y2, z2])
+#	N2 = cross([cx1, cy1, cz1], [cx2, cy2, cz2])
+
+	N1 = np.cross(cart[0], cart[1])
+	N2 = np.cross(cart[2], cart[3])
+
+	# 3. Find line of intersection between two planes.
+	#    It is normal to the poles of each plane.
+
+	L = np.cross(N1, N2)
+
+	# 4. Find intersection points.
+
+	X1 = L / np.sqrt(L[0]**2 + L[1]**2 + L[2]**2) 
+	X2 = -X1
+
+	if return_spherical:
+		ra1  = atan2(X1[1], X1[0])
+		#dec1= atan2(np.sqrt(pow(X1[0],2)+pow(X1[1],2)),X1[2]) # for elevation angle defined from z-axis down
+		dec1 = atan2(X1[2], np.sqrt(pow(X1[0],2)+pow(X1[1],2))) # for elevation angle defined from x-y plane up
+
+		ra2  = atan2(X2[1], X2[0])
+		#dec2= atan2(np.sqrt(pow(X2[0],2)+pow(X2[1],2)),X2[2])
+		dec2 = atan2(X2[2], np.sqrt(pow(X2[0],2)+pow(X2[1],2)))
+		
+		return np.rad2deg(np.array([[ra1,dec1], [ra2,dec2]]))
+	else:
+		return [X1,X2]
 

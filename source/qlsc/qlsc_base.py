@@ -460,20 +460,24 @@ class QLSCIndex:
 	detail and can change. (This may be documented for expanded use in the future.)
 	
 	:param qlsc: an instance of :py:class:`QLSC` set to the desired segmentation level
-	:param index_file: the file path where a persistent index will be stored; the default is to create the index in memory
+	:param filepath: the file path where a persistent index will be stored; the default is to create the index in memory
+	:param name: a user-provided name for the index
+	:param description: a user-provided description of the index
 	'''
-	def __init__(self, qlsc:QLSC=None, filepath:os.PathLike=None):
+	def __init__(self, qlsc:QLSC=None, filepath:os.PathLike=None, name:str=None, description:str=None):
 		
 		if qlsc is None:
 			# select the highest resolution by default
 			qslc = QLSC(depth=30)
 		
 		self.qlsc = qlsc
+		self.name = name
+		self.description = description
 		self._db = None # SQLite database connection
 		
 		self.database_tablename = "qlsc_ipix"
 		self.qlsc_schema_version = "1"
-				
+		
 		if filepath:
 			self.index_path = filepath # interpret "None" to use an in memory database
 		else:
@@ -482,6 +486,7 @@ class QLSCIndex:
 			self.index_path = ":memory:" # this just keeps creating a file on disk -> "file::memory:?cache=shared"
 		
 		self._initial_database_connection()
+		
 
 	def _initial_database_connection(self):
 		'''
@@ -595,15 +600,18 @@ class QLSCIndex:
             	CREATE TABLE qlsc_metadata (
 	            	row_count INTEGER,
 	            	qlsc_version TEXT,
-	            	date_created TEXT
+	            	depth INTEGER,
+	            	date_created TEXT,
+	            	index_name TEXT,
+	            	index_description TEXT
 	            );''')
 			
 			# set initial metadata values
 			cursor.execute(f'''
 				INSERT INTO qlsc_metadata
-					(row_count, qlsc_version, date_created) VALUES
-					(0, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
-				''', (self.qlsc_schema_version))
+					(row_count, qlsc_version, depth, date_created, index_name, index_description) VALUES
+					(0, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?, ?);
+				''', (self.qlsc_schema_version, self.qlsc.depth, self.name, self.description))
 
 			# internally keep count of records since a count(*)
 			# in SQLite is a full table scan
