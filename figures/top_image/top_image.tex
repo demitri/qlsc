@@ -186,70 +186,69 @@ sign(((\the\pgf@yx)*(\the\pgf@zy)-(\the\pgf@yy)*(\the\pgf@zx))*(#1)+
 
 \foreach \ViewAngle in {1,3,...,94}{
 \begin{tikzpicture}[remember picture,overlay]
-\node [shift={(5.8 cm, -5.8 cm)}] at (current page.north west)
-{%
-\begin{tikzpicture}[declare function={R=\R;},bullet/.style={circle,fill,inner sep=2pt}, scale=2.5]
-% draw sphere
-\shade[ball color=lightgray, opacity=0.5] (0,0,0) circle(\R cm);
-%\shade[ball color = white,transform canvas={rotate=-35}] (0,0,0) circle[radius=R];
-
-
-\tdplotsetmaincoords{80}{\ViewAngle} % coord1: 90=head on, 0=top down (but can't go to zero) % 110
-
-\def\qsccorner{35.264389682754654}
-\def\rzero{{\R/sqrt(3)}}
-
-\begin{scope}[tdplot_main_coords]
-
-	%top
-   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=-45, theta2=\qsccorner,  phi2=45}
-   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1= 45, theta2=\qsccorner,  phi2=135}
-   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=135, theta2=\qsccorner,  phi2=225}
-   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=225, theta2=\qsccorner,  phi2=-45}
-
-	%sides
-   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=45,  theta2=-\qsccorner, phi2=45}
-   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=135, theta2=-\qsccorner, phi2=135}
-   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=225, theta2=-\qsccorner, phi2=225}
-   \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=-45, theta2=-\qsccorner, phi2=-45}
-
-	% bottom
-   \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=-45, theta2=-\qsccorner,  phi2=45}
-   \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1= 45, theta2=-\qsccorner,  phi2=135}
-   \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=135, theta2=-\qsccorner,  phi2=225}
-   \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=225, theta2=-\qsccorner,  phi2=-45}
-	
-  \begin{scope}[tdplotCsFill/.style={opacity=0.00},
-  					 tdplotCsBack/.style={dashed, opacity=0.0}] % set line styles for block
-
-   	\tdplotCsDrawLatCircle[black,thick]{\R}{0}
-   	\tdplotCsDrawLonCircle[black,thick]{\R}{0}
-   	\tdplotCsDrawLonCircle[black,thick]{\R}{90}
-	
-	\def\qlscHalfLat{19.471220634490695}
-	\def\qlscHalfLon{26.565051177077994}
-	\def\qlscHalfLatAtHalfLon{41.810314895778596}
-	
-	\foreach \RA in {45,135,225,315} {
-		% faces 1-4
-		\GreatCircleArc[black, thick] {theta1=\qlscHalfLat, phi1=\RA, theta2=\qlscHalfLat,  phi2=\RA+90} % horiz
-		\GreatCircleArc[black, thick] {theta1=-\qlscHalfLat, phi1=\RA, theta2=-\qlscHalfLat,  phi2=\RA+90} % horiz
-
-		\GreatCircleArc[black, thick] {theta1=\qlscHalfLatAtHalfLon, phi1=\RA-45+\qlscHalfLon, theta2=-\qlscHalfLatAtHalfLon,  phi2=\RA-45+\qlscHalfLon} % vertical
-		\GreatCircleArc[black, thick] {theta1=\qlscHalfLatAtHalfLon, phi1=\RA-45-\qlscHalfLon, theta2=-\qlscHalfLatAtHalfLon,  phi2=\RA-45-\qlscHalfLon} % vertical
-
-		% faces 0 and 5
-		\GreatCircleArc[black, thick] {theta1=\qlscHalfLatAtHalfLon, phi1=\RA-45+\qlscHalfLon, theta2=\qlscHalfLatAtHalfLon,  phi2=\RA-\qlscHalfLon+135}
-		\GreatCircleArc[black, thick] {theta1=-\qlscHalfLatAtHalfLon, phi1=\RA-45+\qlscHalfLon, theta2=-\qlscHalfLatAtHalfLon,  phi2=\RA-\qlscHalfLon+135}
-	}
-
-
-  \end{scope}
-  	
-\end{scope}
-
-\end{tikzpicture}
-}; % end node
+%    \node [shift={(5.8 cm, -5.8 cm)}] at (current page.north west)
+%     {%
+        \begin{tikzpicture}[declare function={R=\R;},bullet/.style={circle,fill,inner sep=2pt}, scale=2.5]
+           \path[use as bounding box] (0,0) rectangle (5,5); % Avoid jittering animation
+           % draw sphere
+           \shade[ball color=lightgray, opacity=0.5] (0,0,0) circle(\R cm);
+           %\shade[ball color = white,transform canvas={rotate=-35}] (0,0,0) circle[radius=R];
+           
+           
+           \tdplotsetmaincoords{80}{\ViewAngle} % coord1: 90=head on, 0=top down (but can't go to zero) % 110
+           
+           \def\qsccorner{35.264389682754654}
+           \def\rzero{{\R/sqrt(3)}}
+           
+           \begin{scope}[tdplot_main_coords]
+           
+           	%top
+              \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=-45, theta2=\qsccorner,  phi2=45}
+              \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1= 45, theta2=\qsccorner,  phi2=135}
+              \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=135, theta2=\qsccorner,  phi2=225}
+              \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=225, theta2=\qsccorner,  phi2=-45}
+           
+           	%sides
+              \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=45,  theta2=-\qsccorner, phi2=45}
+              \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=135, theta2=-\qsccorner, phi2=135}
+              \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=225, theta2=-\qsccorner, phi2=225}
+              \GreatCircleArc[black, thick] {theta1= \qsccorner, phi1=-45, theta2=-\qsccorner, phi2=-45}
+           
+           	% bottom
+              \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=-45, theta2=-\qsccorner,  phi2=45}
+              \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1= 45, theta2=-\qsccorner,  phi2=135}
+              \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=135, theta2=-\qsccorner,  phi2=225}
+              \GreatCircleArc[black, thick] {theta1=-\qsccorner, phi1=225, theta2=-\qsccorner,  phi2=-45}
+           	
+             \begin{scope}[tdplotCsFill/.style={opacity=0.00},
+             					 tdplotCsBack/.style={dashed, opacity=0.0}] % set line styles for block
+           
+                  	\tdplotCsDrawLatCircle[black,thick]{\R}{0}
+                  	\tdplotCsDrawLonCircle[black,thick]{\R}{0}
+                  	\tdplotCsDrawLonCircle[black,thick]{\R}{90}
+               	
+               	\def\qlscHalfLat{19.471220634490695}
+               	\def\qlscHalfLon{26.565051177077994}
+               	\def\qlscHalfLatAtHalfLon{41.810314895778596}
+               	
+               	\foreach \RA in {45,135,225,315} {
+               		% faces 1-4
+               		\GreatCircleArc[black, thick] {theta1=\qlscHalfLat, phi1=\RA, theta2=\qlscHalfLat,  phi2=\RA+90} % horiz
+               		\GreatCircleArc[black, thick] {theta1=-\qlscHalfLat, phi1=\RA, theta2=-\qlscHalfLat,  phi2=\RA+90} % horiz
+               
+               		\GreatCircleArc[black, thick] {theta1=\qlscHalfLatAtHalfLon, phi1=\RA-45+\qlscHalfLon, theta2=-\qlscHalfLatAtHalfLon,  phi2=\RA-45+\qlscHalfLon} % vertical
+               		\GreatCircleArc[black, thick] {theta1=\qlscHalfLatAtHalfLon, phi1=\RA-45-\qlscHalfLon, theta2=-\qlscHalfLatAtHalfLon,  phi2=\RA-45-\qlscHalfLon} % vertical
+               
+               		% faces 0 and 5
+               		\GreatCircleArc[black, thick] {theta1=\qlscHalfLatAtHalfLon, phi1=\RA-45+\qlscHalfLon, theta2=\qlscHalfLatAtHalfLon,  phi2=\RA-\qlscHalfLon+135}
+               		\GreatCircleArc[black, thick] {theta1=-\qlscHalfLatAtHalfLon, phi1=\RA-45+\qlscHalfLon, theta2=-\qlscHalfLatAtHalfLon,  phi2=\RA-\qlscHalfLon+135}
+               	}
+             \end{scope}
+             	
+           \end{scope}
+        
+        \end{tikzpicture}
+%    }; % end node
 \end{tikzpicture}
 \newpage
 

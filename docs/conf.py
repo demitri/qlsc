@@ -65,9 +65,9 @@ extensions = [
 intersphinx_cache_limit = 5
 
 intersphinx_mapping = {
-	'astropy'    : ('https://docs.astropy.org/en/stable/objects.inv', None),
+	'astropy'    : ('https://docs.astropy.org/en/stable', None),
 	'sqlalchemy' : ('https://docs.sqlalchemy.org/en/13/', None),
-	'numpy'      : ('https://docs.scipy.org/doc/numpy/', None)
+	'numpy'      : ('https://numpy.org/doc/stable', None)
 }
 
 todo_include_todos = True
