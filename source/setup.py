@@ -80,6 +80,14 @@ setup(
     #license="GPL",
     #classifiers=classifiers,
     url="https://github.com/demitri/qlsc",
+    project_urls={
+    	"Documentation" : "https://qlsc.readthedocs.io/en/latest/"
+	},
+    #project_urls={
+    #        "Bug Tracker": "https://bugs.example.com/HelloWorld/",
+    #        "Documentation": "https://docs.example.com/HelloWorld/",
+    #        "Source Code": "https://code.example.com/HelloWorld/",
+    #    },
     author="Demitri Muna",
     author_email="demitri@trillianverse.org",
     #setup_requires=['wheel'], # needed to package for distribution

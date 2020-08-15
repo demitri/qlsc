@@ -96,8 +96,7 @@ class QLSC:
 		Note that arrays are required to be ``dtype.double``; copies will be made of arrays of any other type.
 		
 		Right ascension values outside of the range [0,360] are handled efficiently.
-		Declination values outside of [-90,90] are handled, but may result in arrays being copied. (This is only
-		important when working with extremely large arrays.)
+		Declination values outside of [-90,90] are handled, but may result in arrays being copied. (This is only important when working with extremely large arrays.)
 		
 		Example usage:
 		
@@ -473,7 +472,7 @@ class QLSCIndex:
 		self.qlsc = qlsc
 		self.name = name
 		self.description = description
-		self._db = None # SQLite database connection
+		self._db = None # SQLite database connection, defined in _initial_database_connection
 		
 		self.database_tablename = "qlsc_ipix"
 		self.qlsc_schema_version = "1"
@@ -517,7 +516,7 @@ class QLSCIndex:
 			try:
 				self._db = sqlite3.connect(self.index_path) #, uri=True)
 			except sqlite3.OperationalError as e:
-				if new_database:
+				if is_new_database:
 					raise Exception(f"Unable to create database at specified path ('{self.index_path}').")
 				else:
 					raise Exception(f"Found file at path '{self.index_path}', but am unable to open as an SQLite database.")
@@ -550,7 +549,6 @@ class QLSCIndex:
 	def __del__(self):
 		''' Destructor method. '''
 		# if we had an open SQLite connection, close it
-		#if isinstance(self._data_source, sqlite3.Connection):
 		if self._db:
 			self._db.close()
 	
@@ -559,11 +557,11 @@ class QLSCIndex:
 
 	def _configure_db_connection(self, dbconn):
 		'''
-		Configure connection-level settings on SQLite database.
+		Configure connection-level settings on the SQLite database.
 		'''
 		# set database-specific settings
-		dbconn.isolation_level = None # require BEGIN/COMMIT for transactions
-		dbconn.row_factory = sqlite3.Row
+		dbconn.isolation_level = None    # autocommit mode; transactions can be explicitly created with BEGIN/COMMIT statements
+		dbconn.row_factory = sqlite3.Row # return dictionaries instead of tuples from SELECT statements
 	
 	def _init_sqlite_db(self):
 		'''
@@ -606,7 +604,7 @@ class QLSCIndex:
 	            	index_description TEXT
 	            );''')
 			
-			# set initial metadata values
+			# set initial metadata values -> CURRENT_TIMESTAMP might be used instead of strftime
 			cursor.execute(f'''
 				INSERT INTO qlsc_metadata
 					(row_count, qlsc_version, depth, date_created, index_name, index_description) VALUES
