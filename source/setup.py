@@ -54,7 +54,8 @@ c_extension = Extension(name="q3c",
 				include_dirs=include_dirs,
 				library_dirs=library_dirs,
 				define_macros=define_macros,
-				libraries=libraries)
+				libraries=libraries,
+				extra_compile_args=["-std=c99"])
 
 description = ("A Python implementation of the quadrilateralized spherical cube scheme.")
 long_description = '''The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. QLSC is an implementation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s Q3C, a PostgreSQL extension that implements QLSC indexing. In addition to sphere segmentation, this package provides the catalog indexing functionality of Q3C without the need to install a PostgreSQL database.
@@ -97,7 +98,8 @@ setup(
     ext_package="qlsc", # will compile the methods from the extension to the namespace "qlsc"
     ext_modules=[c_extension], # alternative: cythonize(etc), needs "from Cython.Build import cythonize"
     include_dirs=['q3c'],
-    packages=['qlsc']
+    packages=['qlsc'],
+    python_requires='>=3.6'
 )
 #    cmdclass={"build_ext": build_ext_subclass}
 #)

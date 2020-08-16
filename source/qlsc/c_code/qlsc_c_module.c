@@ -577,7 +577,7 @@ qlsc_q3c_facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 	PyObject *hprm_capsule;
 	
 	// internal variables
-	struct q3c_prm *hprm;
+	//struct q3c_prm *hprm;
 	char facenum;
 	
 	static char *kwlist[] = {"hprm", "ra", "dec", NULL};
@@ -592,7 +592,7 @@ qlsc_q3c_facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 		 return NULL;
 	 }
 	
-	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	//hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
 	
 	facenum = q3c_get_facenum(ra, dec);
 	
