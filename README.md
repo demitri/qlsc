@@ -20,7 +20,7 @@ Copyright © 2020 Demitri Muna, except for the embedded Q3C code which is copyri
 
 ## Installation
 
-#### Install from [PyPi](https://pypi.org)
+#### Install from [PyPi](https://pypi.org/project/qlsc/)
 
     pip install qlsc
 
