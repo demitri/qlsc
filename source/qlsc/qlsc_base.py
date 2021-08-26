@@ -783,9 +783,11 @@ class QLSCIndex:
 			cursor.execute(f"SELECT max(rowid) FROM {self.database_tablename}")
 			return cursor.fetchone()[0]
 
-	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False) -> numpy.recarray:
+	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False) -> np.recarray:
 		'''
 		Given an ra,dec coordinate and a radius (all in degrees), return the points that fall in the cone search.
+
+		The returned :class:`numpy.recarray` has the keys "ra", "dec", and (if requested), "key".
 
 		:param ra: right ascension (degrees)
 		:param dec: declination (degrees)
