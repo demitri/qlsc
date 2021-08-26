@@ -114,6 +114,9 @@ class QLSC:
 		:param points: an array of [ra,dec] points, shape=(n,2)
 		:returns: the ipix integer if a single point is provided, an array of ipix integers if an array of values is provided
 		'''
+
+		# .. todo:: support pd.Series for ra, dec.
+
 		# check "ra","dec" are both set
 		if points is None:
 			if True in [x is None for x in [ra,dec]]: # can't use any/all with possible "0" values
@@ -495,6 +498,8 @@ class QLSCIndex:
 	'''
 	def __init__(self, qlsc:QLSC=QLSC(depth=30), filepath:os.PathLike=None, name:str=None, description:str=None):
 
+		# .. todo:: support 'overwrite' -> check if file already exists
+
 		#if qlsc is None:
 		#	# select the highest resolution by default
 		#	qslc = QLSC(depth=30)
@@ -778,7 +783,7 @@ class QLSCIndex:
 			cursor.execute(f"SELECT max(rowid) FROM {self.database_tablename}")
 			return cursor.fetchone()[0]
 
-	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False):
+	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False) -> numpy.recarray:
 		'''
 		Given an ra,dec coordinate and a radius (all in degrees), return the points that fall in the cone search.
 
@@ -786,7 +791,7 @@ class QLSCIndex:
 		:param dec: declination (degrees)
 		:param radius: radius (degrees), accepts a `float` value or `astropy.units.Quantity`
 		:param return_key: if set to True, returns the key value as provided when added to the index
-		:returns: if ``return_key=True``, returns a NumPy record array with keys ``ra,dec,key``; otherwise an array of matches, shape (n,2)
+		:returns: if ``return_key=True``, returns a :class:`numpy.recarray` with keys ``ra,dec,key``; otherwise an array of matches, shape (n,2)
 		'''
 
 		if astropy_available:
