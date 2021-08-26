@@ -1,0 +1,6 @@
+
+# Use this file to include files needed for distribution not otherwise included in setup.py.
+#
+# Ref: https://packaging.python.org/guides/using-manifest-in/
+
+include qlsc/c_code/q3c/*h

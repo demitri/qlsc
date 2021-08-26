@@ -100,6 +100,7 @@ setup(
     ext_modules=[c_extension], # alternative: cythonize(etc), needs "from Cython.Build import cythonize"
     include_dirs=['q3c'],
     packages=setuptools.find_packages(), #['qlsc'],
+    include_package_data = True, # add files specified in MANIFEST.in, specifically header files
     python_requires='>=3.6'
 )
 #    cmdclass={"build_ext": build_ext_subclass}
