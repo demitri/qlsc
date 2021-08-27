@@ -37,7 +37,7 @@ from .utilities import _normalize_ang
 # really important for the ipix values!
 sqlite3.register_adapter(np.int64, int)
 
-logger = logging.getLogger("qlsc_logger")
+logger = logging.getLogger("qlsc")
 
 class QLSC:
 	'''
@@ -492,11 +492,11 @@ class QLSCIndex:
 	detail and can change. (This may be documented for expanded use in the future.)
 
 	:param qlsc: an instance of :py:class:`QLSC` set to the desired segmentation level
-	:param filepath: the file path where a persistent index will be stored; the default is to create the index in memory
+	:param filepath: the file path (string path, ``pathlib.Path``, or ``file://` URL) where a persistent index will be stored; the default is to create the index in memory
 	:param name: a user-provided name for the index
 	:param description: a user-provided description of the index
 	'''
-	def __init__(self, qlsc:QLSC=QLSC(depth=30), filepath:os.PathLike=None, name:str=None, description:str=None):
+	def __init__(self, qlsc:QLSC=QLSC(depth=30), filepath:Union[os.PathLike, str]=None, name:str=None, description:str=None):
 
 		# .. todo:: support 'overwrite' -> check if file already exists
 
@@ -504,23 +504,42 @@ class QLSCIndex:
 		#	# select the highest resolution by default
 		#	qslc = QLSC(depth=30)
 
+		if not isinstance(qlsc, QLSC):
+			raise Exception(f"The 'qlsc' parameter is not a QLSC object as expected.")
+
 		self.qlsc = qlsc
 		self.name = name
 		self.description = description
-		self._db = None # SQLite database connection, defined in _initial_database_connection
+		self.memory_db_connection = None # this must persist
+		#self._db = None # SQLite database connection, defined in _initial_database_connection
 
 		self.database_tablename = "qlsc_ipix"
 		self.qlsc_schema_version = "1"
 
 		if filepath:
-			self.index_path = filepath # interpret "None" to use an in memory database
+			if isinstance(filepath, pathlib.PurePath):
+				self.db_filepath = filepath
+			else:
+				if filepath.startswith("file:"): # is URI
+					scheme, netloc, path, params, query, fragment = urlparse(filepath)
+					self.db_filepath = path
+				else:
+					self.db_filepath = pathlib.Path(filepath)
+
+			if self.db_filepath.exists():
+				logger.debug(f"Found existing db at '{self.db_filepath}'.")
+			else:
+				if os.access(self.db_filepath, os.W_OK) == False:
+					raise Exception(f"The filepath provided was not found, but the location cannot be written to: {filepath}")
+				logger.debug(f"Provided db filepath ('{self.db_filepath}') not found; creating new db.")
 		else:
+			# interpret "None" to use an in memory database
+
 			# allows multiple connections to the in-memory database
 			# see: https://sqlite.org/inmemorydb.html
-			self.index_path = ":memory:" # this just keeps creating a file on disk -> "file::memory:?cache=shared"
+			self.db_filepath = ":memory:" # this just keeps creating a file on disk -> "file::memory:?cache=shared"
 
 		self._initial_database_connection()
-
 
 	def _initial_database_connection(self):
 		'''
@@ -529,7 +548,8 @@ class QLSCIndex:
 
 		is_new_database = True
 
-		if self._is_in_memory_db():
+		#if self._is_in_memory_db():
+		if (self.db_filepath == ":memory:") or str(self.db_filepath).startswith("file::memory:"):
 			# Always keep this connection open to make sure the database is not released
 			# i.e., set it here and never touch it again.
 			# Use "self._db" to open/close connections as one would with a file-based db.
@@ -537,45 +557,52 @@ class QLSCIndex:
 			# ^--- shared cache plan, but didn't get that to work
 			#
 			#self._in_memory_db_connection = sqlite3.connect(self.index_path)
-			self._db = sqlite3.connect(self.index_path) #opens a second connection that can be closed without losing the database
+			connection = sqlite3.connect(self.db_filepath) #opens a second connection that can be closed without losing the database
+			self.memory_db_connection = connection
 		else:
 
-			is_uri = self.index_path.startswith("file:")
-			if is_uri:
-				scheme, netloc, path, params, query, fragment = urlparse(self.index_path)
-				self.index_path = path
+			#is_uri = self.index_path.startswith("file:")
+			#if is_uri:
+			#	scheme, netloc, path, params, query, fragment = urlparse(self.index_path)
+			#	self.index_path = path
 
-			is_new_database = not os.path.exists(self.index_path)
+			is_new_database = not self.db_filepath.exists()
 			#logger.debug(f"index path = {self.index_path}")
 
 			try:
-				self._db = sqlite3.connect(self.index_path) #, uri=True)
+				connection = sqlite3.connect(self.db_filepath, timeout=20) #, uri=True)
 			except sqlite3.OperationalError as e:
 				if is_new_database:
-					raise Exception(f"Unable to create database at specified path ('{self.index_path}').")
+					raise Exception(f"Unable to create database at specified path ('{self.db_filepath}').")
 				else:
-					raise Exception(f"Found file at path '{self.index_path}', but am unable to open as an SQLite database.")
+					raise Exception(f"Found file at path '{self.db_filepath}', but am unable to open as an SQLite database.")
 
-		self._configure_db_connection(self._db)
+		self._configure_db_connection(connection)
 
 		if is_new_database:
-			self._init_sqlite_db()
+			self._init_sqlite_db(connection)
 		else:
-			db_ok = self._validate_db_as_qlsc_index()
+			# Opening existing database
+			db_ok = self._validate_db_as_qlsc_index(connection)
 			if not db_ok:
-				self._db.close()
+				connection.close()
 				raise Exception(f"The file provided is an SQLite database (good) but not in a format I recognize (bad).")
 
-	def _validate_db_as_qlsc_index(self):
+		if not self._is_in_memory_db():
+			connection.close()
+
+	def _validate_db_as_qlsc_index(self, connection:sqlite3.Connection):
 		'''
 		Validates that the database found is one of ours.
 		'''
 		# keep this simple for the time being
 		try:
-			with contextlib.closing(self._db.cursor()) as cursor:
-				cursor.execute("SELECT * FROM qlsc_metadata")
-				metadata = cursor.fetchone()
-				logger.debug(metadata)
+			with contextlib.closing(connection.cursor()) as cursor:
+				metadata = cursor.execute("SELECT depth, index_name, index_description FROM qlsc_metadata").fetchone()
+				if self.qlsc.depth != metadata["depth"]:
+					self.qlsc = QLSC(depth=depth)
+				self.name = metadata["index_name"]
+				self.description = metadata["index_description"]
 				return True
 		except sqlite3.OperationalError as e:
 			if "no such table" in str(e):
@@ -584,23 +611,28 @@ class QLSCIndex:
 	def __del__(self):
 		''' Destructor method. '''
 		# if we had an open SQLite connection, close it
-		if self._db:
-			self._db.close()
+		if self._is_in_memory_db():
+			self.db_filepath.close()
 
 	def _is_in_memory_db(self):
-		return (self.index_path == ":memory:") or self.index_path.startswith("file::memory:")
+		#return (self.db_filepath == ":memory:") or self.db_filepath.startswith("file::memory:")
+		return self.memory_db_connection is not None
 
-	def _configure_db_connection(self, dbconn):
+	def _configure_db_connection(self, connection:sqlite3.Connection):
 		'''
 		Configure connection-level settings on the SQLite database.
 		'''
 		# set database-specific settings
-		dbconn.isolation_level = None    # autocommit mode; transactions can be explicitly created with BEGIN/COMMIT statements
-		dbconn.row_factory = sqlite3.Row # return dictionaries instead of tuples from SELECT statements
+		connection.isolation_level = None    # autocommit mode; transactions can be explicitly created with BEGIN/COMMIT statements
+		connection.row_factory = sqlite3.Row # return dictionaries instead of tuples from SELECT statements
 
-	def _init_sqlite_db(self):
+	def _init_sqlite_db(self, connection:sqlite3.Connection):
 		'''
 		Initialize a new index database, e.g. create schema, initialize metadata.
+
+		Methods that accept a 'connection' parameter are not responsible for closing it.
+
+		:param connection:
 		'''
 
 		#self.sqlite_db = sqlite3.connect(':memory:')
@@ -613,7 +645,7 @@ class QLSCIndex:
 
 		#self.data_source.create_function("qlsc_ang2ipix", 2, plus)
 
-		with contextlib.closing(self._db.cursor()) as cursor:
+		with contextlib.closing(connection.cursor()) as cursor:
 
 			cursor.execute(f'''
 				CREATE TABLE {self.database_tablename} (
@@ -669,6 +701,21 @@ class QLSCIndex:
 		#self._db = sqlite3.connect(self.index_path)
 		#self._configure_db_connection(self._db)
 
+	def _new_db_connection(self) -> sqlite3.Connection:
+		'''
+		Open and return a new db connection.
+
+		This class minimizes the time a connection is open to the database so
+		that it will work in a multithreaded/multiprocessing environment.
+
+		The exception is for in-memory databases where the connection is kept
+		open for the life of this object.
+
+		It is the responsibility of the calling function to close the connection when finished.
+		This is not done automatically in case the object is an in-memory database.
+		'''
+		retrun self.memory_db_connection or sqlite3.connect(self.db_filepath, timeout=20)
+
 	def add_point(self, ra:float=None, dec:float=None, key:str=None):
 		'''
 		Add a single coordinate point to the index.
@@ -692,17 +739,22 @@ class QLSCIndex:
 
 		ipix = self.qlsc.ang2ipix(ra,dec)
 
-		with self._db:
-			with contextlib.closing(self._db.cursor()) as cursor:
+		connection = self._new_db_connection()
 
-				cursor.execute("BEGIN")
-				if key is None:
-					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec) VALUES (?, ?, ?)"
-					cursor.execute(query, (ipix, ra, dec)) # pass list of tuples (e.g. use zip)
-				else:
-					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec, key) VALUES (?, ?, ?, ?)"
-					cursor.execute(query, (ipix, ra, dec, key))
-				cursor.execute("COMMIT")
+		with contextlib.closing(connection.cursor()) as cursor:
+
+			cursor.execute("BEGIN")
+			if key is None:
+				query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec) VALUES (?, ?, ?)"
+				cursor.execute(query, (ipix, ra, dec)) # pass list of tuples (e.g. use zip)
+			else:
+				query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec, key) VALUES (?, ?, ?, ?)"
+				cursor.execute(query, (ipix, ra, dec, key))
+			cursor.execute("COMMIT")
+
+		if not self._is_in_memory_db():
+			connection.close()
+
 
 	def add_points(self, ra:Iterable=None, dec:Iterable=None, points:Iterable[Tuple]=None, keys:Iterable[str]=None):
 		'''
@@ -758,30 +810,40 @@ class QLSCIndex:
 		try:
 			ipix = self.qlsc.ang2ipix(ra, dec)
 
-			with self._db:
-				with contextlib.closing(self._db.cursor()) as cursor:
+			connection = self._new_db_connection()
 
-					cursor.execute("BEGIN")
-					if keys is None:
-						query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec) VALUES (?, ?, ?)"
-						# use individual lists instead of something like np.dstack- we don't want
-						# the 64-bit ipix integers converted to floats and risk changing the value due to rounding
-						cursor.executemany(query, zip(ipix, ra, dec)) # pass list of tuples (e.g. use zip)
-					else:
-						query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec, key) VALUES (?, ?, ?, ?)"
-						cursor.executemany(query, zip(ipix, ra, dec, keys))
+			with contextlib.closing(connection.cursor()) as cursor:
 
-					cursor.execute("COMMIT")
+				cursor.execute("BEGIN")
+				if keys is None:
+					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec) VALUES (?, ?, ?)"
+					# use individual lists instead of something like np.dstack- we don't want
+					# the 64-bit ipix integers converted to floats and risk changing the value due to rounding
+					cursor.executemany(query, zip(ipix, ra, dec)) # pass list of tuples (e.g. use zip)
+				else:
+					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec, key) VALUES (?, ?, ?, ?)"
+					cursor.executemany(query, zip(ipix, ra, dec, keys))
+
+				cursor.execute("COMMIT")
 
 		except sqlite3.IntegrityError:
 			raise NotImplementedError()
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
 
 	@property
 	def number_of_points(self) -> int:
 		''' Return the number of coordinate points in the index. '''
-		with contextlib.closing(self._db.cursor()) as cursor:
+
+		connection = self._new_db_connection()
+
+		with contextlib.closing(connection.cursor()) as cursor:
 			cursor.execute(f"SELECT max(rowid) FROM {self.database_tablename}")
 			return cursor.fetchone()[0]
+
+		if not self.memory_db_connection:
+			connection.close()
 
 	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False) -> np.recarray:
 		'''
@@ -811,31 +873,36 @@ class QLSCIndex:
 		match_dec = list()
 		match_key = list()
 
-		if isinstance(self._db, sqlite3.Connection):
+		#if isinstance(self._db, sqlite3.Connection):
 
-			fulls, partials = q3c.radial_query(self.qlsc._hprm, center_ra, center_dec, radius)
+		fulls, partials = q3c.radial_query(self.qlsc._hprm, center_ra, center_dec, radius)
 
-			ipix_statements = list()
-			for min_ipix,max_ipix in fulls:
-				ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
-			for min_ipix,max_ipix in partials:
-				ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
-			wheres = "({0})".format(" OR ".join(ipix_statements))
-			query = f"SELECT ra,dec,key FROM {self.database_tablename} WHERE {wheres}"
+		ipix_statements = list()
+		for min_ipix,max_ipix in fulls:
+			ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
+		for min_ipix,max_ipix in partials:
+			ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
+		wheres = "({0})".format(" OR ".join(ipix_statements))
+		query = f"SELECT ra,dec,key FROM {self.database_tablename} WHERE {wheres}"
 
-			cone_radius = pow(sin(deg2rad(radius)/2.), 2)
+		cone_radius = pow(sin(deg2rad(radius)/2.), 2)
 
-			with contextlib.closing(self._db.cursor()) as cursor:
-				for ra, dec,key in cursor.execute(query):
-					# filter out points outside radius
-					if sindist(ra, dec, center_ra, center_dec) < cone_radius:
-						if return_key:
-							match_ra.append(ra)
-							match_dec.append(dec)
-							match_key.append(key)
-						else:
-							match_ra.append(ra)
-							match_dec.append(dec)
+		connection = self._new_db_connection()
+
+		with contextlib.closing(connection.cursor()) as cursor:
+			for ra, dec,key in cursor.execute(query):
+				# filter out points outside radius
+				if sindist(ra, dec, center_ra, center_dec) < cone_radius:
+					if return_key:
+						match_ra.append(ra)
+						match_dec.append(dec)
+						match_key.append(key)
+					else:
+						match_ra.append(ra)
+						match_dec.append(dec)
+
+		if not self.memory_db_connection:
+			connection.close()
 
 		if return_key:
 			return np.core.records.fromarrays([match_ra, match_dec, match_key], names='ra,dec,key')
