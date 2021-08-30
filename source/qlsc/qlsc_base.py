@@ -529,8 +529,8 @@ class QLSCIndex:
 			if self.db_filepath.exists():
 				logger.debug(f"Found existing db at '{self.db_filepath}'.")
 			else:
-				if os.access(self.db_filepath, os.W_OK) == False:
-					raise Exception(f"The filepath provided was not found, but the location cannot be written to: {filepath}")
+				if os.access(self.db_filepath.parent, os.W_OK) == False:
+					raise Exception(f"The filepath provided was not found, but the location cannot be written to: '{filepath}'")
 				logger.debug(f"Provided db filepath ('{self.db_filepath}') not found; creating new db.")
 		else:
 			# interpret "None" to use an in memory database
@@ -709,12 +709,13 @@ class QLSCIndex:
 		that it will work in a multithreaded/multiprocessing environment.
 
 		The exception is for in-memory databases where the connection is kept
-		open for the life of this object.
+		open for the life of this object since the database is deleted when the
+		last connection is closed.
 
 		It is the responsibility of the calling function to close the connection when finished.
 		This is not done automatically in case the object is an in-memory database.
 		'''
-		retrun self.memory_db_connection or sqlite3.connect(self.db_filepath, timeout=20)
+		return self.memory_db_connection or sqlite3.connect(self.db_filepath, timeout=20)
 
 	def add_point(self, ra:float=None, dec:float=None, key:str=None):
 		'''
