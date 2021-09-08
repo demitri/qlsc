@@ -432,6 +432,7 @@ class QLSC:
 		Returns the points that describe the polygon that define this pixel.
 
 		All lines between each coordinate in the polygon should be drawn on great circles.
+		The `Cornish library <http://github.com/demitri/cornish>`_ can be useful for this.
 
 		:param ipix: the pixel identifier number
 		:param duplicate_endpoint: if True, repeat the first coordinate in the polygon as the last element
