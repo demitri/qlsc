@@ -892,16 +892,19 @@ class QLSCIndex:
 		connection = self._new_db_connection()
 
 		with contextlib.closing(connection.cursor()) as cursor:
-			for ra, dec,key in cursor.execute(query):
-				# filter out points outside radius
-				if sindist(ra, dec, center_ra, center_dec) < cone_radius:
-					if return_key:
-						match_ra.append(ra)
-						match_dec.append(dec)
-						match_key.append(key)
-					else:
-						match_ra.append(ra)
-						match_dec.append(dec)
+			try:
+				for ra,dec,key in cursor.execute(query):
+					# filter out points outside radius
+					if sindist(ra, dec, center_ra, center_dec) < cone_radius:
+						if return_key:
+							match_ra.append(ra)
+							match_dec.append(dec)
+							match_key.append(key)
+						else:
+							match_ra.append(ra)
+							match_dec.append(dec)
+			except sqlite3.OperationalError as e:
+				raise Exception(f"Error in accessing database in radial query.\rQuery: {query}\nError: {e}")
 
 		if not self.memory_db_connection:
 			connection.close()
