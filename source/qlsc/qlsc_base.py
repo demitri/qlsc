@@ -879,6 +879,9 @@ class QLSCIndex:
 
 		fulls, partials = q3c.radial_query(self.qlsc._hprm, center_ra, center_dec, radius)
 
+		#logger.debug(f"{center_ra=}, {center_dec=}, {radius=}")
+		#logger.debug(f"{fulls=}, {partials=}")
+
 		ipix_statements = list()
 		for min_ipix,max_ipix in fulls:
 			ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
@@ -904,7 +907,7 @@ class QLSCIndex:
 							match_ra.append(ra)
 							match_dec.append(dec)
 			except sqlite3.OperationalError as e:
-				raise Exception(f"Error in accessing database in radial query.\rQuery: {query}\nError: {e}")
+				raise Exception(f"Error in accessing database in radial query.\n\nQuery: \"{query}\"\n\nError: {e}")
 
 		if not self.memory_db_connection:
 			connection.close()
