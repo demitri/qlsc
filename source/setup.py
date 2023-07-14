@@ -8,6 +8,9 @@ from distutils.core import setup, Extension
 #from setuptools import setup, Extension
 #from setuptools import find_packages
 from setuptools.command.build_ext import build_ext as _build_ext
+#from setuptools import dist
+
+#dist.Distribution().fetch_build_eggs(['numpy>=1.19'])
 
 class build_ext(_build_ext):
     def finalize_options(self):
@@ -16,15 +19,6 @@ class build_ext(_build_ext):
         import numpy as np
         self.include_dirs.append(np.get_include())
 
-
-
-def get_property(prop:str, project:str):
-	'''
-	Read the requested property (e.g. '__version__', '__author__') from the specified Python module.
-	Ref: https://stackoverflow.com/a/41110107/2712652
-	'''
-	result = re.search(r'{}\s*=\s*[\'"]([^\'"]*)[\'"]'.format(prop), open(project + '/__init__.py').read())
-	return result.group(1)
 
 sources = ["qlsc/c_code/qlsc_c_module.c", "qlsc/c_code/q3c/q3cube.c", "qlsc/c_code/q3c/q3c_poly.c"]
 data_files = []
@@ -64,7 +58,6 @@ exec(open('qlsc/version.py').read())
 setup(
     name="qlsc",
     version=__version__,
-    #version=get_property('__version__', 'qlsc'),
     description=description,
     long_description=long_description,
     #long_description_content_type='text/markdown; charset=UTF-8; variant=GFM',
