@@ -92,7 +92,7 @@ setup(
     #    },
     author="Demitri Muna",
     author_email="demitri@trillianverse.org",
-    #setup_requires=['wheel'], # needed to package for distribution
+    setup_requires=['wheel', 'numpy'], # needed to package for distribution
     #install_requires=[],
     #packages=find_packages(),
     data_files=data_files,
