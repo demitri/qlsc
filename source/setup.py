@@ -84,7 +84,7 @@ setup(
     author="Demitri Muna",
     author_email="demitri@trillianverse.org",
     setup_requires=['wheel', 'numpy'], # needed to package for distribution
-    #install_requires=[],
+    install_requires=['numpy'],
     #packages=find_packages(),
     data_files=data_files,
     ext_package="qlsc", # will compile the methods from the extension to the namespace "qlsc"
