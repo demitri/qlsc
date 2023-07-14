@@ -7,26 +7,17 @@ import setuptools
 from distutils.core import setup, Extension
 #from setuptools import setup, Extension
 #from setuptools import find_packages
+from setuptools.command.build_ext import build_ext as _build_ext
 
-import numpy as np
+class build_ext(_build_ext):
+    def finalize_options(self):
+        _build_ext.finalize_options(self)
+        # Prevent numpy from thinking it is still in its setup process:
+        __builtins__.__NUMPY_SETUP__ = False
+        import numpy as np
+        self.include_dirs.append(np.get_include())
 
-# directions on including NumPy in a C extension:
-# Ref: https://numpy.org/doc/stable/reference/c-api/array.html#importing-the-api
 
-#copt = {}
-#lopt = {}
-
-#class build_ext_subclass( build_ext ):
-#	pass
-#     def build_extensions(self):
-#         c = self.compiler.compiler_type
-#         if c in copt:
-#            for e in self.extensions:
-#                e.extra_compile_args = copt[ c ]
-#         if c in lopt:
-#             for e in self.extensions:
-#                 e.extra_link_args = lopt[ c ]
-#         build_ext.build_extensions(self)
 
 def get_property(prop:str, project:str):
 	'''
@@ -38,7 +29,7 @@ def get_property(prop:str, project:str):
 
 sources = ["qlsc/c_code/qlsc_c_module.c", "qlsc/c_code/q3c/q3cube.c", "qlsc/c_code/q3c/q3c_poly.c"]
 data_files = []
-include_dirs = ['q3c', np.get_include()]		# -I directories
+include_dirs = ['q3c']		# -I directories
 library_dirs = []			# -L directories
 libraries = []		# libraries to include
 define_macros = [('Q3C_VERSION', '"2.0.0"'), # equivalent of a bare #define in C source
@@ -102,6 +93,5 @@ setup(
     packages=setuptools.find_packages(), #['qlsc'],
     include_package_data = True, # add files specified in MANIFEST.in, specifically header files
     python_requires='>=3.6'
+    cmdclass={"build_ext": build_ext}
 )
-#    cmdclass={"build_ext": build_ext_subclass}
-#)
