@@ -7,38 +7,22 @@ import setuptools
 from distutils.core import setup, Extension
 #from setuptools import setup, Extension
 #from setuptools import find_packages
+from setuptools.command.build_ext import build_ext as _build_ext
+#from setuptools import dist
 
-import numpy as np
+#dist.Distribution().fetch_build_eggs(['numpy>=1.19'])
 
-# directions on including NumPy in a C extension:
-# Ref: https://numpy.org/doc/stable/reference/c-api/array.html#importing-the-api
+class build_ext(_build_ext):
+    def finalize_options(self):
+        _build_ext.finalize_options(self)
 
-#copt = {}
-#lopt = {}
+        import numpy as np
+        self.include_dirs.append(np.get_include())
 
-#class build_ext_subclass( build_ext ):
-#	pass
-#     def build_extensions(self):
-#         c = self.compiler.compiler_type
-#         if c in copt:
-#            for e in self.extensions:
-#                e.extra_compile_args = copt[ c ]
-#         if c in lopt:
-#             for e in self.extensions:
-#                 e.extra_link_args = lopt[ c ]
-#         build_ext.build_extensions(self)
-
-def get_property(prop:str, project:str):
-	'''
-	Read the requested property (e.g. '__version__', '__author__') from the specified Python module.
-	Ref: https://stackoverflow.com/a/41110107/2712652
-	'''
-	result = re.search(r'{}\s*=\s*[\'"]([^\'"]*)[\'"]'.format(prop), open(project + '/__init__.py').read())
-	return result.group(1)
 
 sources = ["qlsc/c_code/qlsc_c_module.c", "qlsc/c_code/q3c/q3cube.c", "qlsc/c_code/q3c/q3c_poly.c"]
 data_files = []
-include_dirs = ['q3c', np.get_include()]		# -I directories
+include_dirs = ['q3c']		# -I directories
 library_dirs = []			# -L directories
 libraries = []		# libraries to include
 define_macros = [('Q3C_VERSION', '"2.0.0"'), # equivalent of a bare #define in C source
@@ -74,7 +58,6 @@ exec(open('qlsc/version.py').read())
 setup(
     name="qlsc",
     version=__version__,
-    #version=get_property('__version__', 'qlsc'),
     description=description,
     long_description=long_description,
     #long_description_content_type='text/markdown; charset=UTF-8; variant=GFM',
@@ -92,8 +75,8 @@ setup(
     #    },
     author="Demitri Muna",
     author_email="demitri@trillianverse.org",
-    #setup_requires=['wheel'], # needed to package for distribution
-    #install_requires=[],
+    setup_requires=['wheel', 'numpy'], # needed to package for distribution
+    install_requires=['numpy'],
     #packages=find_packages(),
     data_files=data_files,
     ext_package="qlsc", # will compile the methods from the extension to the namespace "qlsc"
@@ -101,7 +84,6 @@ setup(
     include_dirs=['q3c'],
     packages=setuptools.find_packages(), #['qlsc'],
     include_package_data = True, # add files specified in MANIFEST.in, specifically header files
-    python_requires='>=3.6'
+    python_requires='>=3.6',
+    cmdclass={"build_ext": build_ext}
 )
-#    cmdclass={"build_ext": build_ext_subclass}
-#)
