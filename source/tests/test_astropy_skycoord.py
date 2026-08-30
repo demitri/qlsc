@@ -371,6 +371,40 @@ def test_index_radial_query_missing_dec_raises():
 	with pytest.raises(ValueError, match="Both 'ra' and 'dec'"):
 		index.radial_query(ra=M31_RA, radius=1.)
 
+def test_index_radial_query_array_skycoord_is_a_batch_query():
+	'''
+	Test that an array SkyCoord given as the center is a list of targets, exactly as
+	arrays of degrees are - the two features compose rather than one shadowing the other.
+	'''
+	index = index_with_points()
+	targets = SkyCoord(ra=[M31_RA, 200., 300.] * u.deg, dec=[M31_DEC, -30., 0.] * u.deg)
+
+	matches, counts = index.radial_query(targets, radius=1., return_counts=True)
+
+	assert list(counts) == [2, 1, 0]
+	assert list(matches["target_index"]) == [0, 0, 1]
+
+	# and the same query in degrees answers identically
+	by_degrees = index.radial_query(ra=np.array([M31_RA, 200., 300.]),
+									dec=np.array([M31_DEC, -30., 0.]),
+									radius=1., return_counts=True)[0]
+	assert np.allclose(matches["ra"], by_degrees["ra"])
+
+def test_index_batch_skycoord_result_is_a_qtable_with_target_index():
+	'''
+	Test that a batch query asked for as a SkyCoord gives a QTable whose columns follow
+	the recarray's order, target_index first.
+	'''
+	index = index_with_points()
+	targets = SkyCoord(ra=[M31_RA, 200.] * u.deg, dec=[M31_DEC, -30.] * u.deg)
+
+	table = index.radial_query(targets, radius=1., return_distance=True, return_skycoord=True)
+
+	assert isinstance(table, QTable)
+	assert table.colnames == ["target_index", "coord", "distance"]
+	assert list(table["target_index"]) == [0, 0, 1]
+	assert isinstance(table["coord"], SkyCoord)
+
 def test_index_radial_query_return_skycoord():
 	'''
 	Test that return_skycoord gives an array SkyCoord of the matches - never squeezed,
@@ -495,6 +529,51 @@ def test_index_find_by_key_return_skycoord():
 
 	# the default is unchanged
 	assert isinstance(index.find_by_key("m31"), np.recarray)
+
+# ------------------------------------------------------------ a coordinate with a distance
+
+def test_a_distance_is_reduced_to_a_direction():
+	'''
+	Test the docstring's promise that "a coordinate carrying a distance keeps only its
+	direction; the index is a sphere".
+
+	Two coordinates pointing the same way from wildly different distances are the same
+	point here, and both are the point the distanceless coordinate names. Without this,
+	the distance would have to be either consulted (there is nothing to consult it for)
+	or rejected (there is no reason to refuse a perfectly good SkyCoord).
+	'''
+	direction = SkyCoord(ra=M31_RA * u.deg, dec=M31_DEC * u.deg, frame="icrs")
+	near = SkyCoord(ra=M31_RA * u.deg, dec=M31_DEC * u.deg, distance=1 * u.pc, frame="icrs")
+	far = SkyCoord(ra=M31_RA * u.deg, dec=M31_DEC * u.deg, distance=770 * u.kpc, frame="icrs")
+
+	expected = q30.ang2ipix(M31_RA, M31_DEC)
+	assert q30.ang2ipix(direction) == expected
+	assert q30.ang2ipix(near) == expected
+	assert q30.ang2ipix(far) == expected
+
+	# through a frame transformation, which carries the distance along, and into the index
+	assert q30.ang2ipix(far.galactic) == expected
+	assert q30.face_number(far) == q30.face_number(M31_RA, M31_DEC)
+
+	index = QLSCIndex(qlsc=QLSC(depth=30))
+	index.add_point(far, key="m31")
+	stored = index.find_by_key("m31")
+	assert stored["ra"][0] == pytest.approx(M31_RA)
+	assert stored["dec"][0] == pytest.approx(M31_DEC)
+
+def test_a_returned_skycoord_carries_no_distance():
+	'''
+	Test that the direction-only reading holds on the way out too: qlsc knows of no
+	distances, so the SkyCoord it hands back must not appear to have one.
+	'''
+	index = index_with_points()
+	index.add_point(SkyCoord(ra=300. * u.deg, dec=10. * u.deg, distance=5 * u.kpc), key="distant")
+
+	returned = index.find_by_key("distant", return_skycoord=True)
+	assert returned.spherical.distance.unit.is_equivalent(u.dimensionless_unscaled)
+
+	pixel = q30.ipix2ang(q30.ang2ipix(M31_RA, M31_DEC), return_skycoord=True)
+	assert pixel.spherical.distance.unit.is_equivalent(u.dimensionless_unscaled)
 
 # ------------------------------------------------------------------ astropy not installed
 

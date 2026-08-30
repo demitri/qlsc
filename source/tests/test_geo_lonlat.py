@@ -381,6 +381,111 @@ def test_index_file_keeps_the_geographic_scheme(tmp_path):
 	assert reopened.find_by_key("here")["ra"][0] == pytest.approx(-74.)
 	assert reopened.qlsc.ipix2lonlat(reopened.qlsc.lonlat2ipix(lon=-74., lat=40.))[0] < 0.
 
+# --------------------------------------------------- the geographic classes and astropy
+#
+# The two features meet only through the shared helpers: _lonlat_coordinate_pair hands
+# its result to _coordinate_pair, so a SkyCoord works in the geographic classes without
+# either feature naming the other. That is exactly why it is worth a test - nothing in
+# either implementation would break loudly if the composition were lost.
+
+def test_geo_methods_accept_a_skycoord():
+	'''
+	Test that the geographic classes take an astropy SkyCoord wherever the astronomical
+	ones do, in any frame, and answer the same as the equivalent longitude and latitude.
+	'''
+	SkyCoord = pytest.importorskip("astropy.coordinates").SkyCoord
+	u = pytest.importorskip("astropy.units")
+
+	# the same place expressed as an astronomical [0,360) coordinate
+	coord = SkyCoord(ra=286. * u.deg, dec=40. * u.deg, frame="icrs")
+	expected = geo.lonlat2ipix(lon=-74., lat=40.)
+
+	assert geo.ang2ipix(coord) == expected
+	assert geo.lonlat2ipix(coord) == expected
+	assert geo.ang2ipix(coord.galactic) == expected
+	assert geo.face_number(coord) == geo.face_number(lon=-74., lat=40.)
+	assert geo.ang2ipix_xy(coord) == geo.ang2ipix_xy(lon=-74., lat=40.)
+
+	# a Quantity in the geographic spelling
+	assert geo.lonlat2ipix(lon=-74. * u.deg, lat=40. * u.deg) == expected
+	assert geo.lonlat2ipix(lon=np.deg2rad(-74.) * u.rad, lat=40. * u.deg) == expected
+
+	assert geo.point_in_ellipse(coord, ra_cen=coord, semi_major_axis=1., axis_ratio=0.5) is True
+
+def test_geo_index_accepts_and_returns_skycoords():
+	'''
+	Test that a GeoQLSCIndex takes a SkyCoord and still stores and reports the wrapped
+	longitude, and that the SkyCoord it returns is an ordinary ICRS one.
+
+	Note the deliberate asymmetry recorded in GeoQLSC's docstring: a returned SkyCoord
+	keeps astropy's own [0,360) convention for its ``ra`` attribute, so this is the one
+	place a geographic caller sees 286 rather than -74.
+	'''
+	SkyCoord = pytest.importorskip("astropy.coordinates").SkyCoord
+	u = pytest.importorskip("astropy.units")
+
+	index = GeoQLSCIndex(qlsc=GeoQLSC(depth=DEPTH))
+	coord = SkyCoord(ra=286. * u.deg, dec=40. * u.deg, frame="icrs")
+
+	index.add_point(coord.galactic, key="new york")
+
+	assert index.find_by_key("new york")["ra"][0] == pytest.approx(-74.)
+
+	matches = index.radial_query(coord, radius=1.)
+	assert matches[0] == pytest.approx(-74.)
+
+	as_skycoord = index.radial_query(coord, radius=1., return_skycoord=True)
+	assert as_skycoord.ra.deg[0] == pytest.approx(286.)
+	assert as_skycoord.ra.wrap_at(180 * u.deg).deg[0] == pytest.approx(-74.)
+
+	# Removal is by the exact stored coordinate, as remove_point documents. The point was
+	# added through a galactic round trip, so it sits a few ulps from the ICRS coordinate
+	# that names the same place - remove what the query reported, not what was asked for.
+	assert index.remove_point(lon=matches[0], lat=matches[1]) == 1
+	assert len(index) == 0
+
+def test_geo_index_batch_query():
+	'''
+	Test that the batch cone search reaches through the geographic override, counts
+	included - the override would otherwise quietly drop return_counts from the
+	inherited signature.
+	'''
+	index = GeoQLSCIndex(qlsc=GeoQLSC(depth=DEPTH))
+	index.add_points(lon=np.array([-74., 2.35]), lat=np.array([40.7, 48.86]), keys=["ny", "paris"])
+
+	matches, counts = index.radial_query(lon=np.array([-74., 2.35, 100.]),
+										 lat=np.array([40.7, 48.86, -20.]),
+										 radius=1., return_counts=True)
+
+	assert list(counts) == [1, 1, 0]
+	assert ((-180. <= matches["ra"]) & (matches["ra"] < 180.)).all()
+
+def test_geo_coverage_is_written_in_the_astronomical_range():
+	'''
+	Test the one documented exception to the geographic convention: a sky-coverage
+	document declares the ICRS frame and is read by other software, so its vertices are
+	written in [0,360) whichever class produced them.
+	'''
+	geographic = GeoQLSC(depth=5)
+	astronomical = QLSC(depth=5)
+	ipix = geographic.lonlat2ipix(lon=-74., lat=40.)
+
+	# the geometry method follows the geographic convention
+	assert (geographic.ipix2polygon(ipix)[:,0] < 0.).any()
+
+	document = geographic.coverage(ipix)
+	vertices = np.asarray(document["polygons"][0]["vertices"], dtype=np.double)
+	assert ((0. <= vertices[:,0]) & (vertices[:,0] < 360.)).all()
+	assert document["frame"] == "icrs"
+
+	# and it is the same document the astronomical class produces
+	assert document == astronomical.coverage(ipix)
+
+	index = GeoQLSCIndex(qlsc=GeoQLSC(depth=10))
+	index.add_point(lon=-74., lat=40.)
+	index_vertices = np.asarray(index.coverage(depth=5)["polygons"][0]["vertices"], dtype=np.double)
+	assert ((0. <= index_vertices[:,0]) & (index_vertices[:,0] < 360.)).all()
+
 def test_poles_and_seam_boundaries():
 	'''
 	Test the boundary cases the geographic convention is most likely to get wrong: a
