@@ -1,0 +1,76 @@
+name: Docs
+
+# The two documentation gates, run by machinery rather than by memory.
+#
+#   check_example_outputs.py  executes every code block on every page and
+#                             compares its output against the block printed
+#                             beside it, so a page cannot drift away from what
+#                             the package actually does.
+#   sphinx -W                 builds the site with warnings as errors, so a
+#                             broken reference or a malformed directive fails
+#                             here rather than shipping to Read the Docs.
+#
+# Both are cheap - one interpreter, one build, no matrix - so unlike the wheels
+# workflow this runs on every push and pull request that touches the docs, the
+# package they document, or this file.
+#
+# The network-dependent example (the Bright Star Catalogue, fetched from
+# VizieR) is skipped: --network is deliberately not passed, so a VizieR outage
+# cannot fail an unrelated pull request. That block remains a human-review duty.
+#
+# Third-party actions are pinned to commit SHAs (a tag is mutable); the
+# human-readable version is in the comment beside each.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - "docs/**"
+      - "source/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "source/**"
+      - ".github/workflows/docs.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  docs:
+    name: example outputs and sphinx -W
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # the same pin the wheels workflow uses; one verified SHA per action
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install qlsc and the documentation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # the package itself, compiled from source: the pages import it
+          python -m pip install ./source
+          python -m pip install -r docs/requirements.txt
+          # sphinx builds the site; astropy and matplotlib are imported by the
+          # example pages and by generate_figures.py
+          python -m pip install sphinx astropy matplotlib
+
+      - name: Check every example's printed output
+        working-directory: docs
+        run: python check_example_outputs.py
+
+      - name: Build the site with warnings as errors
+        working-directory: docs
+        run: python -m sphinx -W --keep-going -b html . _build/html
