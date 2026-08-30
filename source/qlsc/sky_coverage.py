@@ -60,10 +60,21 @@ def _coverage_value(value, description:str) -> float:
 	serialize as ``NaN``/``Infinity``, which is not valid JSON and which the consumer
 	rejects, so it is refused here where the offending entry can still be named.
 
+	Strings and booleans are rejected rather than converted, even though ``float()``
+	accepts both. Reading the count "3" out of a text column and getting a coverage map
+	back is a data problem worth hearing about, and a boolean value means the caller has
+	mixed up a flag with a measurement; qlsc is strict in the same way about ipix values,
+	where a float that happens to be whole is refused rather than truncated.
+
 	:param value: the value to convert
 	:param description: how to refer to the value in an error message
 	:returns: the value as a float
 	'''
+	if isinstance(value, (bool, np.bool_)):
+		raise TypeError(f"The {description} must be a number, not a boolean; was given '{value!r}'.")
+	if isinstance(value, (str, bytes, np.str_, np.bytes_)):
+		raise TypeError(f"The {description} must be a number, not a string; was given '{value!r}'.")
+
 	try:
 		result = float(value)
 	except (TypeError, ValueError) as e:

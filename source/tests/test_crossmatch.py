@@ -526,3 +526,60 @@ def test_crossmatch_is_exported():
 	Test that the function is reachable as qlsc.crossmatch, which is how it is documented.
 	'''
 	assert qlsc.crossmatch is crossmatch
+
+
+def test_all_points_reads_the_whole_index():
+	'''
+	Test the private read behind crossmatch, including the paths taken when the row count
+	it sizes its arrays from turns out to be wrong.
+
+	The count and the read are two statements, and this class opens a connection per
+	operation precisely so that it can be used from several threads, so the index can
+	change between them. No point may be dropped to make the answer fit the count.
+	'''
+	from unittest import mock
+
+	points = UNIFORM_A[:40]
+	keys = [f"k{n}" for n in range(len(points))]
+	index = _index(points, keys=keys)
+
+	ra, dec, read_keys = index._all_points(with_keys=True)
+	assert len(ra) == len(points)
+	assert set(read_keys) == set(keys)
+	assert set(np.round(ra, 9)) == set(np.round(points[:,0], 9))
+
+	# without keys
+	ra_only, dec_only, no_keys = index._all_points()
+	assert no_keys is None
+	assert np.array_equal(np.sort(ra_only), np.sort(ra))
+
+	# the count under-reports (the index "grew"): every point must still be read
+	with mock.patch.object(type(index), "number_of_points", new_callable=mock.PropertyMock) as count:
+		count.return_value = 3
+		grown_ra, grown_dec, grown_keys = index._all_points(with_keys=True)
+	assert len(grown_ra) == len(points) and len(grown_keys) == len(points)
+	assert np.array_equal(np.sort(grown_ra), np.sort(ra))
+	assert set(grown_keys) == set(keys)
+
+	# the count over-reports (the index "shrank"): the arrays must be trimmed, not padded
+	with mock.patch.object(type(index), "number_of_points", new_callable=mock.PropertyMock) as count:
+		count.return_value = 500
+		trimmed_ra, trimmed_dec, trimmed_keys = index._all_points(with_keys=True)
+	assert len(trimmed_ra) == len(points) and len(trimmed_keys) == len(points)
+	assert np.array_equal(np.sort(trimmed_ra), np.sort(ra))
+
+	index.close()
+
+
+def test_all_points_of_an_empty_index():
+	'''
+	Test that reading an empty index gives empty arrays of the right dtype.
+	'''
+	index = QLSCIndex(qlsc=QLSC(depth=30))
+	ra, dec, keys = index._all_points(with_keys=True)
+
+	assert ra.shape == (0,) and ra.dtype == np.double
+	assert dec.shape == (0,) and dec.dtype == np.double
+	assert keys == []
+
+	index.close()

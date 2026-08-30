@@ -535,3 +535,62 @@ def test_index_coverage_at_the_poles_and_seam():
 	validate_sky_coverage(document)
 	assert sum(entry["value"] for entry in document["polygons"]) == len(points)
 	index.close()
+
+
+def test_scalar_ipix_accepts_a_size_one_values_array():
+	'''
+	Test the scalar-like convention for values: a size-1 array is one value, as a size-1
+	array is a scalar value everywhere else in qlsc.
+	'''
+	q = QLSC(depth=3)
+
+	for values in (3.0, np.float64(3.0), [3.0], np.array([3.0]), np.array(3.0)):
+		document = q.coverage(ipix=17, values=values, value_name="count")
+		validate_sky_coverage(document)
+		assert [entry["value"] for entry in document["polygons"]] == [3.0]
+
+	# and a length-1 ipix array with a single value is the same one-pixel document
+	document = q.coverage(ipix=[17], values=3.0, value_name="count")
+	assert [entry["value"] for entry in document["polygons"]] == [3.0]
+
+
+def test_scalar_ipix_rejects_several_values():
+	'''
+	Test that more than one value for one pixel still raises.
+	'''
+	q = QLSC(depth=3)
+	with pytest.raises(ValueError, match="does not match"):
+		q.coverage(ipix=17, values=[3.0, 4.0])
+
+
+def test_two_dimensional_values_are_refused():
+	'''
+	Test that a 2-D values array raises rather than being flattened.
+	'''
+	q = QLSC(depth=3)
+	with pytest.raises(ValueError, match="one-dimensional"):
+		q.coverage(ipix=[1, 2, 3, 4], values=np.array([[1., 2.], [3., 4.]]))
+
+
+@pytest.mark.parametrize("value", ["3", b"3", np.str_("3"), True, np.bool_(False)])
+def test_string_and_boolean_values_are_refused(value):
+	'''
+	Test that a value float() would happily convert but that is not a number is refused.
+
+	Reading the count "3" out of a text column and getting a coverage map back is a data
+	problem worth hearing about, and a boolean is a flag mistaken for a measurement.
+	'''
+	q = QLSC(depth=3)
+	with pytest.raises(TypeError, match="must be a number"):
+		q.coverage(ipix=[1], values=[value])
+
+
+def test_string_and_boolean_domain_bounds_are_refused():
+	'''
+	Test that the same strictness applies to the colour-scale domain.
+	'''
+	q = QLSC(depth=3)
+	with pytest.raises(TypeError, match="must be a number"):
+		q.coverage(ipix=[1], values=[1.0], value_domain=["0", "10"])
+	with pytest.raises(TypeError, match="must be a number"):
+		q.coverage(ipix=[1], values=[1.0], value_domain=[False, True])

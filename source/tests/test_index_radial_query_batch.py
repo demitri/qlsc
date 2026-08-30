@@ -1,4 +1,6 @@
 
+import math
+
 import pytest
 import numpy as np
 
@@ -322,5 +324,53 @@ def test_astropy_quantity_radius():
 	as_degrees, _ = index.radial_query(ra=ra, dec=dec, radius=1.0, return_counts=True)
 
 	assert _as_pair_set(as_quantity) == _as_pair_set(as_degrees)
+
+	index.close()
+
+
+def test_astropy_quantity_coordinates():
+	'''
+	Test that Quantity coordinates are converted, not stripped of their units.
+
+	np.asarray on a Quantity yields its numbers with the units discarded, so a target
+	list given in radians would otherwise be read as degrees: the query would run at
+	entirely the wrong place on the sky and report no matches rather than an error.
+	'''
+	astropy = pytest.importorskip("astropy.units")
+
+	index = _index()
+	ra, dec = _targets(6, seed=77, jitter=0.2)
+
+	plain, plain_counts = index.radial_query(ra=ra, dec=dec, radius=1.5, return_counts=True)
+	assert plain_counts.sum() > 0, "this case must find something for the comparison to mean anything"
+
+	in_degrees, _ = index.radial_query(ra=ra * astropy.deg, dec=dec * astropy.deg,
+									   radius=1.5, return_counts=True)
+	in_radians, _ = index.radial_query(ra=np.radians(ra) * astropy.rad, dec=np.radians(dec) * astropy.rad,
+									   radius=1.5, return_counts=True)
+
+	assert _as_pair_set(in_degrees) == _as_pair_set(plain)
+	assert _as_pair_set(in_radians) == _as_pair_set(plain), \
+		"a radians Quantity must be converted, not read as degrees"
+
+	index.close()
+
+
+def test_astropy_quantity_scalar_coordinates():
+	'''
+	Test the same for the scalar path, which shares the conversion.
+	'''
+	astropy = pytest.importorskip("astropy.units")
+
+	index = _index()
+	ra, dec = float(CATALOG[100,0]), float(CATALOG[100,1])
+
+	plain = index.radial_query(ra, dec, 2.0)
+	assert plain.size > 0
+
+	in_radians = index.radial_query(ra=math.radians(ra) * astropy.rad,
+									dec=math.radians(dec) * astropy.rad, radius=2.0)
+
+	assert np.allclose(np.atleast_2d(in_radians), np.atleast_2d(plain))
 
 	index.close()

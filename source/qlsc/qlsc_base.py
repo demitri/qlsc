@@ -103,6 +103,30 @@ def _degrees(value:Union[float, "Quantity"], name:str) -> float:
 		value = value.to(u.deg).value
 	return _as_float_scalar(value, name)
 
+def _degrees_or_unchanged(value):
+	'''
+	Convert an astropy :class:`~astropy.units.Quantity` angle to a plain number of degrees,
+	and return anything else untouched for the caller to validate.
+
+	Unlike :py:func:`_degrees` this does not reduce the value to a scalar, so it can be
+	applied to a coordinate that may be a single angle or a whole array of them.
+
+	This exists because ``np.asarray`` on a Quantity yields its numbers with the units
+	silently discarded: an angle given in radians would otherwise be read as degrees, and
+	the query would return the wrong answer rather than an error.
+
+	.. note:: This covers only the coordinates of a cone search. Accepting astropy
+	   ``Quantity`` and ``SkyCoord`` values consistently across the whole of qlsc's API is
+	   being unified separately; this helper is the local fix at that seam, not the
+	   general mechanism.
+
+	:param value: an angle, an array of angles, or a Quantity holding either
+	:returns: the value in degrees if it was a Quantity, otherwise the value as given
+	'''
+	if astropy_available and isinstance(value, Quantity):
+		return value.to(u.deg).value
+	return value
+
 def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:list,
 				  return_key:bool, return_distance:bool,
 				  match_target_index:list=None, return_target_index:bool=False):
@@ -129,6 +153,13 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 			arrays.insert(0, np.asarray(match_target_index, dtype=np.int64))
 			names.insert(0, "target_index")
 		if return_key:
+			# NOTE: the "key" field's dtype is left to np.rec.fromarrays to infer, which
+			# means an empty result gives it a float dtype rather than a string one - the
+			# same wart "target_index" is built explicitly to avoid. It is not fixed here
+			# because the fix is not symmetric: pinning a dtype would also change the
+			# dtype of every NON-empty keyed result that this method has always returned
+			# (a fixed-width string, or object to carry the None of a keyless point), and
+			# that is a change to the existing API rather than to the empty case alone.
 			arrays.append(match_key)
 			names.append("key")
 		if return_distance:
@@ -845,7 +876,7 @@ class QLSC:
 		be unique or sorted, and no pixel is dropped or merged.
 
 		:param ipix: an ipix number, or a one-dimensional array-like of ipix numbers
-		:param values: the scalar to attach to each pixel, matching the shape of ``ipix``; the default attaches none
+		:param values: the scalar to attach to each pixel, one per ipix value; the default attaches none
 		:param value_name: what the values are (e.g. "count"), recorded for the consumer's legend
 		:param value_units: the units of the values, recorded for the consumer's legend
 		:param value_domain: a [min,max] pair pinning the consumer's colour scale, so several documents can share one scale
@@ -858,16 +889,14 @@ class QLSC:
 		validated = self._validated_ipix(ipix)
 
 		if isinstance(validated, (int, np.integer)):
-			# scalar input: one pixel, and a scalar value if one was given at all
+			# scalar input: one pixel
 			ipix_values = [int(validated)]
-			scalar_input = True
 		else:
 			if validated.ndim != 1:
 				raise ValueError(f"The 'ipix' values must be a single value or a one-dimensional array-like; "
 								 f"was given shape {validated.shape}. A document is a flat list of polygons, "
 								 f"so a higher-dimensional array would have to be flattened, discarding its shape.")
 			ipix_values = validated
-			scalar_input = False
 
 		if values is None:
 			if any([x is not None for x in [value_name, value_units, value_domain]]):
@@ -876,20 +905,18 @@ class QLSC:
 								 "description to refer to.")
 			polygon_values = None
 		else:
-			given = np.asarray(values)
-			if scalar_input:
-				if given.ndim != 0:
-					raise ValueError(f"A single 'ipix' value takes a single value; was given {given.shape[0]} values.")
-				polygon_values = [_coverage_value(given.item(), "value for the pixel")]
-			else:
-				if given.ndim != 1:
-					raise ValueError(f"The 'values' must be a one-dimensional array-like parallel to 'ipix'; "
-									 f"was given shape {given.shape}.")
-				if given.shape[0] != len(ipix_values):
-					raise ValueError(f"The number of values ({given.shape[0]}) does not match the number of "
-									 f"ipix values ({len(ipix_values)}).")
-				polygon_values = [_coverage_value(v, f"value for ipix {int(i)}")
-								  for i,v in zip(ipix_values, given)]
+			# np.atleast_1d, so that a scalar (or a size-1 array) is one value for one
+			# pixel: a size-1 array is a scalar value everywhere else in qlsc, and there
+			# is no reason for the values of a one-pixel document to be the exception.
+			given = np.atleast_1d(np.asarray(values))
+			if given.ndim != 1:
+				raise ValueError(f"The 'values' must be a single value or a one-dimensional array-like "
+								 f"parallel to 'ipix'; was given shape {np.shape(values)}.")
+			if given.shape[0] != len(ipix_values):
+				raise ValueError(f"The number of values ({given.shape[0]}) does not match the number of "
+								 f"ipix values ({len(ipix_values)}).")
+			polygon_values = [_coverage_value(v, f"value for ipix {int(i)}")
+							  for i,v in zip(ipix_values, given)]
 
 		polygons = list()
 		for n,pixel in enumerate(ipix_values):
@@ -1450,6 +1477,16 @@ class QLSCIndex:
 		documented there. There is deliberately no public equivalent — the index is a
 		query structure, and a caller that wants the points back has them already.
 
+		The rows are streamed into arrays sized from the row count rather than fetched into
+		a list first: a ``sqlite3.Row`` costs far more than the two doubles it carries, and
+		materializing one per point doubles the peak memory of the read for no purpose.
+
+		The row count is a size hint, not a contract — this class opens and closes
+		connections per operation so that it can be used from several threads, so the index
+		can grow or shrink between counting it and reading it. The arrays are therefore
+		grown if the read overruns them and trimmed if it falls short; no point is dropped
+		to make the answer fit the count.
+
 		:param with_keys: whether to read the key column as well
 		:returns: a tuple of (ra, dec, keys), where keys is a list of str-or-None, or None if it was not asked for
 		'''
@@ -1457,17 +1494,39 @@ class QLSCIndex:
 
 		columns = "ra,dec,key" if with_keys else "ra,dec"
 
+		expected = self.number_of_points
+		ra = np.empty(expected, dtype=np.double)
+		dec = np.empty(expected, dtype=np.double)
+		keys = [None] * expected if with_keys else None
+
+		n = 0
 		connection = self._new_db_connection()
 		try:
 			with contextlib.closing(connection.cursor()) as cursor:
-				rows = cursor.execute(f"SELECT {columns} FROM {self.database_tablename}").fetchall()
+				for row in cursor.execute(f"SELECT {columns} FROM {self.database_tablename}"):
+					if n == ra.shape[0]:
+						# the index grew after it was counted; grow rather than truncate
+						grown = max(2 * n, 1)
+						ra = np.resize(ra, grown)
+						dec = np.resize(dec, grown)
+					ra[n] = row["ra"]
+					dec[n] = row["dec"]
+					if with_keys:
+						if n == len(keys):
+							keys.append(row["key"])
+						else:
+							keys[n] = row["key"]
+					n += 1
 		finally:
 			if not self._is_in_memory_db():
 				connection.close()
 
-		ra = np.fromiter((row["ra"] for row in rows), dtype=np.double, count=len(rows))
-		dec = np.fromiter((row["dec"] for row in rows), dtype=np.double, count=len(rows))
-		keys = [row["key"] for row in rows] if with_keys else None
+		if n != ra.shape[0]:
+			# the index shrank, or grew and the arrays were doubled past the end
+			ra = ra[:n]
+			dec = dec[:n]
+			if with_keys:
+				keys = keys[:n]
 
 		return ra, dec, keys
 
@@ -1770,6 +1829,15 @@ class QLSCIndex:
 		:param radius: one radius for every target, or one radius per target (degrees)
 		:returns: a tuple of the (ra, dec, radius) arrays, all of the same length
 		'''
+		# Every angle is put into degrees BEFORE np.asarray sees it: np.asarray on an
+		# astropy Quantity yields its numbers with the units discarded, so a target list
+		# in radians would be read as degrees and silently produce the wrong answer.
+		# radial_query has already done this for its own arguments; repeating it here
+		# costs nothing and keeps this helper correct on its own.
+		ra = _degrees_or_unchanged(ra)
+		dec = _degrees_or_unchanged(dec)
+		radius = _degrees_or_unchanged(radius)
+
 		target_ra = np.atleast_1d(np.asarray(ra, dtype=np.double))
 		target_dec = np.atleast_1d(np.asarray(dec, dtype=np.double))
 
@@ -1862,8 +1930,8 @@ class QLSCIndex:
 		scalar query; set ``return_counts`` to ask for the batch contract unambiguously,
 		whatever the shape of the input.
 
-		:param ra: right ascension (degrees), or an array of them to query as a list of targets
-		:param dec: declination (degrees), or an array of them to query as a list of targets
+		:param ra: right ascension (degrees), or an array of them to query as a list of targets; accepts an `astropy.units.Quantity`
+		:param dec: declination (degrees), or an array of them to query as a list of targets; accepts an `astropy.units.Quantity`
 		:param radius: radius (degrees) in the range [0,180], accepts a `float` value, an array of one value per target, or an `astropy.units.Quantity`
 		:param return_key: if set to True, include the key value as provided when added to the index
 		:param return_distance: if set to True, include the angular separation from the query center in degrees
@@ -1873,9 +1941,14 @@ class QLSCIndex:
 
 		self._ensure_open()
 
-		if astropy_available:
-			if isinstance(radius, Quantity):
-				radius = radius.to(u.deg).value
+		# Every angle this method takes may be an astropy Quantity, coordinates included:
+		# np.asarray on a Quantity discards its units, so a target list given in radians
+		# would otherwise be read as degrees and quietly return the wrong points. (Broader,
+		# uniform astropy acceptance across qlsc's API is being unified separately; this is
+		# the local conversion for this method's own arguments.)
+		ra = _degrees_or_unchanged(ra)
+		dec = _degrees_or_unchanged(dec)
+		radius = _degrees_or_unchanged(radius)
 
 		# A batch query is one given a list of targets. A value with a shape but only one
 		# element stays a scalar: every scalar-taking API in qlsc accepts a size-1 array,

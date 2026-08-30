@@ -9,7 +9,7 @@ from typing import Union
 
 import numpy as np
 
-from .qlsc_base import QLSC, QLSCIndex, _degrees
+from .qlsc_base import QLSCIndex, _degrees
 
 try:
 	# astropy is an optional dependency; the name is needed only to resolve the
@@ -94,6 +94,15 @@ def crossmatch(index_a:QLSCIndex=None, index_b:QLSCIndex=None,
 	for, its keys); the larger index is only ever queried. Cross-matching two catalogs of
 	which the smaller has hundreds of millions of points will therefore want more memory
 	than this makes available, which is the documented limit of this implementation.
+
+	.. note:: The radius is one value for the whole match. :py:func:`QLSCIndex.radial_query`
+	   accepts one radius per target, but there is nothing here for such an array to be
+	   parallel *to*: the targets are the points of an index, and the order in which an
+	   index yields its points is not part of qlsc's API, so a caller could not line a
+	   per-point radius up with them. Giving that a meaning needs an ordering contract on
+	   the index first, which is a larger decision than this function; until then, a
+	   variable radius is expressed by calling :py:func:`QLSCIndex.radial_query` with an
+	   explicit target list.
 
 	:param index_a: the first catalog; the result is grouped by, and ``nearest_only`` reduced to, the points of this index
 	:param index_b: the second catalog
