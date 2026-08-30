@@ -384,6 +384,101 @@ class QLSC:
 		else:
 			return ipix >> 2
 
+	def ipix_neighbors(self, ipix:int) -> np.ndarray:
+		'''
+		Return the ipix values of the pixels that touch the given pixel.
+
+		Two pixels "touch" when they share an edge or a single corner, so a pixel in the
+		interior of a cube face has the expected eight neighbors. Three special cases
+		follow from the geometry of the cube and are not errors:
+
+		* The 24 pixels sitting on a **corner of the cube** (four per face, at every depth
+		  above 0) have only **seven** neighbors. Three faces meet at a cube vertex, so
+		  three pixels meet there rather than four, and the diagonal step across the vertex
+		  reaches no eighth pixel.
+		* At ``depth=0`` each face is a single pixel and every face has **four** neighbors —
+		  the four faces adjacent to it. (The opposite face is correctly not included.)
+		* The pixel itself is never included in the result.
+
+		The returned values are unique and sorted in increasing ipix order. Sorted, because
+		the eight directions have no natural ordering once a face boundary is crossed (the
+		coordinate axes of two faces meeting at an edge are rotated with respect to each
+		other), so any "north, east, ..." ordering would be misleading; unique, because more
+		than one direction can reach the same pixel at very low depths. If the direction
+		matters, use :py:func:`ipix2xy` on the results and compare positions.
+
+		The calculation is done in the face-plane (x,y) coordinate system. Each of the eight
+		directions is probed with a point placed just inside the neighboring pixel, and the
+		pixel containing that point is looked up with :py:func:`ang2ipix`. A probe that
+		leaves the cube face is placed only a fraction of a pixel past the edge: the
+		gnomonic projection of a face remains valid beyond the face itself, but the pixel
+		grids of two faces line up exactly only *on* their shared edge and drift apart in
+		proportion to the distance past it, so a probe placed a half pixel out could land in
+		the wrong row near a cube corner.
+
+		:param ipix: the pixel identifier number; a single value (this method is not vectorized)
+		:returns: a sorted array of the unique ipix values of the neighboring pixels
+		'''
+		value = self._validated_ipix(ipix)
+		if not isinstance(value, int):
+			raise ValueError(f"This method takes a single ipix value; was given an array of shape {np.shape(ipix)}.")
+
+		nside = self.nside
+		bin_length = 2. / nside # the width of a pixel in face (x,y) coordinates
+		half = bin_length / 2.
+
+		# How far past a cube face edge a probe point is placed. Crossing an edge by
+		# this much moves the transverse coordinate by at most the same amount (the two
+		# faces' grids agree exactly on the edge and diverge in proportion to the
+		# distance past it), so a fraction of a pixel keeps the probe comfortably inside
+		# the intended row while staying many orders of magnitude above the floating
+		# point noise of the projection (~1e-16 against ~2e-10 of a pixel at depth 30).
+		edge_step = bin_length / 8.
+
+		facenum, x, y = self.ipix2xy(value) # the "lower left" corner of the pixel
+		x_center = x + half
+		y_center = y + half
+
+		# the pixel's integer position in the face's grid
+		i = int(round((x + 1.) / bin_length))
+		j = int(round((y + 1.) / bin_length))
+		if not (0 <= i < nside and 0 <= j < nside):
+			raise RuntimeError(f"The pixel grid position computed for ipix={value} ({i},{j}) is outside the face; this is a bug in qlsc.")
+
+		neighbors = set()
+
+		for step_x in (-1, 0, 1):
+			for step_y in (-1, 0, 1):
+				if step_x == 0 and step_y == 0:
+					continue
+
+				# does this step leave the cube face?
+				crosses_x = (step_x < 0 and i == 0) or (step_x > 0 and i == nside - 1)
+				crosses_y = (step_y < 0 and j == 0) or (step_y > 0 and j == nside - 1)
+
+				if step_x != 0 and step_y != 0 and crosses_x and crosses_y:
+					# A diagonal step across a corner of the cube. Only three pixels meet
+					# at a cube vertex - this one and the two reached by the neighboring
+					# straight steps - so there is no eighth pixel to find, and probing
+					# past the vertex would only rediscover one of the other two.
+					continue
+
+				# A step that stays on the face is probed at the center of the neighboring
+				# band, the point furthest from any boundary; a step that leaves the face
+				# is probed just past the edge, for the reason given above.
+				probe_x = x_center + step_x * (half + (edge_step if crosses_x else half))
+				probe_y = y_center + step_y * (half + (edge_step if crosses_y else half))
+
+				# q3c.xy2ang is called directly rather than through QLSC.xy2ang, which
+				# (correctly, for its own purposes) restricts x and y to [-1,1]: the
+				# projection is what carries a probe point past the edge of its face.
+				ra, dec = q3c.xy2ang(probe_x, probe_y, facenum)
+				neighbors.add(int(q3c.ang2ipix(self._hprm, ra, dec)))
+
+		neighbors.discard(value) # a pixel is not its own neighbor
+
+		return np.array(sorted(neighbors), dtype=np.int64)
+
 	def ipix2face(self, ipix:int) -> int:
 		'''
 		Return the face number the given ipix value falls on.

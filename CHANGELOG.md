@@ -26,6 +26,11 @@
   without a key are not represented in `keys()` at all (they can only be removed
   by coordinate). A non-string key raises `TypeError` rather than silently missing:
   the underlying column has SQLite's TEXT affinity.
+* `QLSC.ipix_neighbors(ipix)` returns the pixels touching a given pixel, as a sorted
+  array of unique ipix values — the building block for region growing and
+  neighborhood searches. Eight neighbors in the interior of a cube face; **seven**
+  for the 24 pixels on a corner of the cube, where three faces meet and there is no
+  eighth pixel across the vertex; four at `depth=0`, where a face is a single pixel.
 
 ### Breaking changes
 
