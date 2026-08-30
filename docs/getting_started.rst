@@ -28,8 +28,9 @@ into the module ``qlsc.q3c`` and wrapped by the Python classes. Installing
 therefore compiles that code, which needs a C compiler and the NumPy headers.
 Both are handled automatically by pip's build isolation — the source distribution
 declares its build requirements — so in practice ``pip install qlsc`` works on any
-machine with a working compiler toolchain. Pre-built binary wheels are planned,
-which will remove the compiler requirement.
+machine with a working compiler toolchain. Where a pre-built binary wheel is
+available for your platform, pip installs that instead and no compiler is needed
+at all.
 
 NumPy is the only hard dependency. `astropy <https://www.astropy.org>`_ and
 `pandas <https://pandas.pydata.org>`_ are optional: if astropy is present, angles

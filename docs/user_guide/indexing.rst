@@ -272,8 +272,8 @@ The record form is the more convenient one: it sorts by field
 
 .. warning::
 
-	The plain ``(n,2)`` form is squeezed, so a **single match comes back with
-	shape (2,)**, not ``(1,2)``:
+	:py:func:`~qlsc.QLSCIndex.radial_query`'s plain ``(n,2)`` form is squeezed, so
+	a **single match comes back with shape (2,)**, not ``(1,2)``:
 
 	.. code-block:: python
 
