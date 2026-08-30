@@ -972,9 +972,36 @@ class QLSCIndex:
 			if not db_ok:
 				connection.close()
 				raise Exception(f"The file provided is an SQLite database (good) but not in a format I recognize (bad).")
+			self._ensure_key_index(connection)
 
 		if not self._is_in_memory_db():
 			connection.close()
+
+	def _ensure_key_index(self, connection:sqlite3.Connection):
+		'''
+		Add the index on the "key" column to an index file that predates it.
+
+		Index files written by qlsc 1.1 and earlier have an index on ipix but none on
+		key, so every lookup or removal by key scans the whole table. The index is
+		additive — no table, column, or row changes, and an older qlsc simply ignores
+		an index it does not know about — so an existing file is upgraded in place
+		when it is opened, and the schema version does not move.
+
+		A file that cannot be written to (a read-only file or filesystem, or one
+		locked by another process) keeps the index it has: this is an optimization,
+		every operation returns exactly the same answer without it, and refusing to
+		open a file that opened fine before would be the worse failure. That case is
+		reported at warning level rather than passed over in silence. Any error that
+		is not SQLite refusing the write is a real problem and is left to propagate.
+
+		:param connection: an open connection to an existing index database
+		'''
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				cursor.execute(f"CREATE INDEX IF NOT EXISTS key_idx ON {self.database_tablename}(key)")
+		except sqlite3.OperationalError as e:
+			logger.warning(f"The index on the 'key' column of '{self.db_filepath}' could not be created ({e}). "
+						   f"Lookups and removals by key will scan the whole table; results are unaffected.")
 
 	def _validate_db_as_qlsc_index(self, connection:sqlite3.Connection):
 		'''
@@ -1072,6 +1099,10 @@ class QLSCIndex:
                 );''')
 
 			cursor.execute(f'''CREATE INDEX ipix_idx ON {self.database_tablename}(ipix); ''')
+
+			# Not unique: keys are labels, and several points may share one.
+			# Without this, every lookup or removal by key scans the whole table.
+			cursor.execute(f'''CREATE INDEX key_idx ON {self.database_tablename}(key); ''')
 
             # Create a metadata table - COUNT(*) on SQLite databases always does a full scan,
             # so keep track of rows count here.

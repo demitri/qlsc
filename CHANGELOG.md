@@ -102,6 +102,13 @@
 * `QLSC.ipix2xy` did not bounds check its ipix value and silently returned the
   coordinates of no pixel at all for out-of-range input; it now raises `ValueError`,
   as `ipix2ang` already did. The check is also enforced in the C extension.
+* Lookups and removals by key scanned the whole index: the schema indexed `ipix`
+  but not `key`, so `key in index`, `find_by_key` and `remove_point(key=...)` were
+  proportional to the size of the catalog. New index files carry an index on `key`,
+  and an existing file gains one when it is opened — the change is additive, so an
+  older qlsc reading the same file simply ignores it and the schema version does not
+  move. A file that cannot be written to (read-only, or locked) keeps the index it
+  has and logs a warning saying so; the results are identical either way.
 * `QLSCIndex.add_points` silently dropped points when given fewer keys than
   coordinates: the length check was the chained comparison
   `len(ra) != len(dec) != len(keys)`, which Python evaluates as
