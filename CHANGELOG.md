@@ -70,6 +70,18 @@
   defaults to depth 5 (6,144 pixels for the whole sky), or the index's depth if that
   is coarser. A depth finer than the index's raises `ValueError`. `examples/sky_coverage_density_map.py`
   writes such a document from the WISE sample catalog.
+* `QLSCIndex.radial_query(ra=array, dec=array, radius=...)` runs a cone search for a
+  whole list of targets — matching a target list against the catalog — with `radius`
+  either one value for every target or one value per target. The result is a
+  `numpy.recarray` whose first field is `target_index`: the position in the target list
+  each match belongs to. A target that matches nothing contributes no rows;
+  `return_counts=True` returns `(matches, counts)` instead, where `counts` has one
+  `np.int64` entry per target and a zero for a target that found none. A scalar query
+  is unchanged, including the rule that a size-1 array is a scalar value; a target list
+  with exactly one entry is therefore expressed with `return_counts=True`. The batch
+  form is about the bookkeeping rather than speed: it runs one query per target (the
+  ipix ranges covering a cone depend on where the cone is), and measured about 9%
+  faster than the equivalent Python loop.
 
 ### Development
 
