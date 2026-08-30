@@ -102,6 +102,27 @@
 * `QLSC.ipix2xy` did not bounds check its ipix value and silently returned the
   coordinates of no pixel at all for out-of-range input; it now raises `ValueError`,
   as `ipix2ang` already did. The check is also enforced in the C extension.
+* `QLSC.face_number` returned the wrong cube face for any negative right ascension,
+  and for some values a number that is not a face at all — `face_number(-315, 20)`
+  returned `-2`. The vendored `q3c_get_facenum` is documented "strictly 0<=ra<360"
+  and computes the face as `(char)fmod((ra + 45) / 90, 4) + 1`, which truncates
+  toward zero for a negative argument; the C wrapper did not reduce ra first, so
+  `face_number` and `ang2ipix_xy` disagreed about the same coordinate.
+  `face_number` also no longer rejects ra outside [-360,360] — right ascension is
+  periodic and is now accepted at any value, as `ang2ipix` accepts it. The range
+  check had only hidden the fact that everything in [-360,0) was answered wrongly.
+* `QLSC.point_in_polygon` and `QLSCIndex.polygon_query` chose the wrong cube face
+  for a polygon whose **first vertex** had a wrapped right ascension — the natural
+  way to write a polygon straddling ra=0. Both reach `q3c_get_facenum` through
+  `q3c_get_facenum_poly`, which reads that vertex. A square at ra=-140 was rejected
+  as "too large" while the identical square at ra=220 worked. The vertex values are
+  now reduced at the C boundary, into a copy: the caller's array is not modified.
+* Every entry point that hands a right ascension to the embedded Q3C code was
+  audited for this; the audit is recorded as a block comment at the top of
+  `qlsc_c_module.c` and pinned by `source/tests/test_ra_wrapping.py`, which asserts
+  that every public API answers identically for `ra`, `ra+360k` and `ra-360k`.
+  `qlsc.q3c.facenum` and the two polygon functions also now reject non-finite
+  coordinates, as their siblings already did (upstream q3c issue #52).
 * Lookups and removals by key scanned the whole index: the schema indexed `ipix`
   but not `key`, so `key in index`, `find_by_key` and `remove_point(key=...)` were
   proportional to the size of the catalog. New index files carry an index on `key`,

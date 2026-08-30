@@ -10,6 +10,39 @@
 
 #define Q3C_STRUCT_POINTER_BUFFER "Q3C_prm_struct_pointer"
 
+// ------------------------------------------------------------------
+// Right ascension conventions in the vendored Q3C code
+// ------------------------------------------------------------------
+//
+// Several vendored functions carry the documented precondition "strictly
+// 0<=ra<360" and do nothing to enforce it: q3c_get_facenum computes the cube
+// face as (char)fmod((ra + 45) / 90, 4) + 1, which for a negative ra truncates
+// toward zero and can return a face number that is not even in [0,5] (ra=-315
+// returns -2). Everything downstream of a wrong face is wrong or spuriously
+// rejected as "too large".
+//
+// This wrapper is the boundary where that is fixed - the vendored files are not
+// edited for it. Every entry point below that hands an ra to Q3C is audited here;
+// re-run this audit when a Q3C function is newly exported or the vendored code is
+// synced (scripts/sync_q3c.py diffs the declarations this depends on).
+//
+//   SAFE, unwraps internally:
+//     q3c_ang2ipix, q3c_ang2ipix_xy  - both call UNWRAP_RA(ra0) on entry
+//   SAFE, periodic in ra with period 360:
+//     q3c_dist, q3c_sindist  - ra enters only as sin((ra1-ra2)/2)^2
+//     q3c_in_ellipse         - ra enters only as cos/sin of (alpha1-alpha)
+//     q3c_xy2ang, q3c_xy2facenum, q3c_ipix2ang, q3c_ipix2xy, q3c_pixarea
+//                            - take no ra at all
+//   NEEDS UNWRAPPING BY THIS WRAPPER:
+//     q3c_get_facenum        - unwrapped in qlsc_q3c_facenum
+//     q3c_radial_query       - unwrapped in qlsc_q3c_radial_query
+//     q3c_ellipse_query      - unwrapped in qlsc_q3c_ellipse_query
+//     q3c_check_sphere_point_in_poly, q3c_poly_query
+//                            - both reach q3c_get_facenum through
+//                              q3c_get_facenum_poly, which reads the FIRST
+//                              polygon vertex; the vertex ra values are unwrapped
+//                              into a local buffer by polygon_vertex_views
+
 void *get_item_pointer(int ndim, void *buf, Py_ssize_t *strides,
    Py_ssize_t *suboffsets, Py_ssize_t *indices) {
    char *pointer = (char*)buf;
@@ -801,9 +834,21 @@ qlsc_q3c_facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 	 }
 	
 	//hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
-	
+
+	// Non-finite values reach an undefined float->int conversion in the (char)
+	// cast inside q3c_get_facenum (upstream q3c issue #52).
+	if ((!isfinite(ra)) || (!isfinite(dec)))
+	{
+		PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' values must be finite.");
+		return NULL;
+	}
+
+	// q3c_get_facenum is documented "strictly 0<=ra<360" and does not enforce it;
+	// see the audit at the top of this file. Without this, ra=-315 returns -2.
+	ra = UNWRAP_RA(ra);
+
 	facenum = q3c_get_facenum(ra, dec);
-	
+
 	return PyLong_FromLong((long)facenum);
 }
 
@@ -1052,8 +1097,18 @@ ipix_range_arrays(const q3c_ipix_t *fulls_padded, const q3c_ipix_t *partials_pad
 // validate them. On success returns 0 with both views held (the caller must
 // release them) and *n set to the vertex count; on failure returns -1 with an
 // exception set and no views held.
+//
+// 'unwrapped_ra' is filled with the vertex ra values reduced to [0,360). Both
+// polygon entry points reach q3c_get_facenum (through q3c_get_facenum_poly, which
+// reads the first vertex), which requires that range; see the audit at the top of
+// this file. A polygon written with negative ra - the natural way to describe one
+// straddling ra=0 - otherwise picked the wrong cube face, and was then either
+// projected wrongly or rejected as "too large". The values are copied rather than
+// reduced in place: the buffer belongs to the caller's NumPy array.
+// It must have room for Q3C_MAX_N_POLY_VERTEX values.
 static int
-polygon_vertex_views(PyObject *poly_ra, PyObject *poly_dec, Py_buffer *ra_view, Py_buffer *dec_view, int *n)
+polygon_vertex_views(PyObject *poly_ra, PyObject *poly_dec, Py_buffer *ra_view, Py_buffer *dec_view,
+					 int *n, q3c_coord_t *unwrapped_ra)
 {
 	if (PyObject_GetBuffer(poly_ra, ra_view, PyBUF_FULL_RO) == -1)
 		return -1;
@@ -1082,6 +1137,21 @@ polygon_vertex_views(PyObject *poly_ra, PyObject *poly_dec, Py_buffer *ra_view, 
 		PyErr_Format(PyExc_ValueError, "The polygon must have between 3 and %d vertices (was given %d).",
 					 Q3C_MAX_N_POLY_VERTEX, *n);
 		POLY_VIEWS_FAIL();
+	}
+
+	{
+		const q3c_coord_t *ra_values = (const q3c_coord_t *)ra_view->buf;
+		const q3c_coord_t *dec_values = (const q3c_coord_t *)dec_view->buf;
+		int i;
+		for (i = 0; i < *n; i++) {
+			// a non-finite vertex reaches undefined float->int conversions in the
+			// face selection below (upstream q3c issue #52)
+			if (!isfinite(ra_values[i]) || !isfinite(dec_values[i])) {
+				PyErr_SetString(PyExc_ValueError, "The polygon vertex values must all be finite.");
+				POLY_VIEWS_FAIL();
+			}
+			unwrapped_ra[i] = UNWRAP_RA(ra_values[i]);
+		}
 	}
 
 	#undef POLY_VIEWS_FAIL
@@ -1177,6 +1247,7 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	// see the q3c_poly.c points[8] note in CLAUDE.md.
 	q3c_coord_t xpj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ypj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t poly_ra_unwrapped[Q3C_MAX_N_POLY_VERTEX]; // vertex ra reduced to [0,360)
 	q3c_coord_t axpj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t aypj[5][Q3C_MAX_N_POLY_VERTEX];
 	char faces[5];
@@ -1200,11 +1271,11 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
-	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n) != 0)
+	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n, poly_ra_unwrapped) != 0)
 		return NULL;
 
 	result = q3c_check_sphere_point_in_poly(hprm, n,
-											(q3c_coord_t *)ra_view.buf, (q3c_coord_t *)dec_view.buf,
+											poly_ra_unwrapped, (q3c_coord_t *)dec_view.buf,
 											ra0, dec0, &too_large,
 											0, // invocation = 0: always (re)project the polygon
 											xpj, ypj, axpj, aypj, faces, &multi_flag);
@@ -1239,6 +1310,7 @@ qlsc_q3c_poly_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	q3c_coord_t y[Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ax[Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ay[Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t poly_ra_unwrapped[Q3C_MAX_N_POLY_VERTEX]; // vertex ra reduced to [0,360)
 	q3c_poly qp;
 	char too_large = 0;
 	int n, overflowed;
@@ -1259,12 +1331,12 @@ qlsc_q3c_poly_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
-	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n) != 0)
+	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n, poly_ra_unwrapped) != 0)
 		return NULL;
 
 	// q3c_project_poly only reads ra,dec; the projections are written to x,y,ax,ay
 	qp.n = n;
-	qp.ra  = (q3c_coord_t *)ra_view.buf;
+	qp.ra  = poly_ra_unwrapped;
 	qp.dec = (q3c_coord_t *)dec_view.buf;
 	qp.x = x;
 	qp.y = y;

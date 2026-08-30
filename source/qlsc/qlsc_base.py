@@ -610,7 +610,11 @@ class QLSC:
 		|  face 4 = 225° ≤ α < 315
 		|  face 5 = bottom
 
-		:param ra: right ascension in degrees; must be in [0,360]
+		Right ascension is periodic and is accepted at any value, as
+		:py:func:`ang2ipix` accepts it: ``face_number(-350, 20)`` and
+		``face_number(370, 20)`` both answer for ra=10.
+
+		:param ra: right ascension in degrees; any value, reduced to [0,360) internally
 		:param dec: declination in degrees; must be in [-90,90]
 		:param ipix: the pixel identifier number
 		:returns: the cube face number
@@ -630,8 +634,10 @@ class QLSC:
 			dec = _as_float_scalar(dec, "dec")
 			if not -90 <= dec <= 90:
 				raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
-			if not -360 <= ra <= 360:
-				raise ValueError(f"The value of 'ra' must be normalized to [0,360]; was given '{ra}'.")
+			# ra needs no range check: it is periodic, and the C wrapper reduces it
+			# to [0,360) before handing it to q3c_get_facenum, which requires that
+			# range and does not enforce it. Rejecting ra outside [-360,360] used to
+			# hide the fact that everything in [-360,0) was answered wrongly.
 
 		if ipix:
 			ra,dec = self.ipix2ang(ipix)
