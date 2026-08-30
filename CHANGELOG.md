@@ -55,6 +55,38 @@
   for the 24 pixels on a corner of the cube, where three faces meet and there is no
   eighth pixel across the vertex; four at `depth=0`, where a face is a single pixel.
 
+### Documentation
+
+* The documentation is now a structured site rather than an API dump: a landing
+  page, a "Getting Started" tutorial, a four-part user guide (the scheme, depth and
+  resolution, coordinates and conversions, indexing and searching), and six worked
+  examples with science framing. Every code block in the new pages was run and its
+  real output pasted; the catalogs are seeded so the numbers reproduce.
+* The worked examples cover a transient cone search (with a measured comparison
+  against a brute-force NumPy scan), bright-star avoidance against the Yale Bright
+  Star Catalogue fetched from VizieR, survey-footprint membership with
+  `polygon_query` including concave footprints, elliptical apertures on an inclined
+  galaxy disc, pixel-level region growing with `ipix_neighbors`, and sky density
+  maps built from pixel counts.
+* Documented, with measurements, that the pixels are **not** equal-area: Q3C uses the
+  tangent-plane cube rather than the area-preserving Chan & O'Neill transform, so a
+  pixel's solid angle is `dx dy (1 + x² + y²)^(-3/2)` and varies by up to a factor of
+  3^(3/2) ≈ 5.196 between the centre of a cube face and a cube vertex. `QLSC.ipix_area`
+  returns the mean for every pixel, which is a poor estimate for any individual one.
+  Region queries are unaffected — they filter candidates exactly — but converting
+  pixel counts to surface densities is not.
+* Documented that `QLSC.ang2ipix_xy` returns face coordinates on **half** the scale
+  used by `ipix2xy`, `xy2ang` and `xy2ipix` (−0.5 to +0.5 across a face rather than
+  −1 to +1), and that `qlsc.sindist` returns the haversine sin²(d/2), not the sine
+  of the separation.
+* `docs/generate_figures.py` generates every figure in `docs/_static/figures` from
+  seeded synthetic catalogs; none are hand-made. It needs matplotlib and astropy,
+  neither of which is required to build the documentation.
+* Added `.readthedocs.yaml`, which Read the Docs now requires; without it the build
+  has no configuration file to read.
+* Fixed a malformed inline literal in the `QLSCIndex` docstring (``` ``file://` ```)
+  that produced a docutils warning on every documentation build.
+
 ### Development
 
 * `scripts/sync_q3c.py` mechanizes the vendored-Q3C upstream sync documented in
