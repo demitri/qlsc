@@ -819,7 +819,7 @@ class QLSCIndex:
 	detail and can change. (This may be documented for expanded use in the future.)
 
 	:param qlsc: an instance of :py:class:`QLSC` set to the desired segmentation level
-	:param filepath: the file path (string path, ``pathlib.Path``, or ``file://` URL) where a persistent index will be stored; the default is to create the index in memory
+	:param filepath: the file path (string path, ``pathlib.Path``, or ``file://`` URL) where a persistent index will be stored; the default is to create the index in memory
 	:param name: a user-provided name for the index
 	:param description: a user-provided description of the index
 	'''
