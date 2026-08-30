@@ -29,7 +29,7 @@ cd docs && make html
 
 **Test gotcha:** the tests do `import qlsc`, and since the source tree contains no built `.so`, they run against the *installed* package, not the working tree. After changing anything under `source/qlsc/`, reinstall before running tests or you will test stale code. Test files prefixed `xtest_` (rather than `test_`) are deliberately disabled.
 
-**Releasing:** the version lives only in `source/qlsc/version.py` (kept out of `__init__.py` so `setup.py` can read it without importing dependencies). The commit convention is a dedicated "Bumping version to X.Y.Z." commit.
+**Releasing:** the version lives only in `source/qlsc/version.py` (kept out of `__init__.py` so `setup.py` can read it without importing dependencies). The commit convention is a dedicated "Bumping version to X.Y.Z." commit. The procedure (established for v1.1.0): update `CHANGELOG.md`; `cd source && rm -rf dist && python -m build` (builds sdist + a wheel for this machine only; everyone else builds the sdist, which works under pip's default build isolation via `pyproject.toml`); `twine check --strict dist/qlsc-X.Y.Z*`; `twine upload --repository qlsc dist/qlsc-X.Y.Z*` (the `[qlsc]` section in `~/.pypirc`; twine ≥6 requires sections be listed under its `[distutils] index-servers` header); `git tag vX.Y.Z && git push origin master vX.Y.Z`; `gh release create vX.Y.Z` with the version's CHANGELOG section as notes. The PyPI project page renders the repo-root README (read by `setup.py` at build time, Markdown, absolute image URLs) — it is baked at upload and immutable per release; the v1.1.0 page predates this and shows plain text, which self-corrects at the next upload.
 
 ## Architecture
 
