@@ -631,6 +631,11 @@ class QLSCIndex:
 		if hasattr(self, "memory_db_connection"):
 			self.close()
 
+	def _ensure_open(self):
+		''' Raise if this index has been closed; call at the start of every public operation. '''
+		if self._closed:
+			raise RuntimeError("This QLSCIndex has been closed and can no longer be used.")
+
 	def _is_in_memory_db(self):
 		#return (self.db_filepath == ":memory:") or self.db_filepath.startswith("file::memory:")
 		return self.memory_db_connection is not None
@@ -732,10 +737,9 @@ class QLSCIndex:
 		It is the responsibility of the calling function to close the connection when finished.
 		This is not done automatically in case the object is an in-memory database.
 		'''
-		if self._closed:
-			# without this check, an operation on a closed in-memory index would
-			# silently open a brand new, empty database
-			raise RuntimeError("This QLSCIndex has been closed and can no longer be used.")
+		# without this check, an operation on a closed in-memory index would
+		# silently open a brand new, empty database
+		self._ensure_open()
 		return self.memory_db_connection or sqlite3.connect(self.db_filepath, timeout=20)
 
 	def add_point(self, ra:float=None, dec:float=None, key:str=None):
@@ -751,6 +755,8 @@ class QLSCIndex:
 		:param dec: a single declination value, in degrees
 		:param key: a unique identifier for the coordinate (optional)
 		'''
+
+		self._ensure_open()
 
 		if any([x is None for x in [ra,dec]]):
 			raise ValueError("Both 'ra' and 'dec' values must be specified.")
@@ -798,6 +804,8 @@ class QLSCIndex:
 		:param points: an Iterable of tuples of (ra,dec) pairs
 		:param key: an Iterable of unique identifiers for each point
 		'''
+		self._ensure_open()
+
 		if all([x is None for x in [ra,dec,points]]):
 			raise ValueError("'ra','dec' OR 'points' must be specified.")
 		if all([x is True for x in [ra, dec, points]]):
@@ -829,6 +837,7 @@ class QLSCIndex:
 		if not ((-90 <= dec).all() and (dec <= 90).all()):
 			points = _normalize_ang(points=points, copy=True)
 
+		connection = None
 		try:
 			ipix = self.qlsc.ang2ipix(ra, dec)
 
@@ -851,7 +860,7 @@ class QLSCIndex:
 		except sqlite3.IntegrityError:
 			raise NotImplementedError()
 		finally:
-			if not self._is_in_memory_db():
+			if connection is not None and not self._is_in_memory_db():
 				connection.close()
 
 	@property
@@ -860,12 +869,13 @@ class QLSCIndex:
 
 		connection = self._new_db_connection()
 
-		with contextlib.closing(connection.cursor()) as cursor:
-			cursor.execute(f"SELECT max(rowid) FROM {self.database_tablename}")
-			return cursor.fetchone()[0]
-
-		if not self.memory_db_connection:
-			connection.close()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				cursor.execute(f"SELECT max(rowid) FROM {self.database_tablename}")
+				return cursor.fetchone()[0]
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
 
 	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False) -> np.recarray:
 		'''
@@ -880,6 +890,8 @@ class QLSCIndex:
 		:returns: if ``return_key=True``, returns a :class:`numpy.recarray` with keys ``ra,dec,key``; otherwise an array of matches, shape (n,2)
 		'''
 
+		self._ensure_open()
+
 		if astropy_available:
 			if isinstance(radius, Quantity):
 				radius = radius.to(u.deg).value
@@ -887,8 +899,9 @@ class QLSCIndex:
 		if abs(dec) > 90:
 			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
 
-		if radius < 0:
-			raise ValueError(f"The value for radius must be non-negative; was given '{radius}'.")
+		# above 180 degrees the sin^2(radius/2) filter below becomes periodic and meaningless
+		if not (0 <= radius <= 180):
+			raise ValueError(f"The value for radius must be in the range [0,180]; was given '{radius}'.")
 
 		center_ra = ra
 		center_dec = dec
@@ -939,8 +952,8 @@ class QLSCIndex:
 		with contextlib.closing(connection.cursor()) as cursor:
 			try:
 				for ra,dec,key in cursor.execute(query):
-					# filter out points outside radius
-					if sindist(ra, dec, center_ra, center_dec) < cone_radius:
+					# filter out points outside radius (inclusive, so e.g. radius=180 includes an antipodal point)
+					if sindist(ra, dec, center_ra, center_dec) <= cone_radius:
 						if return_key:
 							match_ra.append(ra)
 							match_dec.append(dec)

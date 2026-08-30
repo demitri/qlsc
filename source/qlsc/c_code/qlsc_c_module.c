@@ -747,9 +747,10 @@ qlsc_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 static void raise_radial_query_overflow(q3c_coord_t ra, q3c_coord_t dec, q3c_coord_t radius)
 {
 	char msg[512];
+	// %.17g preserves full double precision so the report is exactly reproducible
 	snprintf(msg, sizeof msg,
-			 "q3c_radial_query: too many ipix ranges for the query ra=%.10g, dec=%.10g, radius=%.10g "
-			 "(degrees; the ra value is normalized to [0,360)). This is an internal error in the embedded "
+			 "q3c_radial_query: too many ipix ranges for the query ra=%.17g, dec=%.17g, radius=%.17g "
+			 "(degrees; the ra value is normalized to [0,360]). This is an internal error in the embedded "
 			 "Q3C code; please report it with these values at https://github.com/segasai/q3c/issues .",
 			 ra, dec, radius);
 	PyErr_SetString(PyExc_RuntimeError, msg);
