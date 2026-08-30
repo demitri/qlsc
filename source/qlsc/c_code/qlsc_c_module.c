@@ -923,19 +923,147 @@ qlsc_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 // The exception type raised on a q3c internal range-capacity overflow; created in PyInit_q3c.
 static PyObject *QlscRangeOverflowError = NULL;
 
-// Raise a RangeOverflowError for a q3c_radial_query ipix range overflow,
-// reporting the query values as used (i.e. after ra normalization).
-static void raise_radial_query_overflow(q3c_coord_t ra, q3c_coord_t dec, q3c_coord_t radius)
+// Raise a RangeOverflowError for an ipix range overflow in one of the q3c region
+// query functions. 'query' describes the query as it was actually run (i.e. after
+// ra normalization) so that the report is reproducible.
+static void raise_query_overflow(const char *function, const char *query)
 {
-	char msg[512];
-	// %.17g preserves full double precision so the report is exactly reproducible
+	char msg[1024];
 	snprintf(msg, sizeof msg,
-			 "q3c_radial_query: too many ipix ranges for the query ra=%.17g, dec=%.17g, radius=%.17g "
-			 "(degrees; the ra value is normalized to [0,360]). This is an internal error in the embedded "
+			 "%s: too many ipix ranges for the query %s. This is an internal error in the embedded "
 			 "Q3C code (version " Q3C_VERSION "); please report it with these values at "
 			 "https://github.com/segasai/q3c/issues .",
-			 ra, dec, radius);
+			 function, query);
 	PyErr_SetString(QlscRangeOverflowError, msg);
+}
+
+// ------------------------------------------------------------------
+// Shared helpers for the region query functions (radial, polygon, ellipse).
+// All three hand q3c a pair of fixed-size output arrays and get back ipix
+// ranges in the same padded form.
+// ------------------------------------------------------------------
+
+// Fill the padded output arrays with q3c's own "no more ranges" filler, so that
+// a q3c path returning early without calling array_filler (q3c_poly_query does
+// this when the polygon is too large) cannot leave the caller reading
+// uninitialized stack memory.
+static void
+init_padded_ranges(q3c_ipix_t *fulls_padded, q3c_ipix_t *partials_padded)
+{
+	for (int i = 0; i < 2 * Q3C_NFULLS; i += 2) {
+		fulls_padded[i] = 1;
+		fulls_padded[i+1] = -1;
+	}
+	for (int i = 0; i < 2 * Q3C_NPARTIALS; i += 2) {
+		partials_padded[i] = 1;
+		partials_padded[i+1] = -1;
+	}
+}
+
+// Build the (fulls, partials) NumPy arrays from the padded arrays q3c fills.
+// q3c's array_filler() pads both out to their full length with (1,-1) pairs,
+// which are not wanted here; only the exact (1,-1) pair is filler, since a
+// legitimate range can start or end at 1.
+// Returns a new reference to a 2-tuple of (n,2) int64 arrays, or NULL with an
+// exception set.
+static PyObject *
+ipix_range_arrays(const q3c_ipix_t *fulls_padded, const q3c_ipix_t *partials_padded)
+{
+	int fulls_filler_pos = 0;
+	int partials_filler_pos = 0;
+	q3c_ipix_t *fulls, *partials;
+	npy_intp dims[2];
+	PyArrayObject *np_fulls, *np_partials;
+
+	while (fulls_filler_pos < 2 * Q3C_NFULLS &&
+		   !(fulls_padded[fulls_filler_pos] == 1 && fulls_padded[fulls_filler_pos+1] == -1))
+		fulls_filler_pos += 2;
+
+	while (partials_filler_pos < 2 * Q3C_NPARTIALS &&
+		   !(partials_padded[partials_filler_pos] == 1 && partials_padded[partials_filler_pos+1] == -1))
+		partials_filler_pos += 2;
+
+	// Allocate memory for the arrays; allocate at least one byte so that a
+	// zero-range result never hands NumPy a NULL data pointer.
+	fulls    = malloc(fulls_filler_pos    > 0 ? fulls_filler_pos    * sizeof(q3c_ipix_t) : 1);
+	partials = malloc(partials_filler_pos > 0 ? partials_filler_pos * sizeof(q3c_ipix_t) : 1);
+	if (fulls == NULL || partials == NULL) {
+		free(fulls);
+		free(partials);
+		return PyErr_NoMemory();
+	}
+
+	// copy the data since the padded arrays are on the caller's stack and will be the wrong length
+	if (fulls_filler_pos > 0)
+		memcpy(fulls, fulls_padded, fulls_filler_pos * sizeof(q3c_ipix_t));
+	if (partials_filler_pos > 0)
+		memcpy(partials, partials_padded, partials_filler_pos * sizeof(q3c_ipix_t));
+
+	// Since the values being returned are ipix ranges, make it a 2D array.
+	// data types: https://numpy.org/doc/stable/reference/c-api/dtype.html
+	dims[0] = fulls_filler_pos/2;
+	dims[1] = 2;
+	np_fulls = (PyArrayObject *)PyArray_SimpleNewFromData(2, dims, NPY_INT64, fulls);
+	if (np_fulls == NULL) {
+		free(fulls);
+		free(partials);
+		return NULL;
+	}
+	PyArray_ENABLEFLAGS(np_fulls, NPY_ARRAY_OWNDATA); // set ownership of data: free when ndarray is garbage collected
+
+	dims[0] = partials_filler_pos/2;
+	np_partials = (PyArrayObject *)PyArray_SimpleNewFromData(2, dims, NPY_INT64, partials);
+	if (np_partials == NULL) {
+		Py_DECREF(np_fulls); // frees 'fulls' via OWNDATA
+		free(partials);
+		return NULL;
+	}
+	PyArray_ENABLEFLAGS(np_partials, NPY_ARRAY_OWNDATA);
+
+	// Return as tuple. "N" steals the references; "O" would leak one reference
+	// to each array per call (measured at ~890 bytes/call).
+	return Py_BuildValue("NN", np_fulls, np_partials);
+}
+
+// Acquire read-only double buffers over a polygon's ra,dec vertex arrays and
+// validate them. On success returns 0 with both views held (the caller must
+// release them) and *n set to the vertex count; on failure returns -1 with an
+// exception set and no views held.
+static int
+polygon_vertex_views(PyObject *poly_ra, PyObject *poly_dec, Py_buffer *ra_view, Py_buffer *dec_view, int *n)
+{
+	if (PyObject_GetBuffer(poly_ra, ra_view, PyBUF_FULL_RO) == -1)
+		return -1;
+	if (PyObject_GetBuffer(poly_dec, dec_view, PyBUF_FULL_RO) == -1) {
+		PyBuffer_Release(ra_view);
+		return -1;
+	}
+
+	#define POLY_VIEWS_FAIL() { PyBuffer_Release(ra_view); PyBuffer_Release(dec_view); return -1; }
+
+	if (strcmp(ra_view->format, "d") != 0 || strcmp(dec_view->format, "d") != 0) {
+		PyErr_SetString(PyExc_TypeError, "'poly_ra' and 'poly_dec' arrays must be of type np.double.");
+		POLY_VIEWS_FAIL();
+	}
+	if (!PyBuffer_IsContiguous(ra_view, 'C') || !PyBuffer_IsContiguous(dec_view, 'C') ||
+		ra_view->ndim != 1 || dec_view->ndim != 1) {
+		PyErr_SetString(PyExc_TypeError, "'poly_ra' and 'poly_dec' must be contiguous 1D arrays.");
+		POLY_VIEWS_FAIL();
+	}
+	if (ra_view->shape[0] != dec_view->shape[0]) {
+		PyErr_SetString(PyExc_ValueError, "'poly_ra' and 'poly_dec' arrays must be the same length.");
+		POLY_VIEWS_FAIL();
+	}
+	*n = (int)ra_view->shape[0];
+	if (*n < 3 || *n > Q3C_MAX_N_POLY_VERTEX) {
+		PyErr_Format(PyExc_ValueError, "The polygon must have between 3 and %d vertices (was given %d).",
+					 Q3C_MAX_N_POLY_VERTEX, *n);
+		POLY_VIEWS_FAIL();
+	}
+
+	#undef POLY_VIEWS_FAIL
+
+	return 0;
 }
 
 static PyObject *
@@ -949,18 +1077,9 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	struct q3c_prm *hprm;
 	q3c_ipix_t partials_padded[2 * Q3C_NPARTIALS];
 	q3c_ipix_t fulls_padded[2 * Q3C_NFULLS];
-	q3c_ipix_t *partials, *fulls;
-	int fulls_filler_pos, partials_filler_pos, max_idx;
-	npy_intp dims[2]; // aka const long *
-	int fulls_length = 2 * Q3C_NFULLS;
-	int partials_length = 2 * Q3C_NPARTIALS;
-	
-	// returned values
-	PyArrayObject *np_fulls;
-	PyArrayObject *np_partials;
 
 	//static q3c_coord_t ra_cen_buf, dec_cen_buf, radius_buf;
-	
+
 	static char *kwlist[] = {"hprm", "ra", "dec", "radius", NULL};
 	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
 									 "Oddd", // object + 2 doubles
@@ -996,74 +1115,18 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 
 	// generate the full, partials arrays
 	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
+	init_padded_ranges(fulls_padded, partials_padded);
 	if (q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls_padded, partials_padded))
 	{
-		raise_radial_query_overflow(ra_cen, dec_cen, radius);
+		// %.17g preserves full double precision so the report is exactly reproducible
+		char query[256];
+		snprintf(query, sizeof query, "ra=%.17g, dec=%.17g, radius=%.17g "
+				 "(degrees; the ra value is normalized to [0,360])", ra_cen, dec_cen, radius);
+		raise_query_overflow("q3c_radial_query", query);
 		return NULL;
 	}
 
-	// q3c_radial_query() calls array_filler() which adds (1,-1)
-	// pairs to fill out the arrays. We don't need them here, so we'll
-	// find number of actual data points and dynamically create arrays of the needed size.
-	// Only the exact (1,-1) pair is filler - a legitimate range can start or end at 1.
-	fulls_filler_pos = 0;
-	max_idx = fulls_length;
-	while (fulls_filler_pos < max_idx && !(fulls_padded[fulls_filler_pos] == 1 && fulls_padded[fulls_filler_pos+1] == -1))
-		fulls_filler_pos += 2;
-
-	partials_filler_pos = 0;
-	max_idx = partials_length;
-	while (partials_filler_pos < max_idx && !(partials_padded[partials_filler_pos] == 1 && partials_padded[partials_filler_pos+1] == -1))
-		partials_filler_pos += 2;
-	
-	// Allocate memory for the arrays; allocate at least one byte so that a
-	// zero-range result never hands NumPy a NULL data pointer.
-	fulls    = malloc(fulls_filler_pos    > 0 ? fulls_filler_pos    * sizeof(q3c_ipix_t) : 1);
-	partials = malloc(partials_filler_pos > 0 ? partials_filler_pos * sizeof(q3c_ipix_t) : 1);
-	if (fulls == NULL || partials == NULL) {
-		free(fulls);
-		free(partials);
-		return PyErr_NoMemory();
-	}
-
-	// copy the data since the padded arrays are on the stack and will be the wrong length
-	if (fulls_filler_pos > 0)
-		memcpy(fulls, fulls_padded, fulls_filler_pos * sizeof(q3c_ipix_t));
-	if (partials_filler_pos > 0)
-		memcpy(partials, partials_padded, partials_filler_pos * sizeof(q3c_ipix_t));
-
-	// Create NumPy arrays and return them.
-	// Since the values being returned are ipix ranges, make it a 2D array.
-	// data types: https://numpy.org/doc/stable/reference/c-api/dtype.html
-	//
-	dims[0] = fulls_filler_pos/2;
-	dims[1] = 2;
-	np_fulls = (PyArrayObject *)PyArray_SimpleNewFromData(2, 			// int nd - length of dims array
-														  dims, 		// npy_intp* dims (for 1D, could just be an int)
-														  NPY_INT64, 	// int typenum,
-														  fulls); 		// void* data
-	if (np_fulls == NULL) {
-		free(fulls);
-		free(partials);
-		return NULL;
-	}
-	PyArray_ENABLEFLAGS(np_fulls, NPY_ARRAY_OWNDATA); // set ownership of data: free when ndarray is garbage collected
-
-	dims[0] = partials_filler_pos/2;
-	np_partials = (PyArrayObject *)PyArray_SimpleNewFromData(2, 			// int nd - length of dims array
-															 dims, 			// npy_intp* dims (for 1D, could just be an int)
-															 NPY_INT64, 	// int typenum,
-															 partials); 	// void* data
-	if (np_partials == NULL) {
-		Py_DECREF(np_fulls); // frees 'fulls' via OWNDATA
-		free(partials);
-		return NULL;
-	}
-	PyArray_ENABLEFLAGS(np_partials, NPY_ARRAY_OWNDATA);
-
-	// Return as tuple. "N" steals the references; "O" would leak one reference
-	// to each array per call (measured at ~890 bytes/call).
-	return Py_BuildValue("NN", np_fulls, np_partials);
+	return ipix_range_arrays(fulls_padded, partials_padded);
 }
 
 static PyObject *
@@ -1114,37 +1177,8 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
-	if (PyObject_GetBuffer(np_poly_ra, &ra_view, PyBUF_FULL_RO) == -1)
+	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n) != 0)
 		return NULL;
-	if (PyObject_GetBuffer(np_poly_dec, &dec_view, PyBUF_FULL_RO) == -1) {
-		PyBuffer_Release(&ra_view);
-		return NULL;
-	}
-
-	// the checks below jump here on error
-	#define POLY_VIEWS_FAIL() { PyBuffer_Release(&ra_view); PyBuffer_Release(&dec_view); return NULL; }
-
-	if (strcmp(ra_view.format, "d") != 0 || strcmp(dec_view.format, "d") != 0) {
-		PyErr_SetString(PyExc_TypeError, "'poly_ra' and 'poly_dec' arrays must be of type np.double.");
-		POLY_VIEWS_FAIL();
-	}
-	if (!PyBuffer_IsContiguous(&ra_view, 'C') || !PyBuffer_IsContiguous(&dec_view, 'C') ||
-		ra_view.ndim != 1 || dec_view.ndim != 1) {
-		PyErr_SetString(PyExc_TypeError, "'poly_ra' and 'poly_dec' must be contiguous 1D arrays.");
-		POLY_VIEWS_FAIL();
-	}
-	if (ra_view.shape[0] != dec_view.shape[0]) {
-		PyErr_SetString(PyExc_ValueError, "'poly_ra' and 'poly_dec' arrays must be the same length.");
-		POLY_VIEWS_FAIL();
-	}
-	n = (int)ra_view.shape[0];
-	if (n < 3 || n > Q3C_MAX_N_POLY_VERTEX) {
-		PyErr_Format(PyExc_ValueError, "The polygon must have between 3 and %d vertices (was given %d).",
-					 Q3C_MAX_N_POLY_VERTEX, n);
-		POLY_VIEWS_FAIL();
-	}
-
-	#undef POLY_VIEWS_FAIL
 
 	result = q3c_check_sphere_point_in_poly(hprm, n,
 											(q3c_coord_t *)ra_view.buf, (q3c_coord_t *)dec_view.buf,
@@ -1159,6 +1193,226 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 		PyErr_SetString(PyExc_ValueError, "The polygon is too large for the Q3C face projection; split it into smaller polygons.");
 		return NULL;
 	}
+
+	return PyBool_FromLong(result);
+}
+
+static PyObject *
+qlsc_q3c_poly_query(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	PyObject *hprm_capsule;
+	PyObject *np_poly_ra, *np_poly_dec;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	q3c_ipix_t partials_padded[2 * Q3C_NPARTIALS];
+	q3c_ipix_t fulls_padded[2 * Q3C_NFULLS];
+	// The per-face projection of the polygon. Unlike q3c_check_sphere_point_in_poly,
+	// which keeps one projection per face at once, q3c_poly_query reprojects into
+	// these same arrays as it walks the faces, so one row each is right; they only
+	// have to hold one vertex per polygon vertex.
+	q3c_coord_t x[Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t y[Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t ax[Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t ay[Q3C_MAX_N_POLY_VERTEX];
+	q3c_poly qp;
+	char too_large = 0;
+	int n, overflowed;
+	Py_buffer ra_view, dec_view;
+
+	static char *kwlist[] = {"hprm", "poly_ra", "poly_dec", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "OOO", // 3 objects
+									 kwlist,
+									 &hprm_capsule, &np_poly_ra, &np_poly_dec))
+	{
+		// unable to parse inputs -> raise exception
+		return NULL;
+	}
+
+	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
+	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n) != 0)
+		return NULL;
+
+	// q3c_project_poly only reads ra,dec; the projections are written to x,y,ax,ay
+	qp.n = n;
+	qp.ra  = (q3c_coord_t *)ra_view.buf;
+	qp.dec = (q3c_coord_t *)dec_view.buf;
+	qp.x = x;
+	qp.y = y;
+	qp.ax = ax;
+	qp.ay = ay;
+
+	// q3c_poly_query returns early without filling the output arrays when the
+	// polygon is too large, so they are initialized here first
+	init_padded_ranges(fulls_padded, partials_padded);
+	overflowed = q3c_poly_query(hprm, &qp, fulls_padded, partials_padded, &too_large);
+
+	PyBuffer_Release(&ra_view);
+	PyBuffer_Release(&dec_view);
+
+	if (overflowed) {
+		char query[64];
+		snprintf(query, sizeof query, "the given polygon (%d vertices)", n);
+		raise_query_overflow("q3c_poly_query", query);
+		return NULL;
+	}
+	// checked before the arrays are read: too_large means they were never filled
+	if (too_large) {
+		PyErr_SetString(PyExc_ValueError, "The polygon is too large for the Q3C face projection; "
+										  "split it into smaller polygons.");
+		return NULL;
+	}
+
+	return ipix_range_arrays(fulls_padded, partials_padded);
+}
+
+// Validate the parameters shared by the ellipse functions. Returns 0 on success,
+// -1 with an exception set otherwise. Note that a non-finite or out of range
+// axis_ratio would otherwise reach q3c as a NaN eccentricity (sqrt of a negative),
+// and non-finite coordinates reach undefined float->int conversions inside q3c
+// (upstream issue #52).
+static int
+validate_ellipse_parameters(q3c_coord_t dec_cen, q3c_coord_t semi_major_axis,
+							q3c_coord_t axis_ratio, q3c_coord_t position_angle)
+{
+	char msg[160];
+
+	if (!isfinite(semi_major_axis) || !isfinite(axis_ratio) || !isfinite(position_angle)) {
+		PyErr_SetString(PyExc_ValueError, "The 'semi_major_axis', 'axis_ratio' and 'position_angle' "
+										  "values must be finite.");
+		return -1;
+	}
+	if (q3c_fabs(dec_cen) > 90) {
+		// (PyErr_Format does not support float conversions, hence snprintf)
+		snprintf(msg, sizeof msg, "The 'dec' value must be in the range [-90,90] (was given %.17g).", dec_cen);
+		PyErr_SetString(PyExc_ValueError, msg);
+		return -1;
+	}
+	if (semi_major_axis < 0) {
+		snprintf(msg, sizeof msg, "The 'semi_major_axis' value must not be negative (was given %.17g).",
+				 semi_major_axis);
+		PyErr_SetString(PyExc_ValueError, msg);
+		return -1;
+	}
+	if (!(axis_ratio > 0 && axis_ratio <= 1)) {
+		snprintf(msg, sizeof msg, "The 'axis_ratio' value must be in the range (0,1] (was given %.17g).",
+				 axis_ratio);
+		PyErr_SetString(PyExc_ValueError, msg);
+		return -1;
+	}
+	return 0;
+}
+
+// q3c takes the eccentricity, while the value everything else here (and q3c's own
+// SQL interface) speaks in is the axis ratio b/a. This is the conversion q3c.c makes.
+static q3c_coord_t
+ellipse_eccentricity(q3c_coord_t axis_ratio)
+{
+	return q3c_sqrt(1 - axis_ratio * axis_ratio);
+}
+
+static PyObject *
+qlsc_q3c_ellipse_query(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	PyObject *hprm_capsule;
+	q3c_coord_t ra_cen, dec_cen, semi_major_axis, axis_ratio, position_angle;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	q3c_ipix_t partials_padded[2 * Q3C_NPARTIALS];
+	q3c_ipix_t fulls_padded[2 * Q3C_NFULLS];
+
+	static char *kwlist[] = {"hprm", "ra", "dec", "semi_major_axis", "axis_ratio", "position_angle", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "Oddddd", // object + 5 doubles
+									 kwlist,
+									 &hprm_capsule, &ra_cen, &dec_cen,
+									 &semi_major_axis, &axis_ratio, &position_angle))
+	{
+		// unable to parse inputs -> raise exception
+		return NULL;
+	}
+
+	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
+	if (!isfinite(ra_cen) || !isfinite(dec_cen)) {
+		PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' values must be finite.");
+		return NULL;
+	}
+	if (validate_ellipse_parameters(dec_cen, semi_major_axis, axis_ratio, position_angle) != 0)
+		return NULL;
+
+	ra_cen = UNWRAP_RA(ra_cen);
+
+	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
+	init_padded_ranges(fulls_padded, partials_padded);
+	if (q3c_ellipse_query(hprm, ra_cen, dec_cen, semi_major_axis,
+						  ellipse_eccentricity(axis_ratio), position_angle,
+						  fulls_padded, partials_padded))
+	{
+		// %.17g preserves full double precision so the report is exactly reproducible
+		char query[384];
+		snprintf(query, sizeof query,
+				 "ra=%.17g, dec=%.17g, semi_major_axis=%.17g, axis_ratio=%.17g, position_angle=%.17g "
+				 "(degrees; the ra value is normalized to [0,360])",
+				 ra_cen, dec_cen, semi_major_axis, axis_ratio, position_angle);
+		raise_query_overflow("q3c_ellipse_query", query);
+		return NULL;
+	}
+
+	return ipix_range_arrays(fulls_padded, partials_padded);
+}
+
+static PyObject *
+qlsc_q3c_in_ellipse(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	q3c_coord_t ra, dec;                 // the point being tested
+	q3c_coord_t ra_cen, dec_cen;         // the center of the ellipse
+	q3c_coord_t semi_major_axis, axis_ratio, position_angle;
+
+	// internal variables
+	char result;
+
+	static char *kwlist[] = {"ra", "dec", "ra_cen", "dec_cen",
+							 "semi_major_axis", "axis_ratio", "position_angle", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "ddddddd", // 7 doubles
+									 kwlist,
+									 &ra, &dec, &ra_cen, &dec_cen,
+									 &semi_major_axis, &axis_ratio, &position_angle))
+	{
+		// unable to parse inputs -> raise exception
+		return NULL;
+	}
+
+	if (!isfinite(ra) || !isfinite(dec) || !isfinite(ra_cen) || !isfinite(dec_cen)) {
+		PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' values must be finite.");
+		return NULL;
+	}
+	if (validate_ellipse_parameters(dec_cen, semi_major_axis, axis_ratio, position_angle) != 0)
+		return NULL;
+	if (q3c_fabs(dec) > 90) {
+		char msg[160];
+		snprintf(msg, sizeof msg, "The 'dec' value must be in the range [-90,90] (was given %.17g).", dec);
+		PyErr_SetString(PyExc_ValueError, msg);
+		return NULL;
+	}
+
+	// argument order as in q3c.c's pgq3c_in_ellipse: center first, then the point
+	result = q3c_in_ellipse(ra_cen, dec_cen, ra, dec, semi_major_axis,
+							ellipse_eccentricity(axis_ratio), position_angle);
 
 	return PyBool_FromLong(result);
 }
@@ -1188,7 +1442,10 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"xy2ang", (PyCFunction)qlsc_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
 	{"xy2facenum", (PyCFunction)qlsc_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
 	{"check_sphere_point_in_poly", (PyCFunction)qlsc_q3c_check_sphere_point_in_poly, METH_VARARGS|METH_KEYWORDS, "Test whether an ra,dec point lies inside a spherical polygon."},
-	{"radial_query", (PyCFunction)qlsc_q3c_radial_query, METH_VARARGS|METH_KEYWORDS, ""},
+	{"in_ellipse", (PyCFunction)qlsc_q3c_in_ellipse, METH_VARARGS|METH_KEYWORDS, "Test whether an ra,dec point lies inside an ellipse on the sphere."},
+	{"radial_query", (PyCFunction)qlsc_q3c_radial_query, METH_VARARGS|METH_KEYWORDS, "Return the (fulls,partials) ipix ranges covering a cone."},
+	{"poly_query", (PyCFunction)qlsc_q3c_poly_query, METH_VARARGS|METH_KEYWORDS, "Return the (fulls,partials) ipix ranges covering a spherical polygon."},
+	{"ellipse_query", (PyCFunction)qlsc_q3c_ellipse_query, METH_VARARGS|METH_KEYWORDS, "Return the (fulls,partials) ipix ranges covering an ellipse on the sphere."},
 	{NULL, NULL, 0, NULL}	// sentinel
 };
 

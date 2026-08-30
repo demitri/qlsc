@@ -26,6 +26,29 @@
   without a key are not represented in `keys()` at all (they can only be removed
   by coordinate). A non-string key raises `TypeError` rather than silently missing:
   the underlying column has SQLite's TEXT affinity.
+* `QLSCIndex.polygon_query(polygon)` and
+  `QLSCIndex.ellipse_query(ra, dec, semi_major_axis, axis_ratio, position_angle)`
+  join `radial_query` as region searches over the index. Both take the coarse ipix
+  ranges from the embedded Q3C code (`q3c_poly_query`, `q3c_ellipse_query`, newly
+  exported from the C extension) and then filter every candidate exactly, so the
+  result is precisely the set of indexed points inside the region. `polygon_query`
+  takes the polygon in the same form as `QLSC.point_in_polygon` and supports
+  `return_key`; `ellipse_query` supports `return_key` and `return_distance` (the
+  separation from the center of the ellipse), accepts `astropy.units.Quantity`
+  angles, and with `axis_ratio=1` returns exactly what `radial_query` does for the
+  same radius.
+
+  Concave polygons are supported. Q3C's coarse coverage step over-covers them —
+  it calls a pixel fully covered when all four of its corners are inside the
+  polygon, which a notch can escape (upstream issue #55) — but over-coverage only
+  enlarges the candidate set, and the exact filter removes the extras. The polygon
+  must be small enough to project onto a single cube face, roughly 23 degrees
+  across; anything larger raises `ValueError` rather than returning a partial answer.
+* `QLSC.point_in_ellipse(ra, dec, ra_cen, dec_cen, semi_major_axis, axis_ratio, position_angle)`
+  tests whether a point lies inside an ellipse on the sphere, as a sibling of
+  `point_in_polygon`. It is the exact test `ellipse_query` filters with, and wraps
+  Q3C's own `q3c_in_ellipse`. Like Q3C's SQL interface it takes the axis ratio
+  (semi-minor over semi-major, in `(0,1]`), not the eccentricity.
 * `QLSC.ipix_neighbors(ipix)` returns the pixels touching a given pixel, as a sorted
   array of unique ipix values — the building block for region growing and
   neighborhood searches. Eight neighbors in the interior of a cube face; **seven**

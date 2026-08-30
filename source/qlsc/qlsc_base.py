@@ -61,6 +61,68 @@ def _sindist2deg(value:float) -> float:
 		raise ValueError(f"A sindist value outside [0,1] cannot be an angular separation; was given '{value}'.")
 	return degrees(2. * asin(sqrt(min(max(value, 0.), 1.))))
 
+def _polygon_ra_dec(polygon:Iterable) -> Tuple[np.ndarray, np.ndarray]:
+	'''
+	Validate a polygon given as an array of [ra,dec] vertex pairs and return its ra
+	and dec values as separate contiguous double arrays, as the C layer requires.
+
+	The vertex count is not checked here: the C layer knows the limit
+	(``Q3C_MAX_N_POLY_VERTEX``) and reports it.
+
+	:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2)
+	:returns: a tuple of (ra, dec) arrays
+	'''
+	poly = np.asarray(polygon, dtype=np.double)
+	if poly.ndim != 2 or poly.shape[1] != 2:
+		raise ValueError(f"The polygon must be an array of [ra,dec] pairs with shape (n,2); was given shape {poly.shape}.")
+	if not np.isfinite(poly).all():
+		raise ValueError("The polygon vertex values must all be finite.")
+	if not ((-90 <= poly[:,1]).all() and (poly[:,1] <= 90).all()):
+		raise ValueError("The polygon vertex dec values must be in the range [-90,90].")
+
+	return np.ascontiguousarray(poly[:,0]), np.ascontiguousarray(poly[:,1])
+
+def _degrees(value:Union[float, "Quantity"], name:str) -> float:
+	'''
+	Interpret an angle given either as a number of degrees or as an astropy
+	:class:`~astropy.units.Quantity`.
+
+	:param value: the angle
+	:param name: the parameter name, for error messages
+	:returns: the angle in degrees as a float
+	'''
+	if astropy_available and isinstance(value, Quantity):
+		value = value.to(u.deg).value
+	return _as_float_scalar(value, name)
+
+def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:list,
+				  return_key:bool, return_distance:bool):
+	'''
+	Assemble the return value shared by the region query methods.
+
+	:param match_ra: the ra values of the matches
+	:param match_dec: the dec values of the matches
+	:param match_key: the key values of the matches, if they were collected
+	:param match_distance: the angular separations of the matches, if they were collected
+	:param return_key: whether the "key" field was requested
+	:param return_distance: whether the "distance" field was requested
+	:returns: an array of shape (n,2) if neither flag is set, otherwise a :class:`numpy.recarray`
+	'''
+	if return_key or return_distance:
+		arrays = [match_ra, match_dec]
+		names = ["ra", "dec"]
+		if return_key:
+			arrays.append(match_key)
+			names.append("key")
+		if return_distance:
+			arrays.append(match_distance)
+			names.append("distance")
+		# np.rec is the public spelling of this module; np.core.records is
+		# deprecated in NumPy 1.25+ and gone from the NumPy 2 namespace.
+		return np.rec.fromarrays(arrays, names=",".join(names))
+	else:
+		return np.squeeze(np.dstack((match_ra,match_dec)))
+
 class QLSC:
 	'''
 	A class that describes a quadrilaterized spherical cube (QLSC).
@@ -687,18 +749,53 @@ class QLSC:
 		if not (-90 <= dec <= 90):
 			ra, dec = _normalize_ang(ra, dec)
 
-		poly = np.asarray(polygon, dtype=np.double)
-		if poly.ndim != 2 or poly.shape[1] != 2:
-			raise ValueError(f"The polygon must be an array of [ra,dec] pairs with shape (n,2); was given shape {poly.shape}.")
-		if not np.isfinite(poly).all():
-			raise ValueError("The polygon vertex values must all be finite.")
-		if not ((-90 <= poly[:,1]).all() and (poly[:,1] <= 90).all()):
-			raise ValueError("The polygon vertex dec values must be in the range [-90,90].")
-
-		poly_ra = np.ascontiguousarray(poly[:,0])
-		poly_dec = np.ascontiguousarray(poly[:,1])
+		poly_ra, poly_dec = _polygon_ra_dec(polygon)
 
 		return q3c.check_sphere_point_in_poly(self._hprm, ra, dec, poly_ra, poly_dec)
+
+	def point_in_ellipse(self, ra:float=None, dec:float=None, ra_cen:float=None, dec_cen:float=None,
+						 semi_major_axis:Union[float, "Quantity"]=None, axis_ratio:float=None,
+						 position_angle:Union[float, "Quantity"]=0.0) -> bool:
+		'''
+		Test whether an ra,dec point lies inside an ellipse on the sphere.
+
+		The ellipse is the one Q3C defines: centered on (``ra_cen``, ``dec_cen``), with the
+		given semi-major axis, axis ratio (semi-minor over semi-major, in ``(0,1]``, where 1
+		is a circle) and position angle. This is the exact containment test used to filter
+		:py:func:`QLSCIndex.ellipse_query` results, and its answer does not depend on this
+		object's depth.
+
+		:param ra: right ascension of the point to test (degrees)
+		:param dec: declination of the point to test (degrees)
+		:param ra_cen: right ascension of the center of the ellipse (degrees)
+		:param dec_cen: declination of the center of the ellipse (degrees)
+		:param semi_major_axis: semi-major axis of the ellipse (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
+		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:returns: True if the point is inside the ellipse
+		'''
+		if any([x is None for x in [ra, dec, ra_cen, dec_cen, semi_major_axis, axis_ratio]]):
+			raise ValueError("Values for 'ra', 'dec', 'ra_cen', 'dec_cen', 'semi_major_axis' and 'axis_ratio' must all be specified.")
+
+		# _as_float_scalar (via _degrees) also rejects non-finite values
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
+		ra_cen = _as_float_scalar(ra_cen, "ra_cen")
+		dec_cen = _as_float_scalar(dec_cen, "dec_cen")
+		semi_major_axis = _degrees(semi_major_axis, "semi_major_axis")
+		axis_ratio = _as_float_scalar(axis_ratio, "axis_ratio")
+		position_angle = _degrees(position_angle, "position_angle")
+
+		if not (-90 <= dec <= 90):
+			ra, dec = _normalize_ang(ra, dec)
+		if not (-90 <= dec_cen <= 90):
+			ra_cen, dec_cen = _normalize_ang(ra_cen, dec_cen)
+
+		# the remaining validation (axis ratio range, negative semi-major axis) is
+		# performed in the C layer, which raises ValueError
+		return q3c.in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
+							  semi_major_axis=semi_major_axis, axis_ratio=axis_ratio,
+							  position_angle=position_angle)
 
 
 class QLSCIndex:
@@ -742,7 +839,7 @@ class QLSCIndex:
 		self.description = description
 		self.memory_db_connection = None # this must persist
 		self._closed = False
-		self._query_qlsc = None # depth-30 QLSC used for radial queries; created on demand
+		self._query_qlsc = None # depth-30 QLSC used for region queries; created on demand
 		#self._db = None # SQLite database connection, defined in _initial_database_connection
 
 		self.database_tablename = "qlsc_ipix"
@@ -1270,6 +1367,98 @@ class QLSCIndex:
 			if not self._is_in_memory_db():
 				connection.close()
 
+	def _query_scheme(self) -> QLSC:
+		'''
+		Return the depth-30 :class:`QLSC` used to compute candidate ipix ranges.
+
+		Every region query (cone, polygon, ellipse) is computed at depth 30 and the
+		resulting ranges mapped down to the index's depth: the underlying Q3C code
+		produces degenerate (empty) ranges for some queries at small nside values,
+		since upstream Q3C is only ever exercised at depth 30.
+		'''
+		if self._query_qlsc is None:
+			self._query_qlsc = self.qlsc if self.qlsc.depth == 30 else QLSC(depth=30)
+		return self._query_qlsc
+
+	def _index_depth_ranges(self, fulls:np.ndarray, partials:np.ndarray) -> list:
+		'''
+		Map the depth-30 candidate ipix ranges returned by the C layer down to this
+		index's depth, then merge them.
+
+		The half-open ranges are widened, never narrowed: the upper bound is rounded
+		up so a pixel of the index that is only partly covered by a depth-30 range is
+		still a candidate. Q3C's output contains duplicate and overlapping ranges,
+		especially after mapping down to lower depths, so the result is sorted and
+		merged into disjoint ranges.
+
+		:param fulls: the fully covered depth-30 ipix ranges, shape (n,2)
+		:param partials: the partially covered depth-30 ipix ranges, shape (n,2)
+		:returns: a sorted list of disjoint [min_ipix, max_ipix) pairs at the index depth
+		'''
+		# number of ipix bits to shift from depth 30 down to the index depth
+		k = 2 * (30 - self.qlsc.depth)
+
+		ranges = list()
+		for min_ipix,max_ipix in np.vstack((fulls, partials)):
+			if k > 0:
+				min_ipix = min_ipix >> k
+				max_ipix = (max_ipix + (1 << k) - 1) >> k # round up so partially covered pixels are kept
+			if min_ipix < max_ipix: # drop empty [a,a) ranges
+				ranges.append([int(min_ipix), int(max_ipix)])
+
+		ranges.sort()
+		merged_ranges = list()
+		for lo,hi in ranges:
+			if merged_ranges and lo <= merged_ranges[-1][1]:
+				merged_ranges[-1][1] = max(merged_ranges[-1][1], hi)
+			else:
+				merged_ranges.append([lo, hi])
+
+		return merged_ranges
+
+	def _candidate_row_query(self, merged_ranges:list, columns:str, description:str) -> str:
+		'''
+		Build the SQL that selects the candidate rows for a region query.
+
+		If the region produced no usable ipix ranges (which should not happen), every
+		row is selected rather than silently returning nothing; the caller's exact
+		filter still gives the right answer, only more slowly, and the fallback is
+		logged as a warning.
+
+		:param merged_ranges: disjoint [min_ipix, max_ipix) pairs at the index depth
+		:param columns: the SQL column list to select
+		:param description: the query, for the warning message
+		:returns: the SQL query string
+		'''
+		if merged_ranges:
+			wheres = " OR ".join(f"(ipix>={lo} AND ipix<{hi})" for lo,hi in merged_ranges)
+			return f"SELECT {columns} FROM {self.database_tablename} WHERE ({wheres})"
+
+		logger.warning(f"The {description} produced no candidate ipix ranges; falling back to scanning the entire index.")
+		return f"SELECT {columns} FROM {self.database_tablename}"
+
+	def _select_candidate_rows(self, query:str):
+		'''
+		Run a candidate row query and yield its rows.
+
+		The connection is opened and closed around the iteration, matching the
+		per-operation connection handling used everywhere else in this class.
+
+		:param query: the SQL produced by :py:func:`_candidate_row_query`
+		:returns: a generator of :class:`sqlite3.Row`
+		'''
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				try:
+					for row in cursor.execute(query):
+						yield row
+				except sqlite3.OperationalError as e:
+					raise RuntimeError(f"Error in accessing database in region query.\n\nQuery: \"{query}\"\n\nError: {e}") from e
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
 	def _find_candidate_ranges(self, ra:float, dec:float, radius:float):
 		'''
 		Return the (fulls, partials) candidate ipix range arrays covering a cone search,
@@ -1292,25 +1481,77 @@ class QLSCIndex:
 		The ranges therefore cover at least the requested cone, possibly more; the
 		caller MUST filter the candidate rows by the radius actually requested.
 		'''
-		if self._query_qlsc is None:
-			self._query_qlsc = self.qlsc if self.qlsc.depth == 30 else QLSC(depth=30)
+		query_hprm = self._query_scheme()._hprm
 
-		initial_search_radius = max(radius, 1e-6)
-		search_radius = initial_search_radius
+		return self._widened_candidate_ranges(lambda size: q3c.radial_query(query_hprm, ra, dec, size),
+											  radius,
+											  f"radial query at (ra={ra}, dec={dec}) with radius={radius} deg")
+
+	def _find_candidate_ellipse_ranges(self, ra:float, dec:float, semi_major_axis:float,
+									   axis_ratio:float, position_angle:float):
+		'''
+		Return the (fulls, partials) candidate ipix range arrays covering an ellipse
+		search, always computed at depth 30.
+
+		The same failure modes as :py:func:`_find_candidate_ranges` apply, for the same
+		reasons, and the same remedy works: growing the semi-major axis while holding the
+		axis ratio and position angle fixed scales both axes up about the same center, so
+		the widened ellipse contains the requested one.
+
+		The ranges therefore cover at least the requested ellipse, possibly more; the
+		caller MUST filter the candidate rows by the ellipse actually requested.
+
+		:param ra: right ascension of the center of the ellipse (degrees)
+		:param dec: declination of the center of the ellipse (degrees)
+		:param semi_major_axis: semi-major axis of the ellipse (degrees)
+		:param axis_ratio: ratio of the semi-minor to the semi-major axis
+		:param position_angle: position angle of the semi-major axis (degrees)
+		:returns: a tuple of the (fulls, partials) depth-30 ipix range arrays
+		'''
+		query_hprm = self._query_scheme()._hprm
+
+		return self._widened_candidate_ranges(
+			lambda size: q3c.ellipse_query(query_hprm, ra, dec, size, axis_ratio, position_angle),
+			semi_major_axis,
+			f"ellipse query at (ra={ra}, dec={dec}) with semi_major_axis={semi_major_axis} deg, "
+			f"axis_ratio={axis_ratio}, position_angle={position_angle} deg")
+
+	def _widened_candidate_ranges(self, region_query, size:float, description:str):
+		'''
+		Run a candidate range search, growing the region until it produces usable ranges.
+
+		For zero and very small (< ~1e-7 deg) regions, q3c produces no ranges at all at
+		some sky positions, and at seam/pole positions its ranges can omit the pixels
+		holding equivalent coordinate representations (e.g. a point stored as ra=360
+		queried as ra=0), so the search uses a size of at least 1e-6 degrees. At rare
+		positions a given size can also overflow q3c's internal range capacity; a larger
+		region produces fewer, coarser ranges, so the size is grown and the search retried
+		on either failure mode, raising only if even a whole-sphere search fails.
+
+		The region searched always contains the region asked for, so the ranges are a
+		superset and the caller's exact filter still gives the right answer.
+
+		:param region_query: a callable taking a size in degrees and returning the (fulls, partials) arrays
+		:param size: the requested size of the region in degrees (a radius or a semi-major axis)
+		:param description: the query, for the warning message
+		:returns: a tuple of the (fulls, partials) depth-30 ipix range arrays
+		'''
+		initial_search_size = max(size, 1e-6)
+		search_size = initial_search_size
 		while True:
 			try:
-				fulls, partials = q3c.radial_query(self._query_qlsc._hprm, ra, dec, search_radius)
+				fulls, partials = region_query(search_size)
 			except q3c.RangeOverflowError:
-				if search_radius >= 180.0:
+				if search_size >= 180.0:
 					raise # even a whole-sphere search failed
-				search_radius = min(search_radius * 10, 180.0)
+				search_size = min(search_size * 10, 180.0)
 				continue
-			if len(fulls) + len(partials) > 0 or search_radius >= 180.0:
+			if len(fulls) + len(partials) > 0 or search_size >= 180.0:
 				break
-			search_radius = min(search_radius * 10, 180.0)
+			search_size = min(search_size * 10, 180.0)
 
-		if search_radius > initial_search_radius:
-			logger.warning(f"The radial query at (ra={ra}, dec={dec}) with radius={radius} deg required widening the candidate search radius to {search_radius} deg; results are correct, but the query may be slower than usual.")
+		if search_size > initial_search_size:
+			logger.warning(f"The {description} required widening the candidate search region to {search_size} deg; results are correct, but the query may be slower than usual.")
 
 		return fulls, partials
 
@@ -1367,90 +1608,218 @@ class QLSCIndex:
 
 		fulls, partials = self._find_candidate_ranges(center_ra, center_dec, radius)
 
-		# number of ipix bits to shift from depth 30 down to the index depth
-		k = 2 * (30 - self.qlsc.depth)
-
 		#logger.debug(f"{center_ra=}, {center_dec=}, {radius=}")
 		#logger.debug(f"{fulls=}, {partials=}")
 
-		ranges = list()
-		for min_ipix,max_ipix in np.vstack((fulls, partials)):
-			if k > 0:
-				min_ipix = min_ipix >> k
-				max_ipix = (max_ipix + (1 << k) - 1) >> k # round up so partially covered pixels are kept
-			if min_ipix < max_ipix: # drop empty [a,a) ranges
-				ranges.append([int(min_ipix), int(max_ipix)])
-
-		# merge overlapping/adjacent ranges - q3c's output contains duplicates and
-		# overlaps, especially after mapping down to lower depths
-		ranges.sort()
-		merged_ranges = list()
-		for lo,hi in ranges:
-			if merged_ranges and lo <= merged_ranges[-1][1]:
-				merged_ranges[-1][1] = max(merged_ranges[-1][1], hi)
-			else:
-				merged_ranges.append([lo, hi])
+		merged_ranges = self._index_depth_ranges(fulls, partials)
 
 		columns = "ra,dec,key" if return_key else "ra,dec"
-		if merged_ranges:
-			wheres = " OR ".join(f"(ipix>={lo} AND ipix<{hi})" for lo,hi in merged_ranges)
-			query = f"SELECT {columns} FROM {self.database_tablename} WHERE ({wheres})"
-		else:
-			# If the candidate search produced no usable ranges (which should not happen),
-			# scan every row rather than silently missing points; the exact filter
-			# below preserves correctness.
-			logger.warning(f"The radial query at (ra={center_ra}, dec={center_dec}) with radius={radius} deg produced no candidate ipix ranges; falling back to scanning the entire index.")
-			query = f"SELECT {columns} FROM {self.database_tablename}"
+		# If the candidate search produced no usable ranges (which should not happen),
+		# every row is scanned rather than silently missing points; the exact filter
+		# below preserves correctness either way.
+		query = self._candidate_row_query(merged_ranges, columns,
+										  f"radial query at (ra={center_ra}, dec={center_dec}) with radius={radius} deg")
 
 		cone_radius = pow(sin(deg2rad(radius)/2.), 2)
 		center_canonical = _canonical_position(center_ra, center_dec)
 
-		connection = self._new_db_connection()
-		try:
-			with contextlib.closing(connection.cursor()) as cursor:
-				try:
-					for row in cursor.execute(query):
-						row_ra, row_dec = row["ra"], row["dec"]
-						# Filter out points outside radius (inclusive, so e.g. radius=180 includes
-						# an antipodal point). Canonically equal representations of the center
-						# (e.g. ra=360 vs ra=0, or any ra at a pole) always match: sindist between
-						# equivalent representations leaves tiny nonzero floating point residuals,
-						# which would otherwise exclude them for zero or near-zero radii.
-						if _canonical_position(row_ra, row_dec) == center_canonical:
-							# the same point on the sphere, whatever the residual says
-							is_match, row_sindist = True, 0.0
-						elif radius > 0:
-							row_sindist = sindist(row_ra, row_dec, center_ra, center_dec)
-							is_match = row_sindist <= cone_radius
-						else:
-							# a zero-radius query matches only canonically equal points;
-							# sindist is not needed and deliberately not computed
-							is_match, row_sindist = False, None
-						if is_match:
-							match_ra.append(row_ra)
-							match_dec.append(row_dec)
-							if return_key:
-								match_key.append(row["key"])
-							if return_distance:
-								match_distance.append(_sindist2deg(row_sindist))
-				except sqlite3.OperationalError as e:
-					raise RuntimeError(f"Error in accessing database in radial query.\n\nQuery: \"{query}\"\n\nError: {e}") from e
-		finally:
-			if not self._is_in_memory_db():
-				connection.close()
+		for row in self._select_candidate_rows(query):
+			row_ra, row_dec = row["ra"], row["dec"]
+			# Filter out points outside radius (inclusive, so e.g. radius=180 includes
+			# an antipodal point). Canonically equal representations of the center
+			# (e.g. ra=360 vs ra=0, or any ra at a pole) always match: sindist between
+			# equivalent representations leaves tiny nonzero floating point residuals,
+			# which would otherwise exclude them for zero or near-zero radii.
+			if _canonical_position(row_ra, row_dec) == center_canonical:
+				# the same point on the sphere, whatever the residual says
+				is_match, row_sindist = True, 0.0
+			elif radius > 0:
+				row_sindist = sindist(row_ra, row_dec, center_ra, center_dec)
+				is_match = row_sindist <= cone_radius
+			else:
+				# a zero-radius query matches only canonically equal points;
+				# sindist is not needed and deliberately not computed
+				is_match, row_sindist = False, None
+			if is_match:
+				match_ra.append(row_ra)
+				match_dec.append(row_dec)
+				if return_key:
+					match_key.append(row["key"])
+				if return_distance:
+					match_distance.append(_sindist2deg(row_sindist))
 
-		if return_key or return_distance:
-			arrays = [match_ra, match_dec]
-			names = ["ra", "dec"]
-			if return_key:
-				arrays.append(match_key)
-				names.append("key")
-			if return_distance:
-				arrays.append(match_distance)
-				names.append("distance")
-			# np.rec is the public spelling of this module; np.core.records is
-			# deprecated in NumPy 1.25+ and gone from the NumPy 2 namespace.
-			return np.rec.fromarrays(arrays, names=",".join(names))
-		else:
-			return np.squeeze(np.dstack((match_ra,match_dec)))
+		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance)
+
+	def polygon_query(self, polygon:Iterable=None, return_key:bool=False) -> np.ndarray:
+		'''
+		Return the points of the index that fall inside a polygon on the sphere.
+
+		The polygon is an array of [ra,dec] vertices with shape (n,2), in the same form
+		:py:func:`QLSC.point_in_polygon` accepts (and, for example, the form
+		:py:func:`QLSC.ipix2polygon` returns); the edges between vertices follow great
+		circles, the winding order does not matter, and the first vertex must not be
+		repeated as the last. Both convex and concave polygons are supported.
+
+		The polygon must be small enough to project onto a single cube face — in practice
+		up to roughly 23 degrees across — and a ``ValueError`` is raised when it is not.
+		This is a tighter limit than :py:func:`QLSC.point_in_polygon`, which only has to
+		project the polygon far enough to place one point in it.
+
+		Matches are found by selecting the pixels covering the polygon and then testing
+		every candidate with the same exact containment test :py:func:`QLSC.point_in_polygon`
+		uses, so the result contains exactly the indexed points inside the polygon. (This
+		is what makes concave polygons safe: the coverage step is allowed to be generous,
+		and for a concave polygon it is — Q3C calls a pixel of the coarse search fully
+		covered when all four of its corners are inside the polygon, which for a concave
+		polygon can include area outside it. That produces extra candidates, never missing
+		ones, and the extras are removed by the exact test.)
+
+		The default return value is an array of the matching coordinates with shape (n,2).
+		If ``return_key`` is set the result is instead a :class:`numpy.recarray` with the
+		fields "ra", "dec" and "key". There is no ``return_distance``: a polygon has no
+		center to measure a separation from.
+
+		:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2)
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:returns: an array of matches with shape (n,2), or a :class:`numpy.recarray` with the fields ``ra,dec,key``
+		'''
+		self._ensure_open()
+
+		if polygon is None:
+			raise ValueError("A value for 'polygon' must be specified.")
+
+		poly_ra, poly_dec = _polygon_ra_dec(polygon)
+
+		match_ra = list()
+		match_dec = list()
+		match_key = list()
+
+		# The candidate ranges are always computed at depth 30; q3c_poly_query raises
+		# ValueError (via the C layer) when the polygon is too large to project.
+		fulls, partials = q3c.poly_query(self._query_scheme()._hprm, poly_ra, poly_dec)
+
+		merged_ranges = self._index_depth_ranges(fulls, partials)
+
+		columns = "ra,dec,key" if return_key else "ra,dec"
+		query = self._candidate_row_query(merged_ranges, columns,
+										  f"polygon query over a polygon with {len(poly_ra)} vertices")
+
+		# the C function is called directly rather than through QLSC.point_in_polygon:
+		# the vertices have already been validated and converted above, and doing that
+		# again for every candidate row is the whole cost of this loop. The test itself
+		# is identical.
+		query_hprm = self._query_scheme()._hprm
+		for row in self._select_candidate_rows(query):
+			row_ra, row_dec = row["ra"], row["dec"]
+			if q3c.check_sphere_point_in_poly(query_hprm, row_ra, row_dec, poly_ra, poly_dec):
+				match_ra.append(row_ra)
+				match_dec.append(row_dec)
+				if return_key:
+					match_key.append(row["key"])
+
+		return _match_result(match_ra, match_dec, match_key, None, return_key, False)
+
+	def ellipse_query(self, ra:float=None, dec:float=None, semi_major_axis:Union[float, "Quantity"]=None,
+					  axis_ratio:float=None, position_angle:Union[float, "Quantity"]=0.0,
+					  return_key:bool=False, return_distance:bool=False) -> np.ndarray:
+		'''
+		Return the points of the index that fall inside an ellipse on the sphere.
+
+		The ellipse is centered on (``ra``, ``dec``) with the given semi-major axis, axis
+		ratio (semi-minor over semi-major, in ``(0,1]``) and position angle. An
+		``axis_ratio`` of 1 is a circle and returns the same points as
+		:py:func:`radial_query` with that radius.
+
+		Matches are found by selecting the pixels covering the ellipse and then testing
+		every candidate with :py:func:`QLSC.point_in_ellipse`, the exact containment test,
+		so the result contains exactly the indexed points inside the ellipse.
+
+		The default return value is an array of the matching coordinates with shape (n,2).
+		If either ``return_key`` or ``return_distance`` is set, the result is instead a
+		:class:`numpy.recarray` whose fields are "ra", "dec", then "key" and "distance" for
+		whichever flags were set. The "distance" field is the angular separation between
+		the center of the ellipse and each match, in degrees — not a distance to the
+		ellipse's boundary.
+
+		:param ra: right ascension of the center of the ellipse (degrees)
+		:param dec: declination of the center of the ellipse (degrees)
+		:param semi_major_axis: semi-major axis of the ellipse (degrees), in the range [0,180], accepts a `float` value or `astropy.units.Quantity`
+		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
+		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_distance: if set to True, include the angular separation from the center in degrees
+		:returns: an array of matches with shape (n,2) if both flags are False; otherwise a :class:`numpy.recarray` with the fields ``ra,dec`` plus ``key`` and/or ``distance``
+		'''
+		self._ensure_open()
+
+		if any([x is None for x in [ra, dec, semi_major_axis, axis_ratio]]):
+			raise ValueError("Values for 'ra', 'dec', 'semi_major_axis' and 'axis_ratio' must all be specified.")
+
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
+		semi_major_axis = _degrees(semi_major_axis, "semi_major_axis")
+		axis_ratio = _as_float_scalar(axis_ratio, "axis_ratio")
+		position_angle = _degrees(position_angle, "position_angle")
+
+		if abs(dec) > 90:
+			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
+
+		# the same bound radial_query places on its radius: beyond 180 degrees a
+		# semi-major axis has no meaning on a sphere
+		if not (0 <= semi_major_axis <= 180):
+			raise ValueError(f"The value for semi_major_axis must be in the range [0,180]; was given '{semi_major_axis}'.")
+		if not (0 < axis_ratio <= 1):
+			raise ValueError(f"The value for axis_ratio must be in the range (0,1]; was given '{axis_ratio}'.")
+
+		center_ra = ra
+		center_dec = dec
+
+		match_ra = list()
+		match_dec = list()
+		match_key = list()
+		match_distance = list()
+
+		# The candidate ranges are always computed at depth 30.
+		fulls, partials = self._find_candidate_ellipse_ranges(center_ra, center_dec, semi_major_axis,
+															  axis_ratio, position_angle)
+
+		merged_ranges = self._index_depth_ranges(fulls, partials)
+
+		columns = "ra,dec,key" if return_key else "ra,dec"
+		query = self._candidate_row_query(merged_ranges, columns,
+										  f"ellipse query at (ra={center_ra}, dec={center_dec}) with "
+										  f"semi_major_axis={semi_major_axis} deg, axis_ratio={axis_ratio}, "
+										  f"position_angle={position_angle} deg")
+
+		center_canonical = _canonical_position(center_ra, center_dec)
+
+		for row in self._select_candidate_rows(query):
+			row_ra, row_dec = row["ra"], row["dec"]
+			# As in radial_query, a point that is an equivalent representation of the
+			# center (ra=360 vs ra=0, any ra at a pole) is inside any ellipse of
+			# non-negative size, whatever floating point residual the test computes.
+			if _canonical_position(row_ra, row_dec) == center_canonical:
+				is_match = True
+			else:
+				# the C function is called directly rather than through
+				# QLSC.point_in_ellipse: the parameters have already been validated
+				# above, and revalidating them for every candidate row is the whole
+				# cost of this loop. The test itself is identical.
+				is_match = q3c.in_ellipse(ra=row_ra, dec=row_dec,
+										  ra_cen=center_ra, dec_cen=center_dec,
+										  semi_major_axis=semi_major_axis,
+										  axis_ratio=axis_ratio,
+										  position_angle=position_angle)
+			if is_match:
+				match_ra.append(row_ra)
+				match_dec.append(row_dec)
+				if return_key:
+					match_key.append(row["key"])
+				if return_distance:
+					if _canonical_position(row_ra, row_dec) == center_canonical:
+						match_distance.append(0.0)
+					else:
+						match_distance.append(_sindist2deg(sindist(row_ra, row_dec, center_ra, center_dec)))
+
+		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance)
 
