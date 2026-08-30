@@ -41,6 +41,29 @@ sqlite3.register_adapter(np.int64, int)
 
 logger = logging.getLogger("qlsc")
 
+def wrap_longitude(longitude:Union[float, Iterable]) -> Union[float, np.ndarray]:
+	'''
+	Express an angle in the geographic longitude convention, the half-open range [-180,180).
+
+	This is the mapping between right ascension, which this package reports in [0,360),
+	and longitude: ``wrap_longitude(286) == -74``. It is periodic in 360 degrees, so any
+	input is accepted, and it is idempotent. The range is half open at +180: a longitude
+	of exactly 180 comes back as -180, which is the same meridian and the convention
+	astropy's ``Angle.wrap_at(180 * u.deg)`` uses.
+
+	Scalars return a float and array-likes a NumPy array.
+
+	:param longitude: an angle, or an array-like of angles, in degrees
+	:returns: the same angle(s) in [-180,180)
+	'''
+	if np.isscalar(longitude):
+		return float(((float(longitude) + 180.) % 360.) - 180.)
+	values = np.asarray(longitude, dtype=np.double)
+	wrapped = ((values + 180.) % 360.) - 180.
+	if wrapped.ndim == 0:
+		return float(wrapped)
+	return wrapped
+
 def _canonical_position(ra:float, dec:float) -> Tuple[float, float]:
 	'''
 	Reduce equivalent spherical coordinate representations of the same point to a single form:
@@ -426,6 +449,21 @@ class QLSC:
 	def __repr__(self):
 		return f"<{self.__class__.__module__.split('.')[0]}.{self.__class__.__name__} at {hex(id(self))}, depth={self.depth}>"
 
+	def _longitude(self, ra:Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+		'''
+		Express a computed right ascension in this scheme's longitude convention.
+
+		This class reports right ascension in [0,360) and returns the value unchanged;
+		:py:class:`GeoQLSC` overrides this to wrap into [-180,180). It is the single
+		place the convention is applied, so every method that computes a longitude
+		(:py:func:`ipix2ang`, :py:func:`xy2ang`, and :py:func:`ipix2polygon` through it)
+		follows whichever convention the object was built with.
+
+		:param ra: a right ascension, or an array of them, in degrees
+		:returns: the same angle(s) in this scheme's convention
+		'''
+		return ra
+
 	def ang2ipix(self, ra:Union[float,Iterable]=None, dec:Union[float,Iterable]=None, points:Iterable=None) -> Union[float,np.ndarray]:
 		'''
 		Convert ra,dec positions to an ipix number.
@@ -626,6 +664,7 @@ class QLSC:
 		:returns: the ra,dec of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input); a :class:`~astropy.coordinates.SkyCoord` if ``return_skycoord`` is set
 		'''
 		ra, dec = q3c.ipix2ang(self._hprm, self._validated_ipix(ipix))
+		ra = self._longitude(ra)
 		if return_skycoord:
 			return _skycoord_from_degrees(ra, dec, "Returning a pixel center as a SkyCoord")
 		return ra, dec
@@ -713,11 +752,13 @@ class QLSC:
 			for p in points:
 				ang[idx,:] = q3c.xy2ang(p[0], p[1], facenum)
 				idx +=1 # seriously, fuck Numpy
+			ang[:,0] = self._longitude(ang[:,0])
 			if return_skycoord:
 				return _skycoord_from_degrees(ang[:,0], ang[:,1], "Returning face coordinates as a SkyCoord")
 			return ang
 		else:
 			ra, dec = q3c.xy2ang(x, y, facenum)
+			ra = self._longitude(ra)
 			if return_skycoord:
 				return _skycoord_from_degrees(ra, dec, "Returning a face coordinate as a SkyCoord")
 			return ra, dec
@@ -1369,7 +1410,10 @@ class QLSCIndex:
 				if metadata is None:
 					raise RuntimeError(f"The file at '{self.db_filepath}' has a QLSC index metadata table but no metadata row; the file appears to be corrupted.")
 				if self.qlsc.depth != metadata["depth"]:
-					self.qlsc = QLSC(depth=metadata["depth"])
+					# type(...) rather than QLSC: the scheme carries the longitude
+					# convention (see GeoQLSC), which adopting the file's depth must not
+					# quietly discard
+					self.qlsc = type(self.qlsc)(depth=metadata["depth"])
 				self.name = metadata["index_name"]
 				self.description = metadata["index_description"]
 				return True
@@ -2456,4 +2500,435 @@ class QLSCIndex:
 
 		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance,
 							 MatchArrayShape.STABLE, return_skycoord=return_skycoord)
+
+
+# ---------------------------------------------------------------------------------------
+# Geographic (longitude/latitude) veneer
+#
+# The quadrilateralized spherical cube was devised for the Earth, and the README has said
+# since 2020 that this package "could just as easily be used for latitude and longitude
+# coordinates". The classes below are what that promises: a thin layer over QLSC and
+# QLSCIndex, with no change to the indexing, the geometry, or the C code.
+#
+# The mapping is deliberately small, because most of it is the identity:
+#
+#   * latitude IS declination. Same range, same sign, same meaning. Nothing to convert.
+#   * longitude IS right ascension as an input. Right ascension is periodic and every
+#     entry point in this package already reduces it to [0,360) internally, so a
+#     longitude of -74 is accepted, unchanged, anywhere an ra is.
+#   * longitude differs from right ascension only on the way OUT: this package reports
+#     right ascension in [0,360), while a longitude belongs in [-180,180).
+#
+# So the whole of "lat/lon mode" is the output convention plus vocabulary, which is why
+# it is a subclass rather than a flag threaded through every signature.
+# ---------------------------------------------------------------------------------------
+
+def _lonlat_coordinate_pair(ra, dec, lon, lat, ra_name:str="ra", dec_name:str="dec",
+							lon_name:str="lon", lat_name:str="lat"):
+	'''
+	Resolve a coordinate given in either the ra,dec or the lon,lat spelling.
+
+	The two spellings name the same pair (longitude is right ascension, latitude is
+	declination), so giving both is a mistake worth reporting rather than a choice to
+	make silently. A sky coordinate object or a Quantity is handled exactly as it is for
+	the ra,dec spelling; see :func:`_coordinate_pair`.
+
+	:param ra: the first angle in the astronomical spelling
+	:param dec: the second angle in the astronomical spelling
+	:param lon: the first angle in the geographic spelling
+	:param lat: the second angle in the geographic spelling
+	:param ra_name: the name of the first astronomical parameter, for error messages
+	:param dec_name: the name of the second astronomical parameter, for error messages
+	:param lon_name: the name of the first geographic parameter, for error messages
+	:param lat_name: the name of the second geographic parameter, for error messages
+	:returns: a tuple of (ra, dec) in degrees
+	'''
+	if lon is not None or lat is not None:
+		if ra is not None or dec is not None:
+			raise ValueError(f"'{lon_name}','{lat_name}' and '{ra_name}','{dec_name}' are two spellings of "
+							 f"the same coordinate pair; give one or the other, not both.")
+		return _coordinate_pair(lon, lat, lon_name, lat_name)
+
+	return _coordinate_pair(ra, dec, ra_name, dec_name)
+
+def _geographic_position(ra, dec, lat_name:str="lat"):
+	'''
+	Put a geographic coordinate into the storage convention of :py:class:`GeoQLSCIndex`:
+	longitude in [-180,180), latitude in [-90,90].
+
+	A latitude outside [-90,90] is refused. The astronomical classes reinterpret such a
+	declination as a point on the other side of a pole (with the right ascension moved by
+	180 degrees), which is a reasonable reading of an unnormalized celestial coordinate but
+	not of a latitude: a latitude of 100 is a mistake, and silently relocating the point
+	halfway around the Earth would hide it.
+
+	:param ra: a longitude, or an array of them, in degrees
+	:param dec: a latitude, or an array of them, in degrees
+	:param lat_name: how to refer to the latitude in an error message
+	:returns: a tuple of the (longitude, latitude) values in the storage convention
+	'''
+	if ra is None or dec is None:
+		return ra, dec
+
+	if np.isscalar(dec) or np.ndim(dec) == 0:
+		out_of_range = not (-90 <= float(dec) <= 90)
+	else:
+		latitudes = np.asarray(dec, dtype=np.double)
+		out_of_range = not ((-90 <= latitudes).all() and (latitudes <= 90).all())
+
+	if out_of_range:
+		raise ValueError(f"The '{lat_name}' value(s) must be in the range [-90,90]; a latitude outside it "
+						 f"is not a point on the far side of a pole, it is an error.")
+
+	return wrap_longitude(ra), dec
+
+class GeoQLSC(QLSC):
+	'''
+	A :py:class:`QLSC` that speaks geographic longitude and latitude.
+
+	The quadrilateralized spherical cube was designed for the Earth, and this class is the
+	geographic reading of it — on a perfectly spherical Earth, which is what the scheme
+	segments. **Nothing about the pixelation, the ipix numbering, or the geometry changes**;
+	this is a vocabulary and a convention, not a different index.
+
+	**The mapping, exactly**
+
+	* **Latitude is declination.** Same range [-90,90], same sign (north positive), same
+	  meaning. There is nothing to convert in either direction.
+	* **Longitude is right ascension on the way in.** Right ascension is periodic and every
+	  entry point reduces it internally, so a longitude of -74 may be given anywhere an ra
+	  can, unchanged: ``ang2ipix(-74, 40)`` and ``ang2ipix(286, 40)`` are the same pixel.
+	* **Longitude differs from right ascension on the way out.** :py:class:`QLSC` reports
+	  right ascension in [0,360); this class reports longitude in **[-180,180)**, the
+	  geographic convention. A longitude of exactly 180 is reported as -180, the same
+	  meridian (this is astropy's ``wrap_at(180 * u.deg)`` convention). The public
+	  :py:func:`qlsc.wrap_longitude` performs that mapping on its own.
+
+	The convention applies to **every** method that returns a longitude — the inherited
+	:py:func:`ipix2ang`, :py:func:`xy2ang`, and :py:func:`ipix2polygon` included — so a
+	``GeoQLSC`` never hands back a value in [0,360). The lon/lat spellings below are added
+	on top for readability; the inherited ra/dec names go on working and mean exactly the
+	same thing.
+
+	Note that ``return_skycoord`` still produces an ICRS
+	:class:`~astropy.coordinates.SkyCoord`, which keeps its own [0,360) convention for the
+	``ra`` attribute — astropy's ``coord.ra.wrap_at(180 * u.deg)`` converts it.
+
+	To index points, pair this with :py:class:`GeoQLSCIndex` rather than
+	:py:class:`QLSCIndex`. A plain index stores and returns the coordinate values it was
+	given, so it would report longitudes in whatever range they were added with while this
+	object's geometry methods reported [-180,180) — two conventions on one index.
+
+	.. code-block:: python
+
+		from qlsc import GeoQLSC, GeoQLSCIndex
+
+		scheme = GeoQLSC(depth=20)
+		ipix = scheme.lonlat2ipix(lon=-74.0060, lat=40.7128)
+		lon, lat = scheme.ipix2lonlat(ipix)
+
+	:param depth: number of times each bin in each face is subdivided by four
+	'''
+
+	def _longitude(self, ra:Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+		'''
+		Express a computed right ascension as a longitude in [-180,180).
+
+		:param ra: a right ascension, or an array of them, in degrees
+		:returns: the same angle(s) as a longitude
+		'''
+		return wrap_longitude(ra)
+
+	def lonlat2ipix(self, lon:Union[float,Iterable]=None, lat:Union[float,Iterable]=None,
+					points:Iterable=None) -> Union[float,np.ndarray]:
+		'''
+		Convert longitude,latitude positions to an ipix number.
+
+		This is :py:func:`QLSC.ang2ipix` under the geographic spelling and behaves
+		identically: scalars or arrays, longitudes in any range, an ``[lon,lat]`` array or
+		an astropy :class:`~astropy.coordinates.SkyCoord` as ``points``.
+
+		:param lon: longitude (degrees), any range, or a :class:`~astropy.coordinates.SkyCoord` carrying both angles
+		:param lat: latitude (degrees), in [-90,90]
+		:param points: an array of [lon,lat] points, shape=(n,2), or a :class:`~astropy.coordinates.SkyCoord`
+		:returns: the ipix integer for a single point, an array of ipix integers for an array of points
+		'''
+		return self.ang2ipix(ra=lon, dec=lat, points=points)
+
+	def ipix2lonlat(self, ipix:Union[int,Iterable], return_skycoord:bool=False):
+		'''
+		Convert an ipix number to the longitude,latitude of the center of the pixel, in degrees.
+
+		This is :py:func:`QLSC.ipix2ang` under the geographic spelling; the longitude is in
+		[-180,180), as it is from every method of this class.
+
+		:param ipix: an ipix number, or an array-like of ipix numbers
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` instead of a tuple of degrees
+		:returns: the lon,lat of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input)
+		'''
+		return self.ipix2ang(ipix, return_skycoord=return_skycoord)
+
+	def ipix2lonlat_center(self, ipix:Union[int,Iterable], return_skycoord:bool=False):
+		'''
+		A synonym of :py:func:`ipix2lonlat`, for callers who want the "center" semantics
+		explicit at the call site.
+
+		:param ipix: an ipix number, or an array-like of ipix numbers
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` instead of a tuple of degrees
+		:returns: the lon,lat of the pixel center in degrees
+		'''
+		return self.ipix2ang(ipix, return_skycoord=return_skycoord)
+
+	def ang2ipix(self, ra=None, dec=None, points=None, lon=None, lat=None):
+		'''
+		Convert positions to an ipix number, in either spelling.
+
+		Identical to :py:func:`QLSC.ang2ipix` except that the pair may equally be given as
+		``lon``,``lat``. See :py:func:`lonlat2ipix`.
+
+		:param ra: right ascension / longitude (degrees), or a :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude (degrees)
+		:param points: an array of [lon,lat] points, shape=(n,2), or a :class:`~astropy.coordinates.SkyCoord`
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: the ipix integer for a single point, an array of ipix integers for an array of points
+		'''
+		if points is not None and (lon is not None or lat is not None):
+			raise ValueError("The parameter 'points' was given; 'lon' or 'lat' should not also be specified.")
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().ang2ipix(ra=ra, dec=dec, points=points)
+
+	def ang2ipix_xy(self, ra=None, dec=None, points=None, lon=None, lat=None) -> dict:
+		'''
+		Convert a position to an ipix number, face number and (x,y) on the face, in either spelling.
+
+		:param ra: right ascension / longitude (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude (degrees)
+		:param points: NOT YET SUPPORTED, as in :py:func:`QLSC.ang2ipix_xy`
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().ang2ipix_xy(ra=ra, dec=dec, points=points)
+
+	def face_number(self, ra=None, dec=None, ipix:int=None, lon=None, lat=None) -> int:
+		'''
+		Return the cube face number for a position, in either spelling.
+
+		:param ra: right ascension / longitude (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude (degrees)
+		:param ipix: the pixel identifier number
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: the cube face number
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().face_number(ra=ra, dec=dec, ipix=ipix)
+
+	def point_in_polygon(self, ra=None, dec=None, polygon:Iterable=None, lon=None, lat=None) -> bool:
+		'''
+		Test whether a point lies inside a polygon on the sphere, in either spelling.
+
+		The polygon's vertices are ``[lon,lat]`` pairs, which are ``[ra,dec]`` pairs under
+		the mapping this class documents; longitudes in [-180,180) need no conversion, so
+		the output of :py:func:`ipix2polygon` can be handed straight back in.
+
+		:param ra: right ascension / longitude of the point (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the point (degrees)
+		:param polygon: an array of the polygon's vertices as [lon,lat] pairs, shape (n,2), or a :class:`~astropy.coordinates.SkyCoord`
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: True if the point is inside the polygon
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().point_in_polygon(ra=ra, dec=dec, polygon=polygon)
+
+	def point_in_ellipse(self, ra=None, dec=None, ra_cen=None, dec_cen=None,
+						 semi_major_axis=None, axis_ratio=None, position_angle=0.0,
+						 lon=None, lat=None, lon_cen=None, lat_cen=None) -> bool:
+		'''
+		Test whether a point lies inside an ellipse on the sphere, in either spelling.
+
+		:param ra: right ascension / longitude of the point (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the point (degrees)
+		:param ra_cen: right ascension / longitude of the center (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec_cen: declination / latitude of the center (degrees)
+		:param semi_major_axis: semi-major axis of the ellipse (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
+		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param lon: longitude of the point (degrees); the geographic spelling of ``ra``
+		:param lat: latitude of the point (degrees); the geographic spelling of ``dec``
+		:param lon_cen: longitude of the center (degrees); the geographic spelling of ``ra_cen``
+		:param lat_cen: latitude of the center (degrees); the geographic spelling of ``dec_cen``
+		:returns: True if the point is inside the ellipse
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		ra_cen, dec_cen = _lonlat_coordinate_pair(ra_cen, dec_cen, lon_cen, lat_cen,
+												  "ra_cen", "dec_cen", "lon_cen", "lat_cen")
+		return super().point_in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
+										semi_major_axis=semi_major_axis, axis_ratio=axis_ratio,
+										position_angle=position_angle)
+
+class GeoQLSCIndex(QLSCIndex):
+	'''
+	A :py:class:`QLSCIndex` that stores and reports geographic longitude and latitude.
+
+	This is the index counterpart of :py:class:`GeoQLSC` and follows the same mapping:
+	latitude is declination, and longitude is right ascension expressed in **[-180,180)**.
+	Every method accepts the pair under either spelling — ``lon``,``lat`` or ``ra``,``dec``,
+	but not both at once — and nothing about the indexing changes.
+
+	**How coordinates are stored.** A point is stored with its longitude already wrapped
+	into [-180,180), so what a query returns is exactly what was put in, and a point added
+	as ``lon=286`` and one added as ``lon=-74`` are recognized as the same point rather
+	than stored twice. Queries return the stored values, so they follow the same
+	convention.
+
+	**Latitude is checked, not reinterpreted.** :py:class:`QLSCIndex` reads a declination
+	outside [-90,90] as a point on the far side of a pole and moves the right ascension by
+	180 degrees to match. That is a fair reading of an unnormalized celestial coordinate
+	but not of a latitude, so here a latitude outside [-90,90] raises ``ValueError``.
+
+	An index file is interchangeable between this class and :py:class:`QLSCIndex`: the
+	stored values are the same numbers either way, and only the range they are written in
+	differs. An existing file written by :py:class:`QLSCIndex` may therefore hold
+	longitudes in [0,360); those are returned as stored, and are the values to give to
+	:py:func:`remove_point`.
+
+	.. code-block:: python
+
+		from qlsc import GeoQLSC, GeoQLSCIndex
+
+		index = GeoQLSCIndex(qlsc=GeoQLSC(depth=20))
+		index.add_point(lon=-74.0060, lat=40.7128, key="New York")
+		index.add_point(lon=2.3522, lat=48.8566, key="Paris")
+		matches = index.radial_query(lon=-74.0, lat=40.7, radius=1.0)
+
+	:param qlsc: an instance of :py:class:`GeoQLSC` set to the desired segmentation level; the default is depth 30
+	:param filepath: the file path where a persistent index will be stored; the default is to create the index in memory
+	:param name: a user-provided name for the index
+	:param description: a user-provided description of the index
+	'''
+	def __init__(self, qlsc:GeoQLSC=None, filepath:Union[os.PathLike, str]=None,
+				 name:str=None, description:str=None):
+		if qlsc is None:
+			qlsc = GeoQLSC(depth=30)
+		elif not isinstance(qlsc, GeoQLSC):
+			raise ValueError(f"A GeoQLSCIndex reports longitudes in [-180,180), which is the convention "
+							 f"carried by the scheme object, so the 'qlsc' parameter must be a GeoQLSC; "
+							 f"was given a '{type(qlsc).__name__}'. Use QLSCIndex for a QLSC.")
+		super().__init__(qlsc=qlsc, filepath=filepath, name=name, description=description)
+
+	def add_point(self, ra=None, dec=None, key:str=None, lon=None, lat=None):
+		'''
+		Add a single point to the index, in either spelling.
+
+		The longitude is stored wrapped into [-180,180); see the class documentation.
+
+		:param ra: right ascension / longitude (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude (degrees), in [-90,90]
+		:param key: a string identifier for the coordinate (optional, and not required to be unique)
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		ra, dec = _geographic_position(ra, dec)
+		return super().add_point(ra=ra, dec=dec, key=key)
+
+	def add_points(self, ra:Iterable=None, dec:Iterable=None, points:Iterable=None,
+				   keys:Iterable=None, lon:Iterable=None, lat:Iterable=None):
+		'''
+		Add a collection of points to the index, in either spelling.
+
+		Longitudes are stored wrapped into [-180,180); see the class documentation.
+
+		:param ra: an Iterable of right ascension / longitude values in degrees, or a :class:`~astropy.coordinates.SkyCoord`
+		:param dec: an Iterable of declination / latitude values in degrees
+		:param points: an Iterable of [lon,lat] pairs, or a :class:`~astropy.coordinates.SkyCoord`
+		:param keys: an Iterable of string identifiers, one per point
+		:param lon: longitudes (degrees); the geographic spelling of ``ra``
+		:param lat: latitudes (degrees); the geographic spelling of ``dec``
+		'''
+		if points is not None and any(value is not None for value in (ra, dec, lon, lat)):
+			raise ValueError("Only 'ra','dec' (or 'lon','lat') OR 'points' can be specified.")
+
+		if points is not None and not _is_coordinate_object(points):
+			# split here rather than in the parent so the longitude column can be wrapped
+			values = np.asarray(points, dtype=np.double)
+			if values.ndim != 2 or values.shape[1] != 2:
+				raise ValueError(f"The 'points' array must have shape (n,2); was given shape {values.shape}.")
+			ra, dec = values[:,0], values[:,1]
+			points = None
+		elif points is not None:
+			ra, dec = _coordinate_object_degrees(points, "points")
+			ra, dec = np.atleast_1d(ra), np.atleast_1d(dec)
+			points = None
+		else:
+			ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+
+		ra, dec = _geographic_position(ra, dec)
+
+		return super().add_points(ra=ra, dec=dec, keys=keys)
+
+	def remove_point(self, ra=None, dec=None, key:str=None, lon=None, lat=None) -> int:
+		'''
+		Remove points from the index by key or by exact coordinate, in either spelling.
+
+		The coordinate given is put into the stored convention first, so a point added as
+		``lon=-74`` can be removed as ``lon=286`` and vice versa.
+
+		:param ra: right ascension / longitude of the point to remove (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the point to remove (degrees)
+		:param key: the key of the point(s) to remove
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: the number of points removed
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		ra, dec = _geographic_position(ra, dec)
+		return super().remove_point(ra=ra, dec=dec, key=key)
+
+	def radial_query(self, ra=None, dec=None, radius=None, return_key:bool=False,
+					 return_distance:bool=False, return_skycoord:bool=False, lon=None, lat=None):
+		'''
+		Cone search around a point, in either spelling.
+
+		:param ra: right ascension / longitude of the center (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the center (degrees)
+		:param radius: radius (degrees) in the range [0,180], accepts a `float` value or `astropy.units.Quantity`
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_distance: if set to True, include the angular separation from the query center in degrees
+		:param return_skycoord: if set to True, return the coordinates as an astropy :class:`~astropy.coordinates.SkyCoord`
+		:param lon: longitude of the center (degrees); the geographic spelling of ``ra``
+		:param lat: latitude of the center (degrees); the geographic spelling of ``dec``
+		:returns: the matching points, in the shapes :py:func:`QLSCIndex.radial_query` documents
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().radial_query(ra=ra, dec=dec, radius=radius, return_key=return_key,
+									return_distance=return_distance, return_skycoord=return_skycoord)
+
+	def ellipse_query(self, ra=None, dec=None, semi_major_axis=None, axis_ratio=None,
+					  position_angle=0.0, return_key:bool=False, return_distance:bool=False,
+					  return_skycoord:bool=False, lon=None, lat=None):
+		'''
+		Elliptical region search around a point, in either spelling.
+
+		:param ra: right ascension / longitude of the center (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the center (degrees)
+		:param semi_major_axis: semi-major axis of the ellipse (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
+		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_distance: if set to True, include the angular separation from the center in degrees
+		:param return_skycoord: if set to True, return the coordinates as an astropy :class:`~astropy.coordinates.SkyCoord`
+		:param lon: longitude of the center (degrees); the geographic spelling of ``ra``
+		:param lat: latitude of the center (degrees); the geographic spelling of ``dec``
+		:returns: the matching points, in the shapes :py:func:`QLSCIndex.ellipse_query` documents
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().ellipse_query(ra=ra, dec=dec, semi_major_axis=semi_major_axis,
+									 axis_ratio=axis_ratio, position_angle=position_angle,
+									 return_key=return_key, return_distance=return_distance,
+									 return_skycoord=return_skycoord)
 

@@ -4,6 +4,22 @@
 
 ### New
 
+* Lat/lon mode, which the README has promised since 2020: `GeoQLSC` and `GeoQLSCIndex`
+  are the scheme and the index in geographic vocabulary. The mapping is small, because
+  most of it is the identity — **latitude is declination** (same range, same sign), and
+  **longitude is right ascension on the way in** (right ascension is periodic and every
+  entry point already reduces it, so `lon=-74` may be given anywhere an ra can). The
+  only real difference is on the way out: these classes report longitude in
+  **[-180,180)** where `QLSC` reports right ascension in [0,360), and they do so from
+  *every* method that returns one, the inherited `ipix2ang`/`xy2ang`/`ipix2polygon`
+  included. Both classes take the pair under either spelling (`lon`,`lat` or `ra`,`dec`,
+  never both at once) and add `lonlat2ipix`/`ipix2lonlat`/`ipix2lonlat_center`.
+  `GeoQLSCIndex` stores longitudes already wrapped, so a point added as `lon=286` and
+  one added as `lon=-74` are the same point, and what a query returns is what was put
+  in; a latitude outside [-90,90] raises rather than being read as a point on the far
+  side of a pole. Nothing about the pixelation, the ipix numbering, or the C code
+  changes. The public `qlsc.wrap_longitude()` performs the [0,360) → [-180,180) mapping
+  on its own.
 * First-class astropy support. Every method that takes an ra,dec pair now also accepts
   an `astropy.coordinates.SkyCoord` (scalar or array) in place of the pair — passed as
   the *first* of the two parameters with the second left unset, e.g. `ang2ipix(coord)`,

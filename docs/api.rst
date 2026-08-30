@@ -19,6 +19,22 @@ QLSC Index
    :members:
    :inherited-members:
 
+Geographic (longitude/latitude) Classes
+---------------------------------------
+
+The same scheme and index, in geographic vocabulary: latitude is declination, and
+longitude is right ascension reported in [-180,180) rather than [0,360).
+
+.. autoclass:: GeoQLSC
+   :members:
+   :inherited-members:
+
+.. autoclass:: GeoQLSCIndex
+   :members:
+   :inherited-members:
+
+.. autofunction:: qlsc.wrap_longitude
+
 Point Generation
 ----------------
 
