@@ -8,7 +8,7 @@ import logging
 import contextlib
 from typing import Iterable, Tuple, Union
 from urllib.parse import urlparse
-from math import pow, sin
+from math import pow, sin, asin, sqrt, degrees
 from math import radians as deg2rad
 import collections
 
@@ -47,6 +47,19 @@ def _canonical_position(ra:float, dec:float) -> Tuple[float, float]:
 	if abs(dec) == 90:
 		return (0.0, dec)
 	return (ra % 360.0, dec)
+
+def _sindist2deg(value:float) -> float:
+	'''
+	Convert the q3c "sindist" of two points to their angular separation in degrees.
+
+	q3c's sindist is the haversine quantity sin^2(d/2), so d = 2*asin(sqrt(sindist)).
+	Rounding can push the value a hair outside [0,1] for coincident or antipodal
+	pairs, which asin would reject; the value is clamped to that range first. Any
+	larger excursion is a real error and is left to raise.
+	'''
+	if not (-1e-9 <= value <= 1 + 1e-9):
+		raise ValueError(f"A sindist value outside [0,1] cannot be an angular separation; was given '{value}'.")
+	return degrees(2. * asin(sqrt(min(max(value, 0.), 1.))))
 
 class QLSC:
 	'''
@@ -1071,17 +1084,27 @@ class QLSCIndex:
 
 		return fulls, partials
 
-	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False) -> np.recarray:
+	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False, return_distance:bool=False) -> np.recarray:
 		'''
 		Given an ra,dec coordinate and a radius (all in degrees), return the points that fall in the cone search.
 
-		The returned :class:`numpy.recarray` has the keys "ra", "dec", and (if requested), "key".
+		The default return value (both flags left False) is unchanged: an array of the
+		matching coordinates with shape (n,2). If either ``return_key`` or
+		``return_distance`` is set, the result is instead a :class:`numpy.recarray` whose
+		fields are "ra", "dec", then "key" and "distance" for whichever flags were set.
+
+		The "distance" field is the angular separation between the query center and each
+		match, in degrees. It costs nothing to ask for: the cone filter already computes
+		the sine-squared half-distance of every candidate. Coordinates that are equivalent
+		representations of the query center (e.g. a point stored at ra=360 and queried at
+		ra=0, or any ra at a pole) report a separation of exactly 0.
 
 		:param ra: right ascension (degrees)
 		:param dec: declination (degrees)
 		:param radius: radius (degrees) in the range [0,180], accepts a `float` value or `astropy.units.Quantity`
-		:param return_key: if set to True, returns the key value as provided when added to the index
-		:returns: if ``return_key=True``, returns a :class:`numpy.recarray` with keys ``ra,dec,key``; otherwise an array of matches, shape (n,2)
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_distance: if set to True, include the angular separation from the query center in degrees
+		:returns: an array of matches with shape (n,2) if both flags are False; otherwise a :class:`numpy.recarray` with the fields ``ra,dec`` plus ``key`` and/or ``distance``
 		'''
 
 		self._ensure_open()
@@ -1108,6 +1131,7 @@ class QLSCIndex:
 		match_ra = list()
 		match_dec = list()
 		match_key = list()
+		match_distance = list()
 
 		#if isinstance(self._db, sqlite3.Connection):
 
@@ -1162,21 +1186,39 @@ class QLSCIndex:
 						# (e.g. ra=360 vs ra=0, or any ra at a pole) always match: sindist between
 						# equivalent representations leaves tiny nonzero floating point residuals,
 						# which would otherwise exclude them for zero or near-zero radii.
-						is_match = (_canonical_position(row_ra, row_dec) == center_canonical) \
-								   or (radius > 0 and sindist(row_ra, row_dec, center_ra, center_dec) <= cone_radius)
+						if _canonical_position(row_ra, row_dec) == center_canonical:
+							# the same point on the sphere, whatever the residual says
+							is_match, row_sindist = True, 0.0
+						elif radius > 0:
+							row_sindist = sindist(row_ra, row_dec, center_ra, center_dec)
+							is_match = row_sindist <= cone_radius
+						else:
+							# a zero-radius query matches only canonically equal points;
+							# sindist is not needed and deliberately not computed
+							is_match, row_sindist = False, None
 						if is_match:
 							match_ra.append(row_ra)
 							match_dec.append(row_dec)
 							if return_key:
 								match_key.append(row["key"])
+							if return_distance:
+								match_distance.append(_sindist2deg(row_sindist))
 				except sqlite3.OperationalError as e:
 					raise RuntimeError(f"Error in accessing database in radial query.\n\nQuery: \"{query}\"\n\nError: {e}") from e
 		finally:
 			if not self._is_in_memory_db():
 				connection.close()
 
-		if return_key:
-			return np.core.records.fromarrays([match_ra, match_dec, match_key], names='ra,dec,key')
+		if return_key or return_distance:
+			arrays = [match_ra, match_dec]
+			names = ["ra", "dec"]
+			if return_key:
+				arrays.append(match_key)
+				names.append("key")
+			if return_distance:
+				arrays.append(match_distance)
+				names.append("distance")
+			return np.core.records.fromarrays(arrays, names=",".join(names))
 		else:
 			return np.squeeze(np.dstack((match_ra,match_dec)))
 

@@ -9,6 +9,14 @@
   the same scalar/array convention as `ang2ipix`: a scalar (or 0-d array) returns
   scalars, anything with a shape returns arrays of that shape. The loop runs in the
   C extension. `ipix2polygon` remains scalar-only (see its docstring for why).
+* `QLSCIndex.radial_query(..., return_distance=True)` returns the angular separation
+  of each match from the query center in degrees. The cone filter already computes
+  sin²(d/2) for every candidate, so the value costs nothing. With either
+  `return_distance` or `return_key` set the result is a `numpy.recarray` with the
+  fields `ra,dec` plus `key` and/or `distance`; with both flags off the return value
+  is unchanged (an array of shape (n,2)). Points matched as equivalent
+  representations of the query center (ra=360 vs ra=0, any ra at a pole) report a
+  separation of exactly 0 rather than a floating point residual.
 
 ### Fixed
 
