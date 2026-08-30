@@ -21,11 +21,18 @@ def _as_float_scalar(value, name:str) -> float:
 	NumPy has deprecated (and will remove) the implicit conversion of size-1 arrays
 	to scalars, which the C extension's scalar signatures relied on; .item() extracts
 	the value without that conversion and raises for larger arrays.
+
+	Non-finite values raise ValueError: NaN passes range checks like "abs(dec) > 90"
+	unnoticed and reaches undefined float-to-int conversions in the C code
+	(upstream q3c issue #52); no qlsc API has a meaningful non-finite input.
 	'''
 	try:
-		return float(np.asarray(value).item())
+		result = float(np.asarray(value).item())
 	except (ValueError, TypeError) as e:
 		raise TypeError(f"The '{name}' parameter must be a scalar value; was given '{value!r}'.") from e
+	if not math.isfinite(result):
+		raise ValueError(f"The '{name}' value must be finite; was given '{value!r}'.")
+	return result
 
 def _ang2cartesian(ra=None,dec=None,points=None):
 	'''

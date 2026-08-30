@@ -11,6 +11,8 @@ Note that while this package is designed for astronomical use (it focusses on ri
 Author: Demitri Muna
 Copyright © 2020 Demitri Muna, except for the embedded Q3C code which is copyright Sergey Koposov.
 
+> **Note for v1.1:** `QLSC.ipix2ang` now returns the **center** of the pixel rather than the "lower left" corner, matching the Q3C PostgreSQL extension v2.0.1 and later. This is a breaking change that returns different values without raising an error; code depending on the corner should use `ipix2xy`/`xy2ang` or `ipix2polygon`. (`ipix2ang_center` is now a synonym of `ipix2ang`.) See [CHANGELOG.md](CHANGELOG.md) for all changes.
+
 ## Why Use QLSC?
 
 * You have a large number of points or regions on a sphere that you want to subdivide into approximately equal area divisions.

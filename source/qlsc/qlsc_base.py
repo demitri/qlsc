@@ -140,6 +140,10 @@ class QLSC:
 		# handle simple scalar values
 		#
 		if np.isscalar(ra) and np.isscalar(dec):
+			if not (math.isfinite(ra) and math.isfinite(dec)):
+				# NaN passes the range check below unnoticed and reaches undefined
+				# float->int conversions in the C code (upstream q3c issue #52)
+				raise ValueError(f"The 'ra' and 'dec' values must be finite; was given ra={ra}, dec={dec}.")
 			if not (-90 <= dec <= 90):
 				ra, dec = _normalize_ang(ra,dec)
 			return q3c.ang2ipix(self._hprm, ra, dec)
@@ -152,6 +156,9 @@ class QLSC:
 		# the C extension requires arrays of dtype double; copy/convert any other type
 		ra = np.asarray(ra, dtype=np.double)
 		dec = np.asarray(dec, dtype=np.double)
+
+		if not (np.isfinite(ra).all() and np.isfinite(dec).all()):
+			raise ValueError("The 'ra' and 'dec' arrays must contain only finite values.")
 
 		if not ((-90 <= dec).all() and (dec <= 90).all()):
 			ra, dec = _normalize_ang(ra=ra, dec=dec, copy=True)
@@ -512,11 +519,9 @@ class QLSC:
 		if any([x is None for x in [ra, dec, polygon]]):
 			raise ValueError("Values for 'ra', 'dec', and 'polygon' must all be specified.")
 
+		# _as_float_scalar also rejects non-finite values
 		ra = _as_float_scalar(ra, "ra")
 		dec = _as_float_scalar(dec, "dec")
-
-		if not (math.isfinite(ra) and math.isfinite(dec)):
-			raise ValueError(f"The 'ra' and 'dec' values must be finite; was given ra={ra}, dec={dec}.")
 
 		if not (-90 <= dec <= 90):
 			ra, dec = _normalize_ang(ra, dec)
@@ -921,6 +926,9 @@ class QLSCIndex:
 
 		ra = np.asarray(ra, dtype=np.double)
 		dec = np.asarray(dec, dtype=np.double)
+
+		if not (np.isfinite(ra).all() and np.isfinite(dec).all()):
+			raise ValueError("The 'ra' and 'dec' values must all be finite.")
 
 		if not ((-90 <= dec).all() and (dec <= 90).all()):
 			# normalize BOTH the ipix calculation inputs and the stored coordinates

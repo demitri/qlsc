@@ -23,6 +23,20 @@ def test_q3c_poly_points_buffer_patch():
 	assert "q3c_coord_t points[8];" in source, "the local points[8] patch to q3c_poly.c has been lost (probably by an upstream sync)"
 	assert "q3c_coord_t points[4];" not in source, "upstream's undersized points[4] buffer has been reintroduced into q3c_poly.c"
 
+def test_q3cube_res_depth_patch():
+	'''
+	Test that the local subdivision-depth patch to the vendored q3cube.c is present.
+
+	Upstream q3c v2.0.5 computes the quadtree refinement depth as the ratio
+	nside/n0 instead of its log2 (upstream issue #51), overflowing a signed int
+	(2 * 2^30) for tiny query regions - UBSan-confirmed, producing garbage
+	coordinates. Remove this test only when upstream ships the fix and the sync
+	drops the local patch. See CLAUDE.md.
+	'''
+	source = (C_CODE_DIR / "q3c" / "q3cube.c").read_text()
+	assert "res_depth = nside / n0;" not in source, "upstream's overflowing res_depth ratio has been reintroduced into q3cube.c"
+	assert source.count("subdiv_ratio") >= 3, "the local log2 subdivision-depth patch to q3cube.c has been lost (probably by an upstream sync)"
+
 def test_capsule_pointer_null_checks():
 	'''
 	Test that every PyCapsule_GetPointer call in the wrapper is followed by a

@@ -77,6 +77,29 @@ def test_scalar_apis_accept_scalar_like(name, call, wrap):
 		# for scalar input (e.g. ang2ipix), so compare values elementwise
 		assert np.all(np.asarray(result) == np.asarray(expected))
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")], ids=["nan", "inf", "-inf"])
+@pytest.mark.parametrize("name, call", scalar_api_calls, ids=[n for n, c in scalar_api_calls])
+def test_scalar_apis_reject_non_finite(name, call, bad):
+	'''
+	Test that every scalar-taking API rejects non-finite values with ValueError.
+
+	NaN passes range checks like "abs(dec) > 90" unnoticed and reaches undefined
+	float-to-int conversions in the C code (upstream q3c issue #52); several APIs
+	previously returned None or garbage silently.
+	'''
+	with pytest.raises(ValueError):
+		call(lambda v: bad)
+
+def test_array_apis_reject_non_finite():
+	'''
+	Test that the array-taking APIs reject non-finite values with ValueError.
+	'''
+	with pytest.raises(ValueError):
+		q30.ang2ipix(ra=np.array([10., np.nan]), dec=np.array([30., 40.]))
+	idx = QLSCIndex(qlsc=q30)
+	with pytest.raises(ValueError):
+		idx.add_points(points=np.array([[10., 30.], [np.inf, 40.]]))
+
 def test_scalar_apis_reject_multi_element_arrays():
 	'''
 	Test that a scalar-only API rejects a multi-element array with a clear error.

@@ -131,9 +131,6 @@ qlsc_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
 	struct q3c_prm *hprm;
 	int array_form = 0; // set to 1 if the inputs are numpy arrays
 	q3c_ipix_t ipix = 0;
-	static int invocation;
-	static q3c_coord_t ra_buf, dec_buf;
-	static q3c_ipix_t ipix_buf;
 	//Py_ssize_t n; // number of points
 
 	// returned values
@@ -317,30 +314,17 @@ ang2ipix_array_early_exit:
 	else {
 		// SCALAR VERSION
 
-		if (invocation==0)
-		{
-			;
-		}
-		else
-		{
-			if ((ra == ra_buf) && (dec == dec_buf))
-			{
-				PyLong_FromLongLong(ipix_buf);
-			}
-		}
+		// Non-finite values would hit an undefined float->int conversion inside
+		// q3c_ang2ipix (upstream q3c issue #52); returning None here (the old
+		// behavior) silently hid the bad input.
 		if ((!isfinite(ra)) || (!isfinite(dec)))
 		{
-			Py_RETURN_NONE;
+			PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' values must be finite.");
+			return NULL;
 		}
-			
+
 		q3c_ang2ipix(hprm, ra, dec, &ipix);
 
-		ra_buf = ra;
-		dec_buf = dec;
-		ipix_buf = ipix;
-		invocation=1;
-
-		//PySys_WriteStdout("ipix = %" PRId64 "\n", ipix);
 		return PyLong_FromLongLong(ipix);
 	}
 
@@ -356,9 +340,6 @@ qlsc_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> c
 
 	//internal variables
 	struct q3c_prm *hprm;
-	static int invocation;
-	static q3c_coord_t ra_buf, dec_buf;
-	static q3c_ipix_t ipix_buf;
 
 	// return values
 	char facenum;
@@ -380,20 +361,13 @@ qlsc_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> c
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
-	if (invocation==0)
-	{
-		;
-	}
-	else
-	{
-		if ((ra == ra_buf) && (dec == dec_buf))
-		{
-			PyLong_FromLongLong(ipix_buf);
-		}
-	}
+	// Non-finite values would hit an undefined float->int conversion inside
+	// q3c_ang2ipix_xy (upstream q3c issue #52); returning None here (the old
+	// behavior) silently hid the bad input.
 	if ((!isfinite(ra)) || (!isfinite(dec)))
 	{
-		Py_RETURN_NONE;
+		PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' values must be finite.");
+		return NULL;
 	}
 
 	// q3c_ang2ipix_xy (struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0,
@@ -806,6 +780,14 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
+	// Non-finite values pass the dec range check below (NaN > 90 is false) and
+	// reach undefined float->int conversions (upstream q3c issue #52).
+	if (!isfinite(ra_cen) || !isfinite(dec_cen) || !isfinite(radius))
+	{
+		PyErr_SetString(PyExc_ValueError, "The 'ra', 'dec', and 'radius' values must be finite.");
+		return NULL;
+	}
 
 	ra_cen = UNWRAP_RA(ra_cen);
 	if (q3c_fabs(dec_cen) > 90)

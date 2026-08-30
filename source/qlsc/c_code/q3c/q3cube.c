@@ -2462,7 +2462,18 @@ int q3c_radial_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3
         /* For this case the maximal increase of resolution of 2^res_depth
          * for each axis
          */
-        res_depth = nside / n0;
+        /* Local qlsc patch (upstream q3c issue #51): the intended value is the
+         * number of available doublings, log2(nside / n0), not the ratio itself.
+         * For tiny query regions the ratio exceeds the true remaining depth and
+         * the subdivision below overflows (2 * 2^30 in a signed int), producing
+         * garbage coordinates. Behavior is unchanged whenever the ratio >= 16,
+         * since both values are then capped to Q3C_MAX_DEPTH.
+         */
+        res_depth = 0;
+        for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
+        {
+            res_depth++;
+        }
         /* If the the query is too small we cannot go up to Q3C_MAX_DEPTH since we
          * are limited by nside depth
          */
@@ -2632,7 +2643,18 @@ int q3c_poly_query(struct q3c_prm *hprm, q3c_poly *qp, q3c_ipix_t *out_ipix_arr_
          * for each axis
          */
 
-        res_depth = nside / n0;
+        /* Local qlsc patch (upstream q3c issue #51): the intended value is the
+         * number of available doublings, log2(nside / n0), not the ratio itself.
+         * For tiny query regions the ratio exceeds the true remaining depth and
+         * the subdivision below overflows (2 * 2^30 in a signed int), producing
+         * garbage coordinates. Behavior is unchanged whenever the ratio >= 16,
+         * since both values are then capped to Q3C_MAX_DEPTH.
+         */
+        res_depth = 0;
+        for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
+        {
+            res_depth++;
+        }
         /* If the the query is too small we cannot go up to Q3C_MAX_DEPTH since we
          * are limited by nside depth
          */
@@ -2855,7 +2877,18 @@ int q3c_ellipse_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q
          * for each axis
          */
 
-        res_depth = nside / n0;
+        /* Local qlsc patch (upstream q3c issue #51): the intended value is the
+         * number of available doublings, log2(nside / n0), not the ratio itself.
+         * For tiny query regions the ratio exceeds the true remaining depth and
+         * the subdivision below overflows (2 * 2^30 in a signed int), producing
+         * garbage coordinates. Behavior is unchanged whenever the ratio >= 16,
+         * since both values are then capped to Q3C_MAX_DEPTH.
+         */
+        res_depth = 0;
+        for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
+        {
+            res_depth++;
+        }
         /* If the the query is too small we cannot go up to Q3C_MAX_DEPTH since we
          * are limited by nside depth
          */

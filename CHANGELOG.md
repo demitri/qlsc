@@ -63,6 +63,16 @@
   coordinates instead of returning `False`.
 * `ipix2xy` computed the face number in floating point, placing ipix values near
   face boundaries on the wrong face at depths ≥ 26.
+* A signed integer overflow in the embedded Q3C quadtree decomposition for tiny
+  query regions (radii below ~1e-7°; upstream q3c issue #51) produced undefined
+  behavior and garbage coordinates; patched locally (UBSan-verified).
+* Non-finite (NaN/Inf) coordinates are now rejected with `ValueError` at every
+  public boundary (upstream q3c issue #52): NaN slipped past range checks like
+  `abs(dec) > 90` into undefined float-to-int conversions, and `ang2ipix`
+  silently returned `None` for NaN scalars.
+* Removed broken vestigial result caches in the C `ang2ipix`/`ang2ipix_xy`
+  wrappers: a missing `return` meant they never served cached values, but they
+  leaked one Python integer per repeated-coordinate call.
 
 ## 1.0.6
 
