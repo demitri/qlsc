@@ -218,7 +218,7 @@ sharing an edge or a corner:
 
 .. code-block:: text
 
-	9200 [ 9167  9178  9179  9189  9191  9201  9202  9203]
+	9200 [9167 9178 9179 9189 9191 9201 9202 9203]
 	at a cube corner: 7
 	depth 0, face 1: [0 2 4 5]
 
@@ -250,6 +250,8 @@ and their answers do not depend on the object's depth:
   east. It is the test behind :py:func:`~qlsc.QLSCIndex.ellipse_query`. See
   :doc:`../examples/galaxy_aperture`.
 
+
+.. _distances:
 
 Distances
 ---------

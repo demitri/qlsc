@@ -78,9 +78,10 @@ templates_path = ['_templates']
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-# "generate_figures.py" is a script kept beside the pages it draws for, not a
-# document; excluding it keeps Sphinx from reporting it as an unused file.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'generate_figures.py']
+# The scripts and the README are kept beside the pages they serve, but they are
+# tooling, not documents; excluding them keeps Sphinx from reporting them.
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store',
+					'generate_figures.py', 'check_example_outputs.py', 'README.md']
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -93,7 +94,7 @@ html_theme = 'alabaster'
 # The sidebar carries the whole table of contents rather than only the current
 # page's section list, so every part of the documentation is one click away.
 html_theme_options = {
-	'description'     : 'The quadrilateralized spherical cube for Python: equal-area sphere segmentation and catalog cone searches.',
+	'description'     : 'The quadrilateralized spherical cube for Python: sphere segmentation and catalog cone searches.',
 	'github_user'     : 'demitri',
 	'github_repo'     : 'qlsc',
 	'github_button'   : True,

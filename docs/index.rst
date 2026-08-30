@@ -7,10 +7,11 @@ QLSC: Quadrilateralized Spherical Cube for Python
 =================================================
 
 The quadrilateralized spherical cube (QLSC) is a scheme for cutting a sphere into
-pixels of very nearly equal area, designed so that positions close together on the
-sphere get index numbers close together as integers. That property is what makes it
-useful: a cone search, a footprint test, or a density map becomes a query over a
-handful of integer ranges instead of a pass over every row of a catalog.
+pixels, designed so that positions close together on the sphere get index numbers
+close together as integers. That property is what makes it useful: a cone search, a
+footprint test, or a density map becomes a query over a handful of integer ranges
+instead of a pass over every row of a catalog. (How much the pixel areas vary, and
+when that matters, is measured in :ref:`how-equal-are-the-pixels`.)
 
 *qlsc* is an implementation of the scheme in a Python package. Parts of it are based
 on code from Sergey Koposov's `Q3C <https://github.com/segasai/q3c>`_, a PostgreSQL

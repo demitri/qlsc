@@ -39,6 +39,12 @@ Module Functions
 
 .. autofunction:: qlsc.sindist
 
+.. note::
+
+	``sindist`` returns the *haversine* of the separation, :math:`\sin^2(d/2)`, not
+	the sine of the separation; see :ref:`distances` for the value it actually
+	computes and how to convert it to degrees.
+
 .. autofunction:: qlsc.xy2facenum
 
 
