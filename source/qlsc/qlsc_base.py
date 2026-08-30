@@ -261,10 +261,14 @@ class QLSC:
 		if points is None:
 			x = _as_float_scalar(x, "x")
 			y = _as_float_scalar(y, "y")
-			if not (-1 <= x <= 1) and not (-1 <= y <= 1):
-				raise ValueError("Values of 'x' and 'y' must be in the range [-1,1].")
+			# "or", not "and": either coordinate out of range is an error
+			if not (-1 <= x <= 1) or not (-1 <= y <= 1):
+				raise ValueError(f"Values of 'x' and 'y' must be in the range [-1,1]; was given ({x},{y}).")
 
 		if points is not None:
+			points = np.asarray(points, dtype=np.double)
+			if not ((-1 <= points).all() and (points <= 1).all()):
+				raise ValueError("Values of 'x' and 'y' must be in the range [-1,1].")
 			ang = np.zeros([len(points),2], dtype=np.double)
 			idx = 0
 			for p in points:
@@ -835,6 +839,12 @@ class QLSCIndex:
 
 		if any([x is None for x in [ra,dec]]):
 			raise ValueError("Both 'ra' and 'dec' values must be specified.")
+
+		# Coerce scalar-like values: without this, a NumPy array passed here would be
+		# stored by sqlite3 as a BLOB via the buffer protocol - silently losing the
+		# point and corrupting later queries on the index.
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
 
 		# Q3C.ang2ipix truncates dec outside of [-90,90]
 		if not (-90 <= dec <= 90):

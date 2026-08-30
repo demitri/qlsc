@@ -10,7 +10,8 @@ from qlsc import QLSC, QLSCIndex, distance, sindist, xy2facenum
 # scalar-LIKE values (NumPy scalars, 0-d arrays, size-1 arrays) without relying
 # on NumPy's deprecated size-1-array-to-scalar conversion, which will become an
 # error in a future NumPy release. This enumerates the class; a new scalar-taking
-# API should be added to the list.
+# API should be added to the list. (add_points is deliberately absent: it is an
+# array API by contract and coerces its inputs with np.asarray itself.)
 
 q30 = QLSC(depth=30)
 POLYGON = np.array([[5.,-5.],[5.,5.],[-5.,5.]])
@@ -23,7 +24,12 @@ def _query_index(wrap):
 def _add_point_index(wrap):
 	idx = QLSCIndex(qlsc=q30)
 	idx.add_point(wrap(10.), wrap(30.))
-	return idx.number_of_points
+	# Query the point back and return the matches: a mis-stored point (e.g. a NumPy
+	# array bound by sqlite3 as a BLOB) still increments number_of_points, so the
+	# row count is exactly the property that stays correct while the data is wrong.
+	matches = idx.radial_query(ra=10., dec=30., radius=0.5)
+	assert matches.shape == (2,), f"point added via add_point was not found by radial_query (matches shape: {matches.shape})"
+	return matches
 
 # name, callable taking a wrap function applied to every scalar argument
 scalar_api_calls = [
@@ -36,7 +42,9 @@ scalar_api_calls = [
 	("point_in_polygon", lambda w: q30.point_in_polygon(ra=w(0.), dec=w(0.), polygon=POLYGON)),
 	("distance", lambda w: distance(w(0.), w(0.), w(30.), w(0.))),
 	("sindist", lambda w: sindist(w(0.), w(0.), w(30.), w(0.))),
-	("xy2facenum", lambda w: xy2facenum(w(0.1), w(0.2), 1)),
+	# y beyond +1 crosses onto the top face, so the result (0) differs from the
+	# input facenum - an implementation echoing its argument would be caught
+	("xy2facenum", lambda w: xy2facenum(w(0.1), w(1.5), 1)),
 	("radial_query", _query_index),
 	("add_point", _add_point_index)
 ]
