@@ -119,6 +119,54 @@
   neighborhood searches. Eight neighbors in the interior of a cube face; **seven**
   for the 24 pixels on a corner of the cube, where three faces meet and there is no
   eighth pixel across the vertex; four at `depth=0`, where a face is a single pixel.
+* `QLSC.coverage(ipix, values=None, ...)` and `QLSCIndex.coverage(depth=None, ...)`
+  export sky coverage as a "sky-coverage" version 1 document — the JSON interchange
+  format specified by the [astplot-js](https://github.com/demitri/astplot-js) project,
+  whose `CoverageLayer` renders it as a filled-polygon coverage map or choropleth in
+  any projection. Both return a plain Python dictionary; writing it out is one
+  `json.dumps` with the standard library encoder, no custom `default=` hook (NumPy
+  input does not leak `np.int64`/`np.float64` into the document). Each pixel becomes
+  one polygon carrying its four corners as `vertices`, its ipix number as `id`, and
+  optionally a scalar as `value`. The document declares degrees, the ICRS frame and
+  geodesic edges, and records the qlsc version, the scheme and the depth in `meta`;
+  no `equinox` is written, since ICRS has none and the format makes declaring one an
+  error. `QLSCIndex.coverage` counts the index's points per pixel with a single
+  `GROUP BY` over the ipix column — one query, no per-point work in Python — and
+  defaults to depth 5 (6,144 pixels for the whole sky), or the index's depth if that
+  is coarser. A depth finer than the index's raises `ValueError`. A per-pixel value that
+  `float()` would convert but that is not a number — a numeric string, a boolean — is
+  refused rather than coerced, matching qlsc's strictness about ipix values.
+  `examples/sky_coverage_density_map.py` writes such a document from the WISE sample
+  catalog.
+* `QLSCIndex.radial_query(ra=array, dec=array, radius=...)` runs a cone search for a
+  whole list of targets — matching a target list against the catalog — with `radius`
+  either one value for every target or one value per target. The result is a
+  `numpy.recarray` whose first field is `target_index`: the position in the target list
+  each match belongs to. A target that matches nothing contributes no rows;
+  `return_counts=True` returns `(matches, counts)` instead, where `counts` has one
+  `np.int64` entry per target and a zero for a target that found none. A scalar query
+  is unchanged, including the rule that a size-1 array is a scalar value; a target list
+  with exactly one entry is therefore expressed with `return_counts=True`. The batch
+  form is about the bookkeeping rather than speed: it runs one query per target (the
+  ipix ranges covering a cone depend on where the cone is), and measured about 9%
+  faster than the equivalent Python loop. `ra` and `dec` now accept an
+  `astropy.units.Quantity` as `radius` already did, scalar or array: `np.asarray` on a
+  Quantity discards its units, so a target list in radians would otherwise have been
+  read as degrees and quietly returned the wrong points.
+* `qlsc.crossmatch(index_a, index_b, radius, nearest_only=False, return_keys=True)`
+  spatially joins two catalogs locally — the Q3C headline feature, without PostgreSQL.
+  It returns a `numpy.recarray` of the pairs within the radius, with the fields
+  `ra_a, dec_a, key_a, ra_b, dec_b, key_b, distance` (the key fields unless
+  `return_keys=False`; a point stored without a key reports `None`). `nearest_only`
+  keeps only the closest counterpart of each `index_a` point. The pairs are grouped by
+  the `index_a` point in ascending `(ra_a, dec_a)` order and sorted by separation within
+  a group, so the ordering is determined by the data alone. The search iterates over
+  whichever index holds fewer points and runs the same z-order range search
+  `radial_query` does against the other, filtering every candidate exactly with
+  `sindist`; the two indices do **not** have to share a depth. Both in-memory and
+  file-backed indices work, in any combination. Measured at about 15,000 points of the
+  smaller catalog per second on in-memory indices at depth 30 (50,000 against 200,000
+  points at one arcsecond, 22,593 pairs, in 3.3 seconds).
 
 ### Development
 
@@ -134,6 +182,16 @@
 
 ### Breaking changes
 
+* `QLSC.ipix_area`'s `depth` parameter now means something, and is validated. It was
+  previously ignored along with `ipix`, so any value was accepted; it is now an
+  absolute depth in `[0, qlsc.depth]` naming the ancestor pixel to measure (`depth=0`
+  is a whole cube face), and it defaults to the scheme's own depth. A depth finer than
+  the scheme's raises `ValueError`: the underlying Q3C function takes a levels-up
+  offset rather than a depth, and past the scheme's own resolution it shifts the
+  pixel's coordinates out of the cube face and returns an area larger than a face
+  without complaint. Code passing a depth this scheme cannot resolve — for example
+  `QLSC(depth=5).ipix_area(ipix, 30)` — was already getting a meaningless answer and
+  must now pass a depth in range.
 * An empty `QLSCIndex` is now falsy. `QLSCIndex` defines `__len__`, so
   `if index:` asks whether the index holds any points, where it was previously
   always true. Use `if index is not None:` for the old meaning.
@@ -147,6 +205,56 @@
 
 ### Fixed
 
+* Documented a trap that has always been there: **`QLSC.ang2ipix_xy` returns face
+  coordinates on `[-0.5,0.5]`, while `ipix2xy`, `xy2ang` and `xy2ipix` use `[-1,1]`** —
+  exactly a factor of two. Feeding `ang2ipix_xy`'s `x,y` straight into `xy2ang` returns
+  the wrong coordinate and raises nothing, because a half-scale value is a perfectly
+  legal full-scale one; it just names a different point. `ang2ipix_xy` now carries a
+  warning with the doubling recipe, the other three point at it, and
+  `test_face_xy_scale.py` pins the factor. The values themselves are unchanged: making
+  the scales agree would break existing code with no error to warn it, so it is queued
+  for a 2.0 release alongside the `radial_query` return-shape cleanup.
+* `qlsc.sindist` (and `qlsc.q3c.sindist`) was documented as "the sine of the angular
+  distance between two points on a sphere". It returns the **haversine**, `sin²(d/2)`,
+  which is what Q3C computes and what every caller inside the package already assumed.
+  The difference matters: `sin(d)` peaks at 90 degrees and falls back to zero at 180,
+  so code that took the old description at face value and used the value as a distance
+  ordering was wrong for every separation past a quadrant. Only the documentation
+  changed; the returned values are unchanged. The docstring now also gives the
+  conversion back to degrees, and `distance` now states that its result is in degrees.
+* `QLSC.ipix_area` ignored both of its arguments and returned the mean pixel area,
+  `4π / nbins`, with a `NOTE` in its docstring saying so and claiming the pixels "are
+  very close" in size. They are not: the largest pixel of a cube face, at its centre,
+  is `3√3 ≈ 5.196` times the smallest, at a cube vertex, and the spread is already a
+  factor of 2.5 at `depth=2`. Against the mean the error runs from 1.91× too small to
+  2.72× too large. The method now returns the area of the pixel actually asked for,
+  from Q3C's own `q3c_pixarea`.
+* `QLSC.ipix2face` returned the wrong face for the last pixel of every face at depths
+  above about 26, and a `float` at every depth. It divided the ipix value by
+  `math.pow(nside,2)`, and past 2^53 a double cannot hold the operands exactly: at
+  depth 30 the very last pixel of the scheme was reported as being on **face 6**, which
+  does not exist. The division is now integer arithmetic, and the return value is an
+  `int` as the signature always said. Non-integer and out-of-range pixel numbers now
+  raise `ValueError` instead of being truncated or clamped onto some other face.
+* `QLSC.face_number(ipix=...)` raised `TypeError`. `ra` and `dec` were required
+  positional parameters, so the documented pixel-number form could not be called at
+  all; the only way in was the undocumented `face_number(None, None, ipix=n)`, and
+  even that failed for `ipix=0` because the branch was guarded by `if ipix:`, which is
+  false for the first pixel of face 0. `ra` and `dec` now default to `None`, every
+  test is against `None` rather than truthiness, and the pixel form answers from
+  `ipix2face` — exact integer arithmetic — rather than by converting the pixel to a
+  coordinate and back.
+* `qlsc.q3c.ellipse_query` accepted a semi-major axis of 90 degrees or more, where the
+  companion predicate `qlsc.q3c.in_ellipse` refused it. Q3C's ellipse is a conic in the
+  tangent plane at its center and means nothing past the near hemisphere, so a direct
+  caller of the C function got coarse ranges for a region that was not the one asked
+  for — safe today only because upstream returns the whole sphere for any region of
+  `Q3C_MAXRAD` (35) degrees or more. Both functions now enforce the same limit. The
+  `Python` layer was never affected: it validates first, and answers a circle of any
+  radius with a cone search. `qlsc.q3c` now also exports `Q3C_MAXRAD` and
+  `ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS`, and the whole-sphere fallback the safety argument
+  rests on is pinned by `test_q3c_maxrad_fallback.py` so an upstream sync cannot remove
+  it unnoticed.
 * `QLSC.ipix2polygon(ipix, duplicate_endpoint=True)` did nothing. The branch built
   the closed five-row polygon and the line after it stripped the extra row back off
   unconditionally, so both forms returned the same four rows and the parameter was
@@ -208,6 +316,24 @@
   `packages` configuration. They are data files of the `qlsc` package, not
   importable packages, and are now declared as such; the sdist and wheel contain
   exactly the same files as before.
+
+### Packaging
+
+* Releases now ship binary wheels, so installing no longer requires a working C
+  compiler and the NumPy headers. They cover Linux (x86_64 and aarch64,
+  manylinux and musllinux), macOS (arm64 and x86_64) and Windows (64-bit), for
+  CPython 3.10 through 3.14. The wheels are built and tested by GitHub Actions
+  (`.github/workflows/wheels.yml`, using cibuildwheel) when a version tag is
+  pushed, and uploaded to PyPI from that run as part of the manual release; the
+  full test suite is run against every wheel before it is published. The source
+  distribution is built by the same workflow and remains the install path for
+  every platform and interpreter outside that list.
+* The extension now compiles against an explicit NumPy C API level
+  (`NPY_TARGET_VERSION`) rather than whichever level the building NumPy happens
+  to default to. Without it, a wheel built with a current NumPy would refuse to
+  import under NumPy older than 1.25 while the package still declared
+  `numpy>=1.18`; CI now installs the built wheel against the oldest NumPy
+  available for the oldest supported interpreter and runs the tests.
 
 ## 1.1.0 (2026-08-30)
 

@@ -4,3 +4,43 @@
 [build-system]
 requires = ["setuptools", "numpy>=1.18"] # the extension compiles against NPY_1_18_API_VERSION headers
 build-backend = "setuptools.build_meta"
+
+# ---------------------------------------------------------------------------
+# Binary wheel builds (cibuildwheel), driven by .github/workflows/wheels.yml.
+#
+# The installable package is this directory, not the repository root, so the
+# workflow passes "package-dir: source" and cibuildwheel reads its options from
+# this file. Platform/architecture selection is the one thing left to the
+# workflow (it is a property of the runner, not of the package).
+#
+# NumPy: the build requirement above is left unpinned on purpose, so each build
+# resolves the newest NumPy for its interpreter (2.x throughout). Building
+# against the newest headers is the right direction - an extension built against
+# NumPy 2.x loads under both 1.x and 2.x, one built against 1.x does not load
+# under 2.x - but on its own it does NOT preserve the declared runtime floor:
+# NumPy defaults the compiled API level to a recent version (NumPy 2.5's
+# numpyconfig.h defaults NPY_FEATURE_VERSION to NPY_1_25_API_VERSION), and an
+# extension refuses to import under a NumPy older than the level it was built
+# against. Wheels built that way would have required numpy>=1.25 at runtime
+# while the metadata still advertised numpy>=1.18. setup.py therefore sets
+# NPY_TARGET_VERSION explicitly, and the workflow's "verify artifacts" job
+# installs the built wheel against the oldest NumPy that publishes a CPython
+# 3.10 wheel (1.21.2) and runs the test suite, so a regression in that floor
+# fails CI instead of reaching a user.
+# ---------------------------------------------------------------------------
+[tool.cibuildwheel]
+# CPython only (the extension is written against the CPython C API), and only
+# interpreters that are not yet end-of-life. Older Pythons are still supported
+# by the package (python_requires is >=3.6); they build from the sdist.
+build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
+# NumPy publishes no 32-bit Linux wheels, so an i686 wheel could be neither
+# built (no headers in the build env) nor tested against a released NumPy.
+skip = ["*_i686"]
+build-frontend = "build"
+
+test-requires = ["pytest"]
+# Run the suite from cibuildwheel's own working directory, against the wheel it
+# just installed. pytest puts {package}/tests on sys.path (that directory has no
+# __init__.py) rather than {package} itself, so "import qlsc" resolves to the
+# installed wheel and not to the source tree sitting next to it.
+test-command = "pytest {package}/tests"

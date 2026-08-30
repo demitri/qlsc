@@ -44,7 +44,18 @@ library_dirs = []			# -L directories
 libraries = []		# libraries to include
 define_macros = [('Q3C_VERSION', '"2.0.5"'), # equivalent of a bare #define in C source
 				 ('Q3C_STANDALONE', None), # compile the embedded Q3C code without PostgreSQL
-				 ('NPY_NO_DEPRECATED_API', 'NPY_1_18_API_VERSION')] # warn if using a deprecated NumPy API, defined in numpy/numpyconfig.h
+				 ('NPY_NO_DEPRECATED_API', 'NPY_1_18_API_VERSION'), # warn if using a deprecated NumPy API, defined in numpy/numpyconfig.h
+				 # Pin the NumPy C API level the extension is compiled against, which is what
+				 # decides the OLDEST NumPy the compiled module will import under (it refuses to
+				 # load against a NumPy whose API version is lower than the one it was built
+				 # with). Left unset, NumPy picks a default that tracks the headers doing the
+				 # building - NumPy 2.5's numpyconfig.h defaults it to NPY_1_25_API_VERSION - so a
+				 # wheel built with a current NumPy would silently require numpy>=1.25 at runtime
+				 # while install_requires still advertised numpy>=1.18. Setting it explicitly ties
+				 # the compiled floor to the declared one instead of to whatever NumPy happens to
+				 # build the wheel. (Older NumPy headers, which predate NPY_TARGET_VERSION, ignore
+				 # this macro; nothing here uses an API newer than 1.18.)
+				 ('NPY_TARGET_VERSION', 'NPY_1_18_API_VERSION')]
 extra_link_args = [] # e.g. ['-framework', 'OpenGL', '-framework', 'GLUT'])
 
 # The name of the module being built is "q3c".

@@ -35,6 +35,11 @@ longitude is right ascension reported in [-180,180) rather than [0,360).
 
 .. autofunction:: qlsc.wrap_longitude
 
+Cross-matching
+--------------
+
+.. autofunction:: qlsc.crossmatch
+
 Point Generation
 ----------------
 
