@@ -121,6 +121,15 @@
 
 ### Fixed
 
+* Documented a trap that has always been there: **`QLSC.ang2ipix_xy` returns face
+  coordinates on `[-0.5,0.5]`, while `ipix2xy`, `xy2ang` and `xy2ipix` use `[-1,1]`** —
+  exactly a factor of two. Feeding `ang2ipix_xy`'s `x,y` straight into `xy2ang` returns
+  the wrong coordinate and raises nothing, because a half-scale value is a perfectly
+  legal full-scale one; it just names a different point. `ang2ipix_xy` now carries a
+  warning with the doubling recipe, the other three point at it, and
+  `test_face_xy_scale.py` pins the factor. The values themselves are unchanged: making
+  the scales agree would break existing code with no error to warn it, so it is queued
+  for a 2.0 release alongside the `radial_query` return-shape cleanup.
 * `qlsc.sindist` (and `qlsc.q3c.sindist`) was documented as "the sine of the angular
   distance between two points on a sphere". It returns the **haversine**, `sin²(d/2)`,
   which is what Q3C computes and what every caller inside the package already assumed.

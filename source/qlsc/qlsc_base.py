@@ -333,10 +333,32 @@ class QLSC:
 		'''
 		Convert an ra,dec position to an ipix number; also returns the face number, and (x,y) location on the square face.
 
+		.. warning::
+
+			**The x,y values returned here are on a different scale from every other
+			(x,y) in this package.** They span [-0.5,0.5] across a cube face, where
+			:py:func:`ipix2xy`, :py:func:`xy2ang` and :py:func:`xy2ipix` all use
+			[-1,1] — exactly a factor of two. Passing these values straight to
+			:py:func:`xy2ang` returns the wrong coordinate, silently, and no error is
+			raised because both scales are inside the accepted range. Double them
+			first::
+
+				position = qlsc.ang2ipix_xy(ra=10., dec=20.)
+				ra, dec = qlsc.xy2ang(facenum=position["facenum"],
+									  x=2 * position["x"], y=2 * position["y"])
+
+			This is Q3C's own internal convention surfacing through the wrapper. It is
+			kept as it is because changing the returned values would break existing
+			code without any error to warn them; it is queued for a 2.0 release
+			(see ``AI/FEATURE_IDEAS.md``) and pinned by ``test_face_xy_scale.py``.
+
+		Note also that ``x,y`` here locate the point itself, whereas
+		:py:func:`ipix2xy` returns the lower left corner of the pixel containing it.
+
 		:param ra: right ascension angle (degrees)
 		:param dec: declination angle (degrees), must be in [-90,90]
 		:param points: an array of ra,dec coordinates (shape: (n,2)) NOT YET SUPPORTED
-		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]
+		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]; note that `x` and `y` are on [-0.5,0.5], NOT the [-1,1] used elsewhere
 		'''
 
 		ra = _as_float_scalar(ra, "ra")
@@ -447,7 +469,9 @@ class QLSC:
 		Convert an ipix value to the (x,y) position on the corresponding square face; returns (facenum,x,y).
 
 		The (x,y) returned is the "lower left" corner of the pixel on the face,
-		where the face coordinates run from -1 to +1 in both axes.
+		where the face coordinates run from -1 to +1 in both axes. (:py:func:`ang2ipix_xy`
+		is the exception in this package: it returns the point itself, on [-0.5,0.5].
+		See the warning there.)
 
 		This method accepts a single ipix value or an array-like of them (a NumPy array,
 		list, or tuple of integers). A scalar returns ``(facenum, x, y)`` as an int and two
@@ -463,9 +487,14 @@ class QLSC:
 		'''
 		Convert an x,y coordinate pair on the given face number to (ra,dec).
 
+		The face coordinates run [-1,1] from edge to edge, as they do in
+		:py:func:`ipix2xy` and :py:func:`xy2ipix`. Values coming from
+		:py:func:`ang2ipix_xy` are on [-0.5,0.5] and must be doubled first; see the
+		warning there.
+
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
-		:param x: x coordinate on cube face
-		:param y: y coordinate on cube face
+		:param x: x coordinate on cube face, in [-1,1]
+		:param y: y coordinate on cube face, in [-1,1]
 		:param points: an array containing (x,y) coordinate pairs; shape = (n,2)
 		:returns: tuple of (ra,dec) corresponding to the location on the cube face
 		'''
@@ -509,9 +538,13 @@ class QLSC:
 		'''
 		Convert an x,y coordinate pair on the given face number to the ipix value.
 
+		The face coordinates run [-1,1] from edge to edge; values from
+		:py:func:`ang2ipix_xy` are on [-0.5,0.5] and must be doubled first, as its
+		warning explains.
+
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
-		:param x: x coordinate on cube face
-		:param y: y coordinate on cube face
+		:param x: x coordinate on cube face, in [-1,1]
+		:param y: y coordinate on cube face, in [-1,1]
 		'''
 		ra,dec = self.xy2ang(x=x, y=y, facenum=facenum)
 		return self.ang2ipix(ra, dec)
