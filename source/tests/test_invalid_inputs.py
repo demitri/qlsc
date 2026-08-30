@@ -34,6 +34,20 @@ def test_invalid_hprm_capsule_raises(call, bad_capsule):
 	with pytest.raises((ValueError, TypeError)):
 		call(bad_capsule)
 
+def test_c_level_ang2ipix_rejects_non_finite_arrays():
+	'''
+	Test that the exported C ang2ipix rejects non-finite values in array input
+	(both the contiguous and strided code paths) rather than returning garbage
+	ipix values from an undefined float-to-int conversion (upstream q3c issue #52).
+	'''
+	with pytest.raises(ValueError):
+		q3c.ang2ipix(q30._hprm, np.array([10., np.nan]), np.array([30., 40.]))
+	# column slices of a 2D array exercise the strided path
+	arr = np.zeros((3, 2))
+	arr[1, 0] = np.inf
+	with pytest.raises(ValueError):
+		q3c.ang2ipix(q30._hprm, arr[:,0], arr[:,1])
+
 def test_point_in_polygon_non_finite():
 	'''
 	Test that non-finite inputs to point_in_polygon raise rather than
