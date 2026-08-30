@@ -121,6 +121,14 @@
 
 ### Fixed
 
+* `qlsc.sindist` (and `qlsc.q3c.sindist`) was documented as "the sine of the angular
+  distance between two points on a sphere". It returns the **haversine**, `sin²(d/2)`,
+  which is what Q3C computes and what every caller inside the package already assumed.
+  The difference matters: `sin(d)` peaks at 90 degrees and falls back to zero at 180,
+  so code that took the old description at face value and used the value as a distance
+  ordering was wrong for every separation past a quadrant. Only the documentation
+  changed; the returned values are unchanged. The docstring now also gives the
+  conversion back to degrees, and `distance` now states that its result is in degrees.
 * `QLSC.ipix_area` ignored both of its arguments and returned the mean pixel area,
   `4π / nbins`, with a `NOTE` in its docstring saying so and claiming the pixels "are
   very close" in size. They are not: the largest pixel of a cube face, at its centre,
