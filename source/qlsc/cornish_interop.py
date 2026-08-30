@@ -29,9 +29,14 @@ Coordinate frames
 qlsc stores bare (ra,dec) numbers and has no concept of a coordinate frame; an
 AST region always carries one. Every function here therefore compares the
 region's frame against the frame the caller declares the *index* to be in (the
-``frame`` parameter, ICRS by default) and refuses a mismatch rather than
-silently mixing coordinate systems. Convert a region between frames with
+``frame`` parameter) and refuses a mismatch rather than silently mixing
+coordinate systems. Convert a region between frames with
 ``ASTRegion.regionWithMapping(frame=...)``.
+
+``frame=None`` means "the default frame" (ICRS) everywhere in this module, never
+"do not check" — waiving the comparison is a separate, explicit
+``skip_frame_check=True``, so that forgetting to pass a frame and deliberately
+taking responsibility for the frames matching cannot be spelled the same way.
 '''
 
 from typing import Iterable, Union
@@ -69,12 +74,13 @@ def _require_cornish():
 			"turn requires 'starlink-pyast'), or see https://github.com/demitri/cornish ."
 			) from cornish_import_error
 
-def _check_region(region, frame:Union[str,None]) -> None:
+def _check_region(region, frame:Union[str,None], skip_frame_check:bool) -> None:
 	'''
 	Validate that an object is a sky-frame :class:`cornish.ASTRegion` in the expected frame.
 
 	:param region: the object to check
-	:param frame: name of the frame the index coordinates are in, or None to skip the comparison
+	:param frame: name of the frame the index coordinates are in; None means the default (ICRS)
+	:param skip_frame_check: if True, the frame comparison is waived (the type and sky-frame checks are not)
 	'''
 	if not isinstance(region, ASTRegion):
 		raise TypeError(f"A cornish ASTRegion was expected; was given '{type(region).__name__}'.")
@@ -84,11 +90,15 @@ def _check_region(region, frame:Union[str,None]) -> None:
 		raise ValueError("The region must be defined in a sky frame; this region is in a "
 						 f"'{region_frame.system}' frame, whose coordinates are not (ra,dec).")
 
-	if frame is None:
+	if skip_frame_check:
 		return # the caller has explicitly taken responsibility for the frames matching
 
+	if frame is None:
+		frame = DEFAULT_FRAME
+
 	if not isinstance(frame, str):
-		raise TypeError(f"The 'frame' parameter must be a frame name (a string) or None; was given '{type(frame).__name__}'.")
+		raise TypeError(f"The 'frame' parameter must be a frame name (a string) or None for the "
+						f"default ('{DEFAULT_FRAME}'); was given '{type(frame).__name__}'.")
 
 	if region_frame.system.upper() != frame.upper():
 		raise ValueError(
@@ -96,7 +106,7 @@ def _check_region(region, frame:Union[str,None]) -> None:
 			f"declared to be in '{frame}'. qlsc stores bare coordinates and cannot convert them; "
 			f"either convert the region first (region.regionWithMapping(frame=cornish.ASTSkyFrame(system='{frame}'))), "
 			f"pass frame='{region_frame.system}' if the index really holds {region_frame.system} coordinates, "
-			f"or pass frame=None to skip this check.")
+			f"or pass skip_frame_check=True to waive this check.")
 
 def ipix2region(qlsc:QLSC, ipix:int, frame=None) -> "ASTPolygon":
 	'''
@@ -117,8 +127,21 @@ def ipix2region(qlsc:QLSC, ipix:int, frame=None) -> "ASTPolygon":
 
 	:param qlsc: the :class:`~qlsc.QLSC` scheme the ipix value belongs to
 	:param ipix: the ipix number of the pixel
-	:param frame: the sky frame to define the polygon in; an ICRS frame is used if not specified
+	:param frame: the sky frame to define the polygon in; None means an ICRS frame
 	:returns: a :class:`~cornish.ASTPolygon` covering the pixel
+	'''
+	polygon, _ = _ipix2region_with_center(qlsc, ipix, frame=frame)
+	return polygon
+
+def _ipix2region_with_center(qlsc:QLSC, ipix:int, frame=None):
+	'''
+	The body of :py:func:`ipix2region`, which also hands back the pixel center it had to
+	compute for the winding check so that callers needing it do not compute it twice.
+
+	:param qlsc: the :class:`~qlsc.QLSC` scheme the ipix value belongs to
+	:param ipix: the ipix number of the pixel
+	:param frame: the sky frame to define the polygon in; None means an ICRS frame
+	:returns: a tuple of (:class:`~cornish.ASTPolygon`, the pixel's (ra,dec) center)
 	'''
 	_require_cornish()
 
@@ -138,7 +161,7 @@ def ipix2region(qlsc:QLSC, ipix:int, frame=None) -> "ASTPolygon":
 			f"{center}: the vertex winding convention of qlsc or of AST has changed and "
 			"this conversion is no longer correct. Please report this as a qlsc bug.")
 
-	return polygon
+	return polygon, center
 
 def ipix2moc(qlsc:QLSC, ipix:Iterable[int], max_order:int=None, frame=None) -> "ASTMoc":
 	'''
@@ -172,7 +195,7 @@ def ipix2moc(qlsc:QLSC, ipix:Iterable[int], max_order:int=None, frame=None) -> "
 	:param qlsc: the :class:`~qlsc.QLSC` scheme the ipix values belong to
 	:param ipix: an iterable of ipix numbers
 	:param max_order: the HEALPix order of the finest cells in the MOC, 1..27
-	:param frame: the sky frame to define the pixels in; an ICRS frame is used if not specified
+	:param frame: the sky frame to define the pixels in; None means an ICRS frame
 	:returns: a :class:`~cornish.ASTMoc` covering the given pixels
 	'''
 	_require_cornish()
@@ -193,8 +216,10 @@ def ipix2moc(qlsc:QLSC, ipix:Iterable[int], max_order:int=None, frame=None) -> "
 	centers = list()
 	for value in ipix:
 		value = int(value)
-		moc.add(ipix2region(qlsc, value, frame=frame))
-		centers.append((value, qlsc.ipix2ang_center(value)))
+		# the center comes back from the conversion, which needed it for its winding check
+		region, center = _ipix2region_with_center(qlsc, value, frame=frame)
+		moc.add(region)
+		centers.append((value, center))
 
 	if len(centers) == 0:
 		raise ValueError("No ipix values were provided; an empty MOC has no meaningful coverage.")
@@ -211,7 +236,8 @@ def ipix2moc(qlsc:QLSC, ipix:Iterable[int], max_order:int=None, frame=None) -> "
 	return moc
 
 def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
-				 all_sky:bool=False, frame:Union[str,None]=DEFAULT_FRAME) -> np.ndarray:
+				 all_sky:bool=False, frame:Union[str,None]=None,
+				 skip_frame_check:bool=False) -> np.ndarray:
 	'''
 	Return the points of a :class:`~qlsc.QLSCIndex` that fall inside a cornish region.
 
@@ -252,7 +278,8 @@ def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
 	:param region: a cornish :class:`~cornish.ASTRegion` defined in a sky frame
 	:param return_key: if set to True, include the key value as provided when added to the index
 	:param all_sky: if set to True, consider every point in the index instead of using the region's bounding circle
-	:param frame: name of the frame the index coordinates are in, compared against the region's frame; pass None to skip the comparison
+	:param frame: name of the frame the index coordinates are in, compared against the region's frame; None means the default (ICRS)
+	:param skip_frame_check: if set to True, waive that comparison and take responsibility for the frames matching
 	:returns: an array of matches with shape (n,2), or a :class:`numpy.recarray` with the fields ``ra,dec,key``
 	'''
 	_require_cornish()
@@ -260,7 +287,7 @@ def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
 	if not isinstance(index, QLSCIndex):
 		raise TypeError(f"A qlsc.QLSCIndex object was expected for 'index'; was given '{type(index).__name__}'.")
 
-	_check_region(region, frame)
+	_check_region(region, frame, skip_frame_check)
 
 	if all_sky:
 		# a cone of radius 180 degrees centered anywhere covers the sphere

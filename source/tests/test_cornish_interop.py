@@ -344,8 +344,33 @@ def test_region_query_refuses_a_frame_mismatch(index_with_points):
 	assert matches.ndim == 2
 
 	# ... or when the check is explicitly waived
-	waived = cornish_interop.region_query(index, galactic, frame=None)
+	waived = cornish_interop.region_query(index, galactic, skip_frame_check=True)
 	assert waived.shape == matches.shape
+
+@requires_cornish
+def test_region_query_frame_none_means_the_default_not_no_check(index_with_points):
+	'''
+	frame=None must mean "the default frame (ICRS)", never "skip the check" — the two
+	are spelled differently on purpose, so that omitting a frame cannot silently waive
+	the comparison.
+	'''
+	index, _ = index_with_points
+	galactic = ASTCircle(frame=ASTSkyFrame(system="Galactic"), center=[12.0, 5.0], radius=1.0)
+
+	with pytest.raises(ValueError):
+		cornish_interop.region_query(index, galactic, frame=None)
+
+	icrs = ASTCircle(frame=ASTICRSFrame(), center=[12.0, 5.0], radius=1.0)
+	explicit = cornish_interop.region_query(index, icrs, frame="ICRS")
+	defaulted = cornish_interop.region_query(index, icrs, frame=None)
+	assert np.array_equal(np.atleast_2d(explicit), np.atleast_2d(defaulted))
+
+@requires_cornish
+def test_region_query_rejects_a_non_string_frame(index_with_points):
+	index, _ = index_with_points
+	circle = ASTCircle(frame=ASTICRSFrame(), center=[12.0, 5.0], radius=1.0)
+	with pytest.raises(TypeError):
+		cornish_interop.region_query(index, circle, frame=1950)
 
 @requires_cornish
 def test_region_query_rejects_wrong_types(index_with_points):

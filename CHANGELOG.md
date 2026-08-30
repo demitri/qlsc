@@ -175,6 +175,23 @@
   file-backed indices work, in any combination. Measured at about 15,000 points of the
   smaller catalog per second on in-memory indices at depth 30 (50,000 against 200,000
   points at one arcsecond, 22,593 pairs, in 3.3 seconds).
+* `qlsc.cornish_interop` queries an index with the regions of
+  [cornish](https://github.com/demitri/cornish), the Pythonic interface to Starlink
+  AST. `region_query(index, region)` takes any bounded AST region — circle, box,
+  polygon, MOC, or a compound (boolean) region built from them — and returns the
+  indexed points inside it, using the same two steps the built-in region queries use:
+  the ipix ranges covering the region's bounding circle as a coarse superset, then
+  AST's own `pointInRegion` as the exact filter, so membership is decided by AST and
+  the index only narrows the candidates. `ipix2region(qlsc, ipix)` returns a pixel as
+  an `ASTPolygon` (the two libraries agree exactly on what a spherical polygon is, but
+  wind their vertices oppositely, which this handles), and `ipix2moc(qlsc, ipix_list)`
+  returns a set of pixels as an IVOA MOC — the standard coverage object Aladin, MOCpy,
+  VizieR and pgsphere read.
+
+  `cornish` is an optional dependency, guarded the same way `astropy` and `pandas` are:
+  qlsc neither requires nor installs it, the module imports without it, and calling
+  anything in it then raises an `ImportError` naming the package and chaining the
+  original import error.
 
 ### Development
 
