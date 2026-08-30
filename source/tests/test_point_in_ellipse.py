@@ -2,7 +2,7 @@
 import pytest
 import numpy as np
 
-from qlsc import QLSC
+from qlsc import QLSC, QLSCIndex
 
 # Tests for QLSC.point_in_ellipse, the exact containment test that filters
 # QLSCIndex.ellipse_query results. The underlying q3c_in_ellipse takes the
@@ -134,3 +134,120 @@ def test_astropy_quantity_parameters():
 									  position_angle=0 * astropy_units.rad)
 	assert degrees is True
 	assert quantities == degrees
+
+# ---------------------------------------------------------------------------
+# equivalent representations of the center
+#
+# ra=0 and ra=360 name the same meridian, and at a pole the right ascension is
+# arbitrary, so a point given either way IS the center. The angular separation
+# between two such representations is a floating point residual rather than
+# exactly zero, so a raw comparison against the radius excluded the center from
+# its own circle whenever the radius was smaller than that residual - which the
+# degenerate circle of radius 0 always is.
+# ---------------------------------------------------------------------------
+
+EQUIVALENT_CENTERS = [
+	# (ra, dec, ra_cen, dec_cen, what it is)
+	(360., 20., 0., 20., "ra=360 against ra=0"),
+	(0., 20., 360., 20., "ra=0 against ra=360"),
+	(-350., 20., 10., 20., "a negative ra against its positive form"),
+	(137., 90., 0., 90., "two right ascensions at the north pole"),
+	(0., -90., 212., -90., "two right ascensions at the south pole"),
+	(10., 20., 10., 20., "the identical coordinate"),
+]
+
+@pytest.mark.parametrize("ra,dec,ra_cen,dec_cen,description", EQUIVALENT_CENTERS)
+@pytest.mark.parametrize("semi_major_axis", [0., 1e-12, 1e-6, 1.])
+def test_a_circle_contains_every_representation_of_its_center(ra, dec, ra_cen, dec_cen,
+															  description, semi_major_axis):
+	'''
+	Test that a point which is another representation of the center is inside a circle
+	of any size, the degenerate circle of radius 0 included.
+	'''
+	assert q30.point_in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
+								semi_major_axis=semi_major_axis, axis_ratio=1.) is True, description
+
+@pytest.mark.parametrize("ra,dec,ra_cen,dec_cen,description", EQUIVALENT_CENTERS)
+@pytest.mark.parametrize("semi_major_axis", [0., 1e-12, 1.])
+def test_the_circle_agrees_with_the_cone_search(ra, dec, ra_cen, dec_cen,
+												description, semi_major_axis):
+	'''
+	Test the docstring's claim that a circular point_in_ellipse and radial_query apply
+	the identical test — on the coordinates where they used to disagree.
+
+	This is the promise that matters: ellipse_query filters its candidates with the
+	containment test, so a point the index reports and the predicate denies would be the
+	two halves of one API contradicting each other.
+	'''
+	index = QLSCIndex(qlsc=q30)
+	index.add_point(ra=ra, dec=dec)
+
+	found = len(np.atleast_2d(index.radial_query(ra=ra_cen, dec=dec_cen,
+												 radius=semi_major_axis))) > 0
+	predicate = q30.point_in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
+									 semi_major_axis=semi_major_axis, axis_ratio=1.)
+
+	assert predicate is found, description
+
+	# ellipse_query hands the circular case to radial_query, so it must agree too
+	from_ellipse = len(index.ellipse_query(ra=ra_cen, dec=dec_cen,
+										   semi_major_axis=semi_major_axis, axis_ratio=1.)) > 0
+	assert from_ellipse is found, description
+
+@pytest.mark.parametrize("ra,dec,ra_cen,dec_cen,description", EQUIVALENT_CENTERS)
+@pytest.mark.parametrize("semi_major_axis", [0., 1e-12, 1.])
+def test_a_genuine_ellipse_answers_the_same_for_every_representation(ra, dec, ra_cen, dec_cen,
+																	 description, semi_major_axis):
+	'''
+	Test the rule on the Q3C conic path: the answer is a property of the point, not of how
+	its coordinates were written.
+
+	The claim here is deliberately weaker than "the center is inside". Q3C's convention is
+	that the edge of a genuinely elliptical region is outside it, and the center of a
+	zero-size ellipse IS its edge — at a pole, where the tangent plane projection is
+	degenerate, Q3C answers False for the center given identically. That convention is
+	kept; what is fixed is that writing the same point a different way used to change the
+	answer.
+	'''
+	expected = q30.point_in_ellipse(ra=ra_cen, dec=dec_cen, ra_cen=ra_cen, dec_cen=dec_cen,
+									semi_major_axis=semi_major_axis, axis_ratio=0.5)
+
+	assert q30.point_in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
+								semi_major_axis=semi_major_axis, axis_ratio=0.5) is expected, description
+
+@pytest.mark.parametrize("ra,dec,ra_cen,dec_cen,description", EQUIVALENT_CENTERS)
+@pytest.mark.parametrize("semi_major_axis", [0., 1e-12, 1.])
+def test_the_ellipse_query_agrees_with_the_predicate_it_documents(ra, dec, ra_cen, dec_cen,
+																  description, semi_major_axis):
+	'''
+	Test that ellipse_query returns exactly the points point_in_ellipse calls inside, on
+	the coordinates where the two used to contradict each other.
+
+	ellipse_query documents that it filters its candidates with the containment test, so a
+	point the index reports and the predicate denies is the two halves of one API
+	disagreeing. It did: the query matched any representation of its center outright while
+	the predicate ran the projection.
+	'''
+	index = QLSCIndex(qlsc=q30)
+	index.add_point(ra=ra, dec=dec)
+
+	predicate = q30.point_in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
+									 semi_major_axis=semi_major_axis, axis_ratio=0.5)
+	found = len(index.ellipse_query(ra=ra_cen, dec=dec_cen,
+									semi_major_axis=semi_major_axis, axis_ratio=0.5)) > 0
+
+	assert found is predicate, description
+
+def test_a_point_that_is_not_the_center_is_still_outside_a_zero_radius_circle():
+	'''
+	Test that the canonicalization did not turn the degenerate circle into one that
+	contains everything: a genuinely different point is still outside.
+	'''
+	assert q30.point_in_ellipse(ra=10.0001, dec=20., ra_cen=10., dec_cen=20.,
+								semi_major_axis=0., axis_ratio=1.) is False
+	# a pole is one point, but the other pole is not
+	assert q30.point_in_ellipse(ra=0., dec=-90., ra_cen=0., dec_cen=90.,
+								semi_major_axis=0., axis_ratio=1.) is False
+	# and the same meridian at a different declination is a different place
+	assert q30.point_in_ellipse(ra=360., dec=20.5, ra_cen=0., dec_cen=20.,
+								semi_major_axis=0., axis_ratio=1.) is False

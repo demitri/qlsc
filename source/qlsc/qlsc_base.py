@@ -1278,7 +1278,13 @@ class QLSC:
 		answering about a region that is not the one asked for. An ``axis_ratio`` of
 		exactly 1 is a circle, needs no tangent plane, and is instead tested by angular
 		separation over the whole [0,180] range — the identical (and inclusive) test
-		:py:func:`QLSCIndex.radial_query` applies, so the two always agree.
+		:py:func:`QLSCIndex.radial_query` applies, so the two always agree. That includes
+		how the cone search reads a point that is another *representation* of the center:
+		``ra=0`` and ``ra=360`` are the same meridian and at a pole the right ascension is
+		arbitrary, so such a point is inside a circle of any size, the degenerate circle
+		of radius 0 included. The angular separation between two such representations is a
+		floating point residual rather than exactly zero, which is why this is decided
+		before the separation is compared rather than left to it.
 
 		A point exactly on the edge of a genuinely elliptical region counts as outside,
 		which is Q3C's own convention; a point exactly on the edge of a circular one
@@ -1318,6 +1324,19 @@ class QLSC:
 			ra_cen, dec_cen = _normalize_ang(ra_cen, dec_cen)
 
 		_validate_ellipse(semi_major_axis, axis_ratio)
+
+		# The same point on the sphere must get the same answer however it is written.
+		# ra=0 and ra=360 are the same meridian and at a pole the ra is arbitrary, but
+		# neither test below is exact on those: the angular separation between two such
+		# representations is a floating point residual rather than zero, so a zero-radius
+		# circle excluded its own center when the center was written the other way, and
+		# the tangent plane projection at a pole put the point a hair off the center.
+		# Rewriting the point as the center - rather than answering True outright - is
+		# what makes the answer independent of the representation without also changing
+		# what the region contains: whatever the test says about the center, it now says
+		# for every way of writing it.
+		if _canonical_position(ra, dec) == _canonical_position(ra_cen, dec_cen):
+			ra, dec = ra_cen, dec_cen
 
 		if axis_ratio == 1:
 			# A circle, where Q3C's tangent-plane conic is neither needed nor usable
@@ -2926,21 +2945,27 @@ class QLSCIndex:
 
 		for row in self._select_candidate_rows(query):
 			row_ra, row_dec = row["ra"], row["dec"]
-			# As in radial_query, a point that is an equivalent representation of the
-			# center (ra=360 vs ra=0, any ra at a pole) is inside any ellipse of
-			# non-negative size, whatever floating point residual the test computes.
+			# As in QLSC.point_in_ellipse, a point that is an equivalent representation of
+			# the center (ra=360 vs ra=0, any ra at a pole) is tested AS the center: the
+			# tangent plane projection is not exact enough to see that they are the same
+			# point, so without this the answer would depend on how the coordinate happens
+			# to be written. Rewriting it rather than matching it outright keeps the
+			# containment rule Q3C's - notably that a zero-size ellipse holds nothing, at
+			# a pole where its projection is degenerate - instead of quietly making an
+			# exception to it here that the predicate does not make.
+			test_ra, test_dec = row_ra, row_dec
 			if _canonical_position(row_ra, row_dec) == center_canonical:
-				is_match = True
-			else:
-				# the C function is called directly rather than through
-				# QLSC.point_in_ellipse: the parameters have already been validated
-				# above, and revalidating them for every candidate row is the whole
-				# cost of this loop. The test itself is identical.
-				is_match = q3c.in_ellipse(ra=row_ra, dec=row_dec,
-										  ra_cen=center_ra, dec_cen=center_dec,
-										  semi_major_axis=semi_major_axis,
-										  axis_ratio=axis_ratio,
-										  position_angle=position_angle)
+				test_ra, test_dec = center_ra, center_dec
+
+			# the C function is called directly rather than through
+			# QLSC.point_in_ellipse: the parameters have already been validated
+			# above, and revalidating them for every candidate row is the whole
+			# cost of this loop. The test itself is identical.
+			is_match = q3c.in_ellipse(ra=test_ra, dec=test_dec,
+									  ra_cen=center_ra, dec_cen=center_dec,
+									  semi_major_axis=semi_major_axis,
+									  axis_ratio=axis_ratio,
+									  position_angle=position_angle)
 			if is_match:
 				match_ra.append(row_ra)
 				match_dec.append(row_dec)

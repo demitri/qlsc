@@ -306,6 +306,18 @@
   so a geographic method added later that takes a latitude fails the gate until it is
   covered. `QLSC` is unchanged: an unnormalized declination is a legitimate celestial
   coordinate and is still read as the point past the pole.
+* `QLSC.point_in_ellipse` now gives the same answer for a point however its coordinates
+  are written. `ra=0` and `ra=360` are the same meridian and at a pole the right ascension
+  is arbitrary, but neither of the two containment tests is exact on those: the circular
+  path excluded the center of a zero-radius circle when the center was written the other
+  way (`point_in_ellipse(360, 20, 0, 20, 0, axis_ratio=1)` was False where
+  `radial_query` found the point, contradicting the docstring's claim that the two apply
+  the identical test), and the elliptical path put a point at a pole a hair off the
+  center. `QLSCIndex.ellipse_query` had the complementary defect: it matched any
+  representation of its center outright, so it returned points its own documented filter
+  called outside. Both now rewrite such a point as the center and run the ordinary test,
+  which keeps Q3C's containment rules — including that a zero-size ellipse holds nothing
+  at a pole — while making the answer independent of the representation.
 * `qlsc.cornish_interop.ipix2moc` validates its pixel numbers instead of truncating them.
   It called `int()` on each value, so `ipix2moc(q, [1.9])` built a MOC covering pixel 1,
   `True` covered pixel 1, and the string `"3"` covered pixel 3 — a map of somewhere the
