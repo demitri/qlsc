@@ -1,6 +1,7 @@
 
 import os
 import sys
+import enum
 import math
 import pathlib
 import sqlite3
@@ -115,8 +116,21 @@ def _zip_exact(*sequences):
 						 f"this would silently drop the values past the shortest one.")
 	return zip(*sequences)
 
+class MatchArrayShape(enum.Enum):
+	'''
+	The shape a region query gives its plain (no flags set) array of matches.
+
+	``SQUEEZED`` is :py:func:`QLSCIndex.radial_query`'s historical shape and only it:
+	the result is passed through :func:`numpy.squeeze`, so a single match comes back
+	with shape (2,) rather than (1,2) and ``matches[:,0]`` fails for exactly that one
+	case. Changing it would break callers, so it is queued for a 2.0 release; every
+	query added since is ``STABLE`` and always returns (n,2).
+	'''
+	STABLE = "stable"
+	SQUEEZED = "squeezed"
+
 def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:list,
-				  return_key:bool, return_distance:bool):
+				  return_key:bool, return_distance:bool, shape:MatchArrayShape):
 	'''
 	Assemble the return value shared by the region query methods.
 
@@ -126,6 +140,7 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 	:param match_distance: the angular separations of the matches, if they were collected
 	:param return_key: whether the "key" field was requested
 	:param return_distance: whether the "distance" field was requested
+	:param shape: the :class:`MatchArrayShape` this query promises for its plain array result
 	:returns: an array of shape (n,2) if neither flag is set, otherwise a :class:`numpy.recarray`
 	'''
 	if return_key or return_distance:
@@ -140,8 +155,52 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 		# np.rec is the public spelling of this module; np.core.records is
 		# deprecated in NumPy 1.25+ and gone from the NumPy 2 namespace.
 		return np.rec.fromarrays(arrays, names=",".join(names))
-	else:
+	elif shape is MatchArrayShape.SQUEEZED:
 		return np.squeeze(np.dstack((match_ra,match_dec)))
+	else:
+		return np.column_stack((np.asarray(match_ra, dtype=np.double),
+								np.asarray(match_dec, dtype=np.double)))
+
+#: The largest semi-major axis a genuinely elliptical (axis_ratio < 1) region may have.
+#:
+#: Q3C's ellipse is a conic in the gnomonic projection about its center, and only the
+#: near hemisphere projects. At and past 90 degrees ``q3c_in_ellipse`` silently answers
+#: about a different region: it rejects every point more than 90 degrees from the center
+#: whatever the semi-major axis, and the sin^2 term it compares against stops being
+#: monotonic, so a 150 degree "ellipse" is smaller than a 60 degree one. Verified against
+#: the C source and numerically (the boundary matches the tangent-plane conic to 3e-10
+#: degrees across 1120 configurations); see test_ellipse_geometry.py.
+ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS = 90.0
+
+def _validate_ellipse(semi_major_axis:float, axis_ratio:float):
+	'''
+	Check the size and shape of an ellipse against the domain Q3C's geometry supports.
+
+	:param semi_major_axis: semi-major axis of the ellipse (degrees)
+	:param axis_ratio: ratio of the semi-minor to the semi-major axis
+	'''
+	if not (0 < axis_ratio <= 1):
+		raise ValueError(f"The value for axis_ratio must be in the range (0,1]; was given '{axis_ratio}'.")
+
+	if axis_ratio == 1:
+		# a circle is a distance test, with the same domain as a cone search
+		if not (0 <= semi_major_axis <= 180):
+			raise ValueError(f"The value for semi_major_axis must be in the range [0,180]; was given '{semi_major_axis}'.")
+	elif not (0 <= semi_major_axis < ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS):
+		raise ValueError(
+			f"The value for semi_major_axis must be in the range [0,{ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS:g}) for an "
+			f"axis_ratio below 1; was given '{semi_major_axis}'. Q3C's ellipse is a conic in the tangent plane at "
+			f"its center, which only reaches the near hemisphere, so a larger one is not the region asked for. "
+			f"Use axis_ratio=1 (or radial_query) for a circle of any radius up to 180 degrees.")
+
+def _as_stable_pairs(matches:np.ndarray) -> np.ndarray:
+	'''
+	Reshape a :py:data:`MatchArrayShape.SQUEEZED` plain array result to (n,2).
+
+	:param matches: the result of a squeezed-shape query with no flags set
+	:returns: the same coordinates with shape (n,2)
+	'''
+	return np.asarray(matches, dtype=np.double).reshape(-1, 2)
 
 class QLSC:
 	'''
@@ -797,17 +856,31 @@ class QLSC:
 		'''
 		Test whether an ra,dec point lies inside an ellipse on the sphere.
 
-		The ellipse is the one Q3C defines: centered on (``ra_cen``, ``dec_cen``), with the
-		given semi-major axis, axis ratio (semi-minor over semi-major, in ``(0,1]``, where 1
-		is a circle) and position angle. This is the exact containment test used to filter
-		:py:func:`QLSCIndex.ellipse_query` results, and its answer does not depend on this
-		object's depth.
+		The ellipse is the one Q3C defines: **a conic in the gnomonic (tangent plane)
+		projection about its center**, with semi-axes ``tan(semi_major_axis)`` and
+		``tan(semi_major_axis) * axis_ratio`` in that plane. Along the major axis its
+		edge is exactly ``semi_major_axis`` degrees from the center; across the minor
+		axis the edge is at ``arctan(tan(semi_major_axis) * axis_ratio)``, which is
+		close to ``semi_major_axis * axis_ratio`` for a small ellipse and noticeably
+		wider for a large one. The answer does not depend on this object's depth.
+
+		Only the near hemisphere has a tangent plane projection, so a genuinely
+		elliptical region (``axis_ratio`` below 1) is limited to a semi-major axis of
+		**less than 90 degrees**; anything larger raises ``ValueError`` rather than
+		answering about a region that is not the one asked for. An ``axis_ratio`` of
+		exactly 1 is a circle, needs no tangent plane, and is instead tested by angular
+		separation over the whole [0,180] range — the identical (and inclusive) test
+		:py:func:`QLSCIndex.radial_query` applies, so the two always agree.
+
+		A point exactly on the edge of a genuinely elliptical region counts as outside,
+		which is Q3C's own convention; a point exactly on the edge of a circular one
+		counts as inside, matching the cone search.
 
 		:param ra: right ascension of the point to test (degrees)
 		:param dec: declination of the point to test (degrees)
 		:param ra_cen: right ascension of the center of the ellipse (degrees)
 		:param dec_cen: declination of the center of the ellipse (degrees)
-		:param semi_major_axis: semi-major axis of the ellipse (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param semi_major_axis: semi-major axis of the ellipse (degrees); in [0,90) unless ``axis_ratio`` is 1, when [0,180] is accepted. Accepts a `float` value or `astropy.units.Quantity`
 		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
 		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
 		:returns: True if the point is inside the ellipse
@@ -829,8 +902,14 @@ class QLSC:
 		if not (-90 <= dec_cen <= 90):
 			ra_cen, dec_cen = _normalize_ang(ra_cen, dec_cen)
 
-		# the remaining validation (axis ratio range, negative semi-major axis) is
-		# performed in the C layer, which raises ValueError
+		_validate_ellipse(semi_major_axis, axis_ratio)
+
+		if axis_ratio == 1:
+			# A circle, where Q3C's tangent-plane conic is neither needed nor usable
+			# past 90 degrees: the region is the spherical cap of that radius, and the
+			# test is exactly radial_query's, boundary included.
+			return sindist(ra, dec, ra_cen, dec_cen) <= pow(sin(deg2rad(semi_major_axis)/2.), 2)
+
 		return q3c.in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
 							  semi_major_axis=semi_major_axis, axis_ratio=axis_ratio,
 							  position_angle=position_angle)
@@ -1818,7 +1897,9 @@ class QLSCIndex:
 				if return_distance:
 					match_distance.append(_sindist2deg(row_sindist))
 
-		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance)
+		# radial_query keeps its historical squeezed shape; see MatchArrayShape
+		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance,
+							 MatchArrayShape.SQUEEZED)
 
 	def polygon_query(self, polygon:Iterable=None, return_key:bool=False) -> np.ndarray:
 		'''
@@ -1844,7 +1925,8 @@ class QLSCIndex:
 		polygon can include area outside it. That produces extra candidates, never missing
 		ones, and the extras are removed by the exact test.)
 
-		The default return value is an array of the matching coordinates with shape (n,2).
+		The default return value is an array of the matching coordinates with shape (n,2)
+		— always (n,2), including for a single match, unlike :py:func:`radial_query`.
 		If ``return_key`` is set the result is instead a :class:`numpy.recarray` with the
 		fields "ra", "dec" and "key". There is no ``return_distance``: a polygon has no
 		center to measure a separation from.
@@ -1874,20 +1956,33 @@ class QLSCIndex:
 		query = self._candidate_row_query(merged_ranges, columns,
 										  f"polygon query over a polygon with {len(poly_ra)} vertices")
 
-		# the C function is called directly rather than through QLSC.point_in_polygon:
-		# the vertices have already been validated and converted above, and doing that
-		# again for every candidate row is the whole cost of this loop. The test itself
-		# is identical.
-		query_hprm = self._query_scheme()._hprm
+		# The candidates are gathered first and filtered in one batched C call rather
+		# than one call per row: q3c projects all n vertices onto the cube faces on
+		# every scalar call, which is the dominant cost of filtering a large candidate
+		# set. check_sphere_points_in_poly projects once and reuses it (q3c's own
+		# invocation=1 path), and the answers are identical.
+		candidate_ra = list()
+		candidate_dec = list()
+		candidate_key = list()
 		for row in self._select_candidate_rows(query):
-			row_ra, row_dec = row["ra"], row["dec"]
-			if q3c.check_sphere_point_in_poly(query_hprm, row_ra, row_dec, poly_ra, poly_dec):
-				match_ra.append(row_ra)
-				match_dec.append(row_dec)
-				if return_key:
-					match_key.append(row["key"])
+			candidate_ra.append(row["ra"])
+			candidate_dec.append(row["dec"])
+			if return_key:
+				candidate_key.append(row["key"])
 
-		return _match_result(match_ra, match_dec, match_key, None, return_key, False)
+		if candidate_ra:
+			inside = q3c.check_sphere_points_in_poly(self._query_scheme()._hprm,
+													 np.asarray(candidate_ra, dtype=np.double),
+													 np.asarray(candidate_dec, dtype=np.double),
+													 poly_ra, poly_dec)
+			for i in np.flatnonzero(inside):
+				match_ra.append(candidate_ra[i])
+				match_dec.append(candidate_dec[i])
+				if return_key:
+					match_key.append(candidate_key[i])
+
+		return _match_result(match_ra, match_dec, match_key, None, return_key, False,
+							 MatchArrayShape.STABLE)
 
 	def ellipse_query(self, ra:float=None, dec:float=None, semi_major_axis:Union[float, "Quantity"]=None,
 					  axis_ratio:float=None, position_angle:Union[float, "Quantity"]=0.0,
@@ -1895,16 +1990,24 @@ class QLSCIndex:
 		'''
 		Return the points of the index that fall inside an ellipse on the sphere.
 
-		The ellipse is centered on (``ra``, ``dec``) with the given semi-major axis, axis
-		ratio (semi-minor over semi-major, in ``(0,1]``) and position angle. An
-		``axis_ratio`` of 1 is a circle and returns the same points as
-		:py:func:`radial_query` with that radius.
+		The ellipse is the one :py:func:`QLSC.point_in_ellipse` describes: centered on
+		(``ra``, ``dec``), with the given semi-major axis, axis ratio (semi-minor over
+		semi-major, in ``(0,1]``) and position angle, and shaped as a conic in the
+		gnomonic projection about its center.
 
 		Matches are found by selecting the pixels covering the ellipse and then testing
 		every candidate with :py:func:`QLSC.point_in_ellipse`, the exact containment test,
 		so the result contains exactly the indexed points inside the ellipse.
 
-		The default return value is an array of the matching coordinates with shape (n,2).
+		An ``axis_ratio`` of exactly 1 is a circle, and this method then **is** a cone
+		search: it hands the query to :py:func:`radial_query` and returns what that
+		returns, so the two agree by construction rather than by coincidence, for any
+		radius up to 180 degrees. A genuinely elliptical query (``axis_ratio`` below 1)
+		is limited to a semi-major axis of less than 90 degrees, the extent of the
+		tangent plane the shape is defined in; a larger one raises ``ValueError``.
+
+		The default return value is an array of the matching coordinates with shape (n,2)
+		— always (n,2), including for a single match, unlike :py:func:`radial_query`.
 		If either ``return_key`` or ``return_distance`` is set, the result is instead a
 		:class:`numpy.recarray` whose fields are "ra", "dec", then "key" and "distance" for
 		whichever flags were set. The "distance" field is the angular separation between
@@ -1913,7 +2016,7 @@ class QLSCIndex:
 
 		:param ra: right ascension of the center of the ellipse (degrees)
 		:param dec: declination of the center of the ellipse (degrees)
-		:param semi_major_axis: semi-major axis of the ellipse (degrees), in the range [0,180], accepts a `float` value or `astropy.units.Quantity`
+		:param semi_major_axis: semi-major axis of the ellipse (degrees); in [0,90) unless ``axis_ratio`` is 1, when [0,180] is accepted. Accepts a `float` value or `astropy.units.Quantity`
 		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
 		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
 		:param return_key: if set to True, include the key value as provided when added to the index
@@ -1934,12 +2037,19 @@ class QLSCIndex:
 		if abs(dec) > 90:
 			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
 
-		# the same bound radial_query places on its radius: beyond 180 degrees a
-		# semi-major axis has no meaning on a sphere
-		if not (0 <= semi_major_axis <= 180):
-			raise ValueError(f"The value for semi_major_axis must be in the range [0,180]; was given '{semi_major_axis}'.")
-		if not (0 < axis_ratio <= 1):
-			raise ValueError(f"The value for axis_ratio must be in the range (0,1]; was given '{axis_ratio}'.")
+		_validate_ellipse(semi_major_axis, axis_ratio)
+
+		if axis_ratio == 1:
+			# A circle is a cone search, so run one: the promise that the two agree is
+			# then structural. Q3C's elliptical predicate could not keep that promise -
+			# it is a tangent plane conic, so it rejects everything past 90 degrees from
+			# the center and is not even monotonic in the semi-major axis beyond that.
+			matches = self.radial_query(ra=ra, dec=dec, radius=semi_major_axis,
+										return_key=return_key, return_distance=return_distance)
+			if return_key or return_distance:
+				return matches
+			# radial_query keeps its historical squeezed shape; this method promises (n,2)
+			return _as_stable_pairs(matches)
 
 		center_ra = ra
 		center_dec = dec
@@ -1991,5 +2101,6 @@ class QLSCIndex:
 					else:
 						match_distance.append(_sindist2deg(sindist(row_ra, row_dec, center_ra, center_dec)))
 
-		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance)
+		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance,
+							 MatchArrayShape.STABLE)
 

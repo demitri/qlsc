@@ -20,8 +20,11 @@ index.add_points(points=sample_points)
 
 def as_pairs(result:np.ndarray) -> np.ndarray:
 	'''
-	Reshape a query result to (n,2). A single match is returned with shape (2,) and
-	no matches with shape (0,2); this is the documented (and awkward) return shape.
+	Reshape a query result to (n,2).
+
+	These queries already promise (n,2) (see the shape contract tests below); this
+	keeps the comparison helpers usable for the brute-force reference arrays too,
+	which are built with reshape(-1,2) and can be empty.
 	'''
 	result = np.asarray(result)
 	if result.size == 0:
@@ -109,6 +112,73 @@ def test_polygon_query_returns_keys():
 	assert set(matches.dtype.names) == {"ra", "dec", "key"}
 	for ra, dec, key in zip(matches.ra, matches.dec, matches.key):
 		assert key == f"point-{np.where((sample_points[:,0] == ra) & (sample_points[:,1] == dec))[0][0]}"
+
+@pytest.mark.parametrize("label, polygon", polygon_cases, ids=[c[0] for c in polygon_cases])
+def test_batched_filter_agrees_with_the_scalar_one(label, polygon):
+	'''
+	Test that the batched containment test the query filters with gives exactly the
+	same answers as the scalar one, point for point.
+
+	polygon_query uses check_sphere_points_in_poly, which projects the polygon onto the
+	cube faces once and reuses that projection (q3c's invocation=1 path) instead of
+	reprojecting every vertex for every candidate. That is a large speed-up and a place
+	where a stale or mis-shared projection buffer would show up as wrong answers.
+	'''
+	poly_ra = np.ascontiguousarray(np.asarray(polygon, dtype=np.double)[:,0])
+	poly_dec = np.ascontiguousarray(np.asarray(polygon, dtype=np.double)[:,1])
+
+	ra = np.ascontiguousarray(sample_points[:,0])
+	dec = np.ascontiguousarray(sample_points[:,1])
+
+	batched = q3c.check_sphere_points_in_poly(q30._hprm, ra, dec, poly_ra, poly_dec)
+	scalar = np.array([q3c.check_sphere_point_in_poly(q30._hprm, r, d, poly_ra, poly_dec)
+					   for r, d in zip(ra, dec)])
+
+	assert batched.dtype == np.bool_
+	assert batched.shape == (len(sample_points),)
+	np.testing.assert_array_equal(batched, scalar,
+								  err_msg=f"the batched filter disagrees with the scalar one for the {label} polygon")
+
+def test_batched_filter_edge_cases():
+	'''
+	Test the batched filter's own boundaries: an empty point array still reports a
+	polygon that cannot be projected, mismatched lengths and non-finite points raise.
+	'''
+	poly_ra = np.ascontiguousarray(small_square[:,0])
+	poly_dec = np.ascontiguousarray(small_square[:,1])
+	empty = np.array([], dtype=np.double)
+
+	assert q3c.check_sphere_points_in_poly(q30._hprm, empty, empty, poly_ra, poly_dec).shape == (0,)
+
+	huge = np.array([[0.,-30.],[60.,-30.],[60.,30.],[0.,30.]])
+	with pytest.raises(ValueError):
+		# the too-large polygon must be reported even with no points to test
+		q3c.check_sphere_points_in_poly(q30._hprm, empty, empty,
+										np.ascontiguousarray(huge[:,0]), np.ascontiguousarray(huge[:,1]))
+
+	with pytest.raises(ValueError):
+		q3c.check_sphere_points_in_poly(q30._hprm, np.array([1., 2.]), np.array([1.]), poly_ra, poly_dec)
+
+	with pytest.raises(ValueError):
+		q3c.check_sphere_points_in_poly(q30._hprm, np.array([np.nan]), np.array([0.]), poly_ra, poly_dec)
+
+def test_polygon_query_result_is_always_two_dimensional():
+	'''
+	Test the return shape contract: (n,2) for any number of matches, including one.
+
+	radial_query squeezes its result, so a single match comes back with shape (2,) and
+	``matches[:,0]`` fails for exactly that case. That wart is kept for compatibility
+	and queued for a 2.0 release; this query must not inherit it.
+	'''
+	one_point = QLSCIndex(qlsc=QLSC(depth=10))
+	one_point.add_point(ra=10., dec=20.)
+
+	matches = one_point.polygon_query(polygon=small_square)
+	assert matches.shape == (1,2)
+	assert matches[:,0][0] == pytest.approx(10.)
+
+	many = index.polygon_query(polygon=twenty_degrees)
+	assert many.ndim == 2 and many.shape[1] == 2
 
 def test_polygon_query_with_no_matches():
 	'''

@@ -322,9 +322,12 @@ def test_c_level_facenum_rejects_non_finite():
 @pytest.mark.parametrize("centre", [10., 100., 265., 350.])
 def test_c_level_polygon_functions_are_periodic(centre):
 	'''
-	Test the two exported polygon functions directly.
+	Test the exported polygon functions directly: the scalar containment test, the
+	batched one, and the range query.
 	'''
 	plain = _polygon(centre)
+	points_ra = np.array([centre, centre + 1., centre - 1., centre + 20.])
+	points_dec = np.array([0., 0.5, -0.5, 0.])
 
 	for shift in SHIFTS:
 		wrapped = _polygon(centre + shift)
@@ -335,6 +338,16 @@ def test_c_level_polygon_functions_are_periodic(centre):
 			   q3c.check_sphere_point_in_poly(q30._hprm, centre, 0.,
 											  np.ascontiguousarray(plain[:,0]),
 											  np.ascontiguousarray(plain[:,1]))
+
+		# the batched test must be periodic in the polygon's vertices AND in the
+		# right ascensions of the points being tested
+		assert np.array_equal(
+			q3c.check_sphere_points_in_poly(q30._hprm, points_ra + shift, points_dec,
+											np.ascontiguousarray(wrapped[:,0]),
+											np.ascontiguousarray(wrapped[:,1])),
+			q3c.check_sphere_points_in_poly(q30._hprm, points_ra, points_dec,
+											np.ascontiguousarray(plain[:,0]),
+											np.ascontiguousarray(plain[:,1])))
 
 		wrapped_fulls, wrapped_partials = q3c.poly_query(q30._hprm,
 														 np.ascontiguousarray(wrapped[:,0]),
@@ -357,6 +370,7 @@ def test_c_level_polygon_functions_do_not_modify_the_caller_array():
 	original = poly_ra.copy()
 
 	q3c.check_sphere_point_in_poly(q30._hprm, 220., 0., poly_ra, poly_dec)
+	q3c.check_sphere_points_in_poly(q30._hprm, np.array([220.]), np.array([0.]), poly_ra, poly_dec)
 	q3c.poly_query(q30._hprm, poly_ra, poly_dec)
 
 	assert np.array_equal(poly_ra, original)
@@ -372,5 +386,7 @@ def test_c_level_polygon_functions_reject_non_finite_vertices():
 
 	with pytest.raises(ValueError):
 		q3c.check_sphere_point_in_poly(q30._hprm, 0., 0., poly_ra, poly_dec)
+	with pytest.raises(ValueError):
+		q3c.check_sphere_points_in_poly(q30._hprm, np.array([0.]), np.array([0.]), poly_ra, poly_dec)
 	with pytest.raises(ValueError):
 		q3c.poly_query(q30._hprm, poly_ra, poly_dec)

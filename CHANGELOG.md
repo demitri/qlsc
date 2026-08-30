@@ -48,9 +48,21 @@
   result is precisely the set of indexed points inside the region. `polygon_query`
   takes the polygon in the same form as `QLSC.point_in_polygon` and supports
   `return_key`; `ellipse_query` supports `return_key` and `return_distance` (the
-  separation from the center of the ellipse), accepts `astropy.units.Quantity`
-  angles, and with `axis_ratio=1` returns exactly what `radial_query` does for the
-  same radius.
+  separation from the center of the ellipse) and accepts `astropy.units.Quantity`
+  angles. Both always return an `(n,2)` array, for one match as well as for many —
+  they do not inherit `radial_query`'s squeezed `(2,)` single-match shape, which is
+  kept for compatibility and queued for a 2.0 release.
+
+  An `axis_ratio` of exactly 1 is a circle, and `ellipse_query` answers it by running
+  `radial_query`, so the two agree by construction. This matters because Q3C's ellipse
+  is a conic in the gnomonic (tangent plane) projection about its center — semi-axes
+  `tan(a)` and `tan(a) * axis_ratio` — and only the near hemisphere projects. A
+  genuinely elliptical region is therefore limited to a semi-major axis below 90
+  degrees and raises `ValueError` above it, rather than answering about a region that
+  is not the one asked for; a circle has no such limit and takes the full `[0,180]`
+  range. Along the major axis the region reaches exactly `semi_major_axis` degrees; the
+  semi-minor axis is `arctan(tan(a) * axis_ratio)`, close to `a * axis_ratio` for a
+  small ellipse and noticeably wider for a large one.
 
   Concave polygons are supported. Q3C's coarse coverage step over-covers them —
   it calls a pixel fully covered when all four of its corners are inside the
@@ -62,7 +74,10 @@
   tests whether a point lies inside an ellipse on the sphere, as a sibling of
   `point_in_polygon`. It is the exact test `ellipse_query` filters with, and wraps
   Q3C's own `q3c_in_ellipse`. Like Q3C's SQL interface it takes the axis ratio
-  (semi-minor over semi-major, in `(0,1]`), not the eccentricity.
+  (semi-minor over semi-major, in `(0,1]`), not the eccentricity. The same 90 degree
+  limit and the same circular exemption apply as for `ellipse_query`; a point exactly
+  on the edge of an elliptical region counts as outside (Q3C's convention), while one
+  exactly on the edge of a circle counts as inside (the cone search convention).
 * `QLSC.ipix_neighbors(ipix)` returns the pixels touching a given pixel, as a sorted
   array of unique ipix values — the building block for region growing and
   neighborhood searches. Eight neighbors in the interior of a cube face; **seven**
