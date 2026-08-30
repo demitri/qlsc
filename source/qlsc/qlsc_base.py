@@ -1040,6 +1040,141 @@ class QLSCIndex:
 			if not self._is_in_memory_db():
 				connection.close()
 
+	def remove_point(self, ra:float=None, dec:float=None, key:str=None) -> int:
+		'''
+		Remove points from the index, identified either by their key or by their exact coordinate.
+
+		Provide either ``key`` or both ``ra`` and ``dec``, not both forms. Keys are not
+		required to be unique, so removing by key removes every point carrying that key;
+		coordinates are unique in the index, so removing by coordinate removes at most one
+		point. The coordinate given must be the one that was stored: as with
+		:py:func:`add_point`, a declination outside [-90,90] is normalized first, but no
+		tolerance is applied — use :py:func:`radial_query` to find a nearby point and remove
+		the coordinate it reports.
+
+		Removing something that is not in the index raises ``KeyError`` rather than quietly
+		doing nothing.
+
+		:param ra: right ascension of the point to remove, in degrees
+		:param dec: declination of the point to remove, in degrees
+		:param key: the key of the point(s) to remove
+		:returns: the number of points removed
+		'''
+		self._ensure_open()
+
+		by_coordinate = ra is not None or dec is not None
+
+		if key is None and not by_coordinate:
+			raise ValueError("A 'key' or an 'ra','dec' coordinate must be given to identify the point(s) to remove.")
+		if key is not None and by_coordinate:
+			raise ValueError("Specify either 'key' or 'ra','dec' to identify the point(s) to remove, not both.")
+
+		if by_coordinate:
+			if ra is None or dec is None:
+				raise ValueError(f"Both 'ra' and 'dec' must be specified when removing by coordinate (ra={ra}, dec={dec}).")
+			ra = _as_float_scalar(ra, "ra")
+			dec = _as_float_scalar(dec, "dec")
+			# match add_point: the stored coordinate is the normalized one
+			if not (-90 <= dec <= 90):
+				ra, dec = _normalize_ang(ra, dec)
+			query = f"DELETE FROM {self.database_tablename} WHERE ra=? AND dec=?"
+			parameters = (ra, dec)
+			description = f"the coordinate (ra={ra}, dec={dec})"
+		else:
+			key = self._validated_key(key)
+			query = f"DELETE FROM {self.database_tablename} WHERE key=?"
+			parameters = (key,)
+			description = f"the key '{key}'"
+
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				cursor.execute("BEGIN")
+				cursor.execute(query, parameters)
+				removed = cursor.rowcount # must be read before the COMMIT resets it
+				cursor.execute("COMMIT")
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+		if removed == 0:
+			raise KeyError(f"No point matching {description} was found in this index.")
+
+		return removed
+
+	def _validated_key(self, key) -> str:
+		'''
+		Validate a key used to look up or remove points.
+
+		The ``key`` column has SQLite's TEXT affinity, so a non-string key would be
+		stored (and compared) as its text representation — a silent mismatch waiting
+		to happen. Require a string and say so instead.
+		'''
+		if not isinstance(key, str):
+			raise TypeError(f"Index keys are strings (the underlying column has TEXT affinity); "
+							f"was given '{key!r}' of type '{type(key).__name__}'.")
+		return key
+
+	def keys(self) -> Iterable[str]:
+		'''
+		Return a generator over the keys of the points in this index.
+
+		Keys are not required to be unique and a point may have been added without one.
+		A key shared by several points is therefore yielded once per point, and points
+		stored without a key are **not** represented at all — so the number of keys
+		yielded can be either larger or smaller than ``len(index)``. Compare the two if
+		the difference matters. No particular ordering is guaranteed.
+
+		The generator holds a database connection open while it is being consumed
+		(file-backed indices only); the connection is released when the generator is
+		exhausted or closed.
+
+		:returns: a generator yielding the key of each keyed point in the index
+		'''
+		self._ensure_open() # fail here, not on the first next() call
+		return self._iterate_keys()
+
+	def _iterate_keys(self):
+		''' The generator returned by :py:func:`keys`. '''
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				for row in cursor.execute(f"SELECT key FROM {self.database_tablename} WHERE key IS NOT NULL"):
+					yield row["key"]
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+	def __len__(self) -> int:
+		'''
+		Return the number of coordinate points in the index.
+
+		Note that this makes an empty index falsy, as an empty dict or list is.
+		'''
+		return self.number_of_points
+
+	def __iter__(self) -> Iterable[str]:
+		''' Iterate over the keys in the index; see :py:func:`keys`. '''
+		return self.keys()
+
+	def __contains__(self, key:str) -> bool:
+		'''
+		Return whether any point in the index carries the given key.
+
+		:param key: the key to look for
+		'''
+		self._ensure_open()
+		key = self._validated_key(key)
+
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				cursor.execute(f"SELECT 1 FROM {self.database_tablename} WHERE key=? LIMIT 1", (key,))
+				return cursor.fetchone() is not None
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
 	def _find_candidate_ranges(self, ra:float, dec:float, radius:float):
 		'''
 		Return the (fulls, partials) candidate ipix range arrays covering a cone search,

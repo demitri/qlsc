@@ -17,6 +17,21 @@
   is unchanged (an array of shape (n,2)). Points matched as equivalent
   representations of the query center (ra=360 vs ra=0, any ra at a pole) report a
   separation of exactly 0 rather than a floating point residual.
+* `QLSCIndex` gained a dict-like interface over its keys: `len(index)`,
+  `key in index`, `for key in index` / `index.keys()` (a generator), and
+  `index.remove_point(key=...)` or `index.remove_point(ra=..., dec=...)`, which
+  returns the number of points removed and raises `KeyError` if there were none.
+  Keys are not required to be unique, so removing by key removes every point
+  carrying it, and `keys()` yields a shared key once per point; points added
+  without a key are not represented in `keys()` at all (they can only be removed
+  by coordinate). A non-string key raises `TypeError` rather than silently missing:
+  the underlying column has SQLite's TEXT affinity.
+
+### Breaking changes
+
+* An empty `QLSCIndex` is now falsy. `QLSCIndex` defines `__len__`, so
+  `if index:` asks whether the index holds any points, where it was previously
+  always true. Use `if index is not None:` for the old meaning.
 
 ### Fixed
 
