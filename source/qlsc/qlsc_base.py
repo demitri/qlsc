@@ -140,6 +140,10 @@ class QLSC:
 			ra = points[:,0]
 			dec = points[:,1]
 
+		# the C extension requires arrays of dtype double; copy/convert any other type
+		ra = np.asarray(ra, dtype=np.double)
+		dec = np.asarray(dec, dtype=np.double)
+
 		if not ((-90 <= dec).all() and (dec <= 90).all()):
 			ra, dec = _normalize_ang(ra=ra, dec=dec, copy=True)
 
@@ -165,39 +169,12 @@ class QLSC:
 
 	def ipix2ang(self, ipix:int) -> Tuple[float, float]:
 		'''
-		Convert an ipix number to the ra,dec coordinate of the "lower left" corner of the pixel, in degrees.
-
-		See the method :py:func:`ipix2ang_center` to return the center of the pixel.
-
-		Note: the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_ originally returned
-		the corner of the pixel, but as of Q3C v2.0.1 it returns the center; this method
-		preserves the corner behavior.
-
-		:param ipix: ipix number
-		:returns: ra,dec in degrees as a tuple of the lower left corner of the pixel
-		'''
-		if isinstance(ipix, int) is False:
-			raise ValueError(f"The ipix value must be an integer; was given '{type(ipix)}'.")
-
-		# perform a bounds check
-		if not (0 <= ipix < self.nbins):
-			raise ValueError(f"The ipix number is out of bounds for this scheme; range: [0,{self.nbins-1}].")
-
-		# The C-level q3c.ipix2ang returns the pixel center as of Q3C v2.0.1,
-		# so compute the corner from the face coordinates instead.
-		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
-		return self.xy2ang(facenum=facenum, x=x, y=y)
-
-	def ipix2ang_center(self, ipix:int) -> Tuple[float, float]:
-		'''
 		Convert an ipix number to the ra,dec coordinate of the center of the pixel, in degrees.
 
-		See the method :py:func:`ipix2ang` to return the "lower left" corner of the pixel.
-		(As of Q3C v2.0.1, the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_
-		returns the pixel center, matching this method.)
-
-		The pixel "center" here is defined in the x,y coordinates;
-		the point projected on the sphere is the one returned.
+		This method matches the behavior of the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_
+		(v2.0.1 and later). Note that prior to qlsc v1.1, this method returned the "lower left"
+		corner of the pixel, matching older versions of the plugin. To work with the pixel
+		corners, see :py:func:`ipix2xy` and :py:func:`ipix2polygon`.
 
 		:param ipix: ipix number
 		:returns: ra,dec in degrees as a tuple of the center of the pixel
@@ -209,11 +186,22 @@ class QLSC:
 		if not (0 <= ipix < self.nbins):
 			raise ValueError(f"The ipix number is out of bounds for this scheme; range: [0,{self.nbins-1}].")
 
-		# bin_length = 2./self.nside
-		hbl = 1. / self.nside # half bin length
+		return q3c.ipix2ang(self._hprm, ipix)
 
-		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
-		return self.xy2ang(facenum=facenum, x=x+hbl, y=y+hbl)
+	def ipix2ang_center(self, ipix:int) -> Tuple[float, float]:
+		'''
+		Convert an ipix number to the ra,dec coordinate of the center of the pixel, in degrees.
+
+		This is a synonym of :py:func:`ipix2ang`, kept for callers who want the "center"
+		semantics to be explicit at the call site.
+
+		The pixel "center" here is defined in the x,y coordinates;
+		the point projected on the sphere is the one returned.
+
+		:param ipix: ipix number
+		:returns: ra,dec in degrees as a tuple of the center of the pixel
+		'''
+		return self.ipix2ang(ipix)
 
 
 	def ipix2xy(self, ipix:int) -> Tuple[int, float, float]:
@@ -518,6 +506,8 @@ class QLSCIndex:
 		self.name = name
 		self.description = description
 		self.memory_db_connection = None # this must persist
+		self._closed = False
+		self._query_qlsc = None # depth-30 QLSC used for radial queries; created on demand
 		#self._db = None # SQLite database connection, defined in _initial_database_connection
 
 		self.database_tablename = "qlsc_ipix"
@@ -607,7 +597,7 @@ class QLSCIndex:
 			with contextlib.closing(connection.cursor()) as cursor:
 				metadata = cursor.execute("SELECT depth, index_name, index_description FROM qlsc_metadata").fetchone()
 				if self.qlsc.depth != metadata["depth"]:
-					self.qlsc = QLSC(depth=depth)
+					self.qlsc = QLSC(depth=metadata["depth"])
 				self.name = metadata["index_name"]
 				self.description = metadata["index_description"]
 				return True
@@ -615,11 +605,31 @@ class QLSCIndex:
 			if "no such table" in str(e):
 				return False
 
+	def close(self):
+		'''
+		Close the index.
+
+		For in-memory indices this releases the underlying database, discarding the data;
+		file-based indices are unaffected on disk. The index cannot be used after being
+		closed. This method is idempotent, and the object can also be used as a context
+		manager, e.g. ``with QLSCIndex(...) as index:``.
+		'''
+		if self.memory_db_connection is not None:
+			self.memory_db_connection.close()
+			self.memory_db_connection = None
+		self._closed = True
+
+	def __enter__(self):
+		return self
+
+	def __exit__(self, exc_type, exc_value, traceback):
+		self.close()
+
 	def __del__(self):
 		''' Destructor method. '''
-		# if we had an open SQLite connection, close it
-		if self._is_in_memory_db():
-			self.memory_db_connection.close()
+		# guard with hasattr in case __init__ raised before defining the attribute
+		if hasattr(self, "memory_db_connection"):
+			self.close()
 
 	def _is_in_memory_db(self):
 		#return (self.db_filepath == ":memory:") or self.db_filepath.startswith("file::memory:")
@@ -722,6 +732,10 @@ class QLSCIndex:
 		It is the responsibility of the calling function to close the connection when finished.
 		This is not done automatically in case the object is an in-memory database.
 		'''
+		if self._closed:
+			# without this check, an operation on a closed in-memory index would
+			# silently open a brand new, empty database
+			raise RuntimeError("This QLSCIndex has been closed and can no longer be used.")
 		return self.memory_db_connection or sqlite3.connect(self.db_filepath, timeout=20)
 
 	def add_point(self, ra:float=None, dec:float=None, key:str=None):
@@ -873,6 +887,9 @@ class QLSCIndex:
 		if abs(dec) > 90:
 			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
 
+		if radius < 0:
+			raise ValueError(f"The value for radius must be non-negative; was given '{radius}'.")
+
 		center_ra = ra
 		center_dec = dec
 
@@ -883,16 +900,35 @@ class QLSCIndex:
 
 		#if isinstance(self._db, sqlite3.Connection):
 
-		fulls, partials = q3c.radial_query(self.qlsc._hprm, center_ra, center_dec, radius)
+		# The underlying q3c_radial_query produces degenerate (empty) ipix ranges for
+		# some queries at small nside values - upstream Q3C is only ever exercised at
+		# depth 30. Always query at depth 30 and, if the index is at a lower depth,
+		# shift the ranges down to the index's resolution. The resulting over-coverage
+		# is removed by the exact sindist filter applied to every candidate row below.
+		if self._query_qlsc is None:
+			self._query_qlsc = self.qlsc if self.qlsc.depth == 30 else QLSC(depth=30)
+		fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, radius)
+
+		# number of ipix bits to shift from depth 30 down to the index depth
+		k = 2 * (30 - self.qlsc.depth)
 
 		#logger.debug(f"{center_ra=}, {center_dec=}, {radius=}")
 		#logger.debug(f"{fulls=}, {partials=}")
 
 		ipix_statements = list()
-		for min_ipix,max_ipix in fulls:
+		for min_ipix,max_ipix in np.vstack((fulls, partials)):
+			if k > 0:
+				min_ipix = min_ipix >> k
+				max_ipix = (max_ipix + (1 << k) - 1) >> k # round up so partially covered pixels are kept
 			ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
-		for min_ipix,max_ipix in partials:
-			ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
+
+		if len(ipix_statements) == 0:
+			# no candidate pixels (e.g. radius=0); an empty WHERE clause would be an SQL syntax error
+			if return_key:
+				return np.core.records.fromarrays([[], [], []], names='ra,dec,key')
+			else:
+				return np.squeeze(np.dstack(([],[])))
+
 		wheres = "({0})".format(" OR ".join(ipix_statements))
 		query = f"SELECT ra,dec,key FROM {self.database_tablename} WHERE {wheres}"
 

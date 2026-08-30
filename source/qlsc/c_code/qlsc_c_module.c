@@ -523,8 +523,9 @@ qlsc_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
-	//face_num = ipix / (hprm->nside)^2;
-	face_num = (int)trunc(ipix/pow(hprm->nside,2)); // take care of types here...
+	// integer arithmetic - going through doubles (e.g. pow()) rounds ipix values
+	// near face boundaries onto the wrong face at depths ≳26
+	face_num = (int)(ipix / (hprm->nside * hprm->nside));
 
 //	PySys_WriteStdout("x = %f\n", (double) (ipix / ((hprm->nside)^2)) );
 //	PySys_WriteStdout("ipix = %"PRId64"\n", ipix);
@@ -805,17 +806,18 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 		return NULL;
 	}
 
-	// q3c_radial_query() calls array_filler() which adds (-1,1)
+	// q3c_radial_query() calls array_filler() which adds (1,-1)
 	// pairs to fill out the arrays. We don't need them here, so we'll
 	// find number of actual data points and dynamically create arrays of the needed size.
+	// Only the exact (1,-1) pair is filler - a legitimate range can start or end at 1.
 	fulls_filler_pos = 0;
 	max_idx = fulls_length;
-	while (fulls_filler_pos < max_idx && fulls_padded[fulls_filler_pos] != 1 && fulls_padded[fulls_filler_pos+1] != 1)
+	while (fulls_filler_pos < max_idx && !(fulls_padded[fulls_filler_pos] == 1 && fulls_padded[fulls_filler_pos+1] == -1))
 		fulls_filler_pos += 2;
 
 	partials_filler_pos = 0;
 	max_idx = partials_length;
-	while (partials_filler_pos < max_idx && partials_padded[partials_filler_pos] != 1 && partials_padded[partials_filler_pos+1] != 1)
+	while (partials_filler_pos < max_idx && !(partials_padded[partials_filler_pos] == 1 && partials_padded[partials_filler_pos+1] == -1))
 		partials_filler_pos += 2;
 	
 	// allocate memory for the arrays
@@ -862,9 +864,10 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	// internal variables
 	struct q3c_prm *hprm;
 	static int invocation = 0;
-	
+
 	static q3c_coord_t ra_cen_buf, dec_cen_buf, radius_buf;
-	
+	static q3c_ipix_t nside_buf = 0; // without this in the cache key, changing depth returns stale results
+
 	static q3c_ipix_t partials[2 * Q3C_NPARTIALS];
 	static q3c_ipix_t fulls[2 * Q3C_NFULLS];
 
@@ -893,7 +896,7 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	} else {
 		//PySys_WriteStdout("qlsc_q3c_radial_query_it called, invocation = 1, full=%d\n", full_flag);
 		if ((ra_cen == ra_cen_buf) && (dec_cen == dec_cen_buf) &&
-			radius == radius_buf)
+			radius == radius_buf && hprm->nside == nside_buf)
 		{
 			if (full_flag)
 				return PyLong_FromLongLong(fulls[iteration]);
@@ -914,6 +917,7 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	ra_cen_buf = ra_cen;
 	dec_cen_buf = dec_cen;
 	radius_buf = radius;
+	nside_buf = hprm->nside;
 	invocation = 1;
 	
 	return full_flag ? PyLong_FromLongLong(fulls[iteration]) : PyLong_FromLongLong(partials[iteration]);

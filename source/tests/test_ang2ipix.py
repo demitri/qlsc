@@ -43,13 +43,24 @@ def test_ang2ipix_scalar(depth, ra, dec, ipix):
 	q = QLSC(depth=depth)
 	assert ipix == q.ang2ipix(ra, dec)
 
-@pytest.mark.parametrize("depth, ra, dec, ipix", expected_results)
-def test_ang2ipix_array( depth, ra, dec, ipix):
+@pytest.mark.parametrize("depth, ra, dec, ipix", expected_results_q0)
+def test_ang2ipix_array(depth, ra, dec, ipix):
 	'''
-	Test ang2ipix using arrays, testing both float and double array types.
+	Test ang2ipix using arrays.
 	'''
 	q = QLSC(depth=depth)
-	assert ipix == q.ang2ipix(ra, dec)
+	assert np.array_equal(ipix, q.ang2ipix(ra, dec))
+
+# Only the depth=0 rows are used here: their ra,dec values are integers, which are exactly
+# representable in float32; a value like 57.3 changes when cast, legitimately changing the
+# expected ipix at high depths.
+@pytest.mark.parametrize("depth, ra, dec, ipix", [r for r in expected_results_q0 if r[0] == 0])
+def test_ang2ipix_array_float32(depth, ra, dec, ipix):
+	'''
+	Test ang2ipix using float32 arrays, which the method must convert to double.
+	'''
+	q = QLSC(depth=depth)
+	assert np.array_equal(ipix, q.ang2ipix(ra.astype(np.float32), dec.astype(np.float32)))
 
 def test_ang2ipix_dec_below_range():
 	'''
