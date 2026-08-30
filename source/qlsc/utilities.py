@@ -14,6 +14,19 @@ from typing import Union
 import numpy as np
 from numpy import deg2rad, rad2deg, cos, sin, arctan2, sqrt, fmod, trunc, sign
 
+def _as_float_scalar(value, name:str) -> float:
+	'''
+	Coerce a scalar-like value (Python number, NumPy scalar, or size-1 array) to a float.
+
+	NumPy has deprecated (and will remove) the implicit conversion of size-1 arrays
+	to scalars, which the C extension's scalar signatures relied on; .item() extracts
+	the value without that conversion and raises for larger arrays.
+	'''
+	try:
+		return float(np.asarray(value).item())
+	except (ValueError, TypeError) as e:
+		raise TypeError(f"The '{name}' parameter must be a scalar value; was given '{value!r}'.") from e
+
 def _ang2cartesian(ra=None,dec=None,points=None):
 	'''
 	Convert ra,dec points in degrees to Cartesian coordinates.

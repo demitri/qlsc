@@ -32,25 +32,12 @@ except ImportError:
 from . import q3c
 from .q3c import sindist
 
-from .utilities import _normalize_ang
+from .utilities import _normalize_ang, _as_float_scalar
 
 # really important for the ipix values!
 sqlite3.register_adapter(np.int64, int)
 
 logger = logging.getLogger("qlsc")
-
-def _as_float_scalar(value, name:str) -> float:
-	'''
-	Coerce a scalar-like value (Python number, NumPy scalar, or size-1 array) to a float.
-
-	NumPy has deprecated (and will remove) the implicit conversion of size-1 arrays
-	to scalars, which the C extension's scalar signatures relied on; .item() extracts
-	the value without that conversion and raises for larger arrays.
-	'''
-	try:
-		return float(np.asarray(value).item())
-	except (ValueError, TypeError) as e:
-		raise TypeError(f"The '{name}' parameter must be a scalar value; was given '{value!r}'.") from e
 
 def _canonical_position(ra:float, dec:float) -> Tuple[float, float]:
 	'''
@@ -272,6 +259,8 @@ class QLSC:
 
 
 		if points is None:
+			x = _as_float_scalar(x, "x")
+			y = _as_float_scalar(y, "y")
 			if not (-1 <= x <= 1) and not (-1 <= y <= 1):
 				raise ValueError("Values of 'x' and 'y' must be in the range [-1,1].")
 
@@ -518,6 +507,9 @@ class QLSC:
 		'''
 		if any([x is None for x in [ra, dec, polygon]]):
 			raise ValueError("Values for 'ra', 'dec', and 'polygon' must all be specified.")
+
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
 
 		if not (math.isfinite(ra) and math.isfinite(dec)):
 			raise ValueError(f"The 'ra' and 'dec' values must be finite; was given ra={ra}, dec={dec}.")
@@ -1026,6 +1018,10 @@ class QLSCIndex:
 		if astropy_available:
 			if isinstance(radius, Quantity):
 				radius = radius.to(u.deg).value
+
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
+		radius = _as_float_scalar(radius, "radius")
 
 		if abs(dec) > 90:
 			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")

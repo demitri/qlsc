@@ -1,28 +1,31 @@
 
 #from . import q3c
 from . import q3c
+from .utilities import _as_float_scalar
 
 def distance(ra1, dec1, ra2, dec2) -> float:
 	'''
 	Calculates the angular distance between two points on a sphere.
-	
+
 	:param ra1: right ascension, first coordinate (degrees)
 	:param dec1: declination, first coordinate (degrees)
 	:param ra2: right ascension, second coordinate (degrees)
 	:param dec2: declination, second coordinate (degrees)
 	'''
-	return q3c.distance(ra1, dec1, ra2, dec2)
+	return q3c.distance(_as_float_scalar(ra1, "ra1"), _as_float_scalar(dec1, "dec1"),
+	                    _as_float_scalar(ra2, "ra2"), _as_float_scalar(dec2, "dec2"))
 
 def sindist(ra1, dec1, ra2, dec2) -> float:
 	'''
 	Calculates the sine of the angular distance between two points on a sphere.
-	
+
 	:param ra1: right ascension, first coordinate (degrees)
 	:param dec1: declination, first coordinate (degrees)
 	:param ra2: right ascension, second coordinate (degrees)
 	:param dec2: declination, second coordinate (degrees)
 	'''
-	return q3c.sindist(ra1, dec1, ra2, dec2)
+	return q3c.sindist(_as_float_scalar(ra1, "ra1"), _as_float_scalar(dec1, "dec1"),
+	                   _as_float_scalar(ra2, "ra2"), _as_float_scalar(dec2, "dec2"))
 
 def xy2facenum(x:float, y:float, facenum:int) -> int:
 	'''
@@ -39,4 +42,4 @@ def xy2facenum(x:float, y:float, facenum:int) -> int:
 	'''
 	if facenum not in (0, 1, 2, 3, 4, 5):
 		raise ValueError(f"The face number must be an integer in [0,5]; was given '{facenum}'.")
-	return q3c.xy2facenum(x, y, facenum)
+	return q3c.xy2facenum(_as_float_scalar(x, "x"), _as_float_scalar(y, "y"), facenum)
