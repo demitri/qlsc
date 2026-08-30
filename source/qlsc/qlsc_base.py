@@ -929,20 +929,27 @@ class QLSCIndex:
 		# is removed by the exact filter applied to every candidate row below.
 		if self._query_qlsc is None:
 			self._query_qlsc = self.qlsc if self.qlsc.depth == 30 else QLSC(depth=30)
-		fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, radius)
 
 		# For zero and very small (< ~1e-7 deg) radii, q3c produces no ranges at all at
 		# some sky positions, and at seam/pole positions its ranges can omit the pixels
 		# holding equivalent coordinate representations (e.g. a point stored as ra=360
-		# queried as ra=0). Search with at least a small positive radius, growing it if
-		# q3c still returns nothing. The exact filter below still applies the radius
-		# actually requested, so the wider search only costs a few extra candidate rows.
+		# queried as ra=0), so search with at least a small positive radius. At rare
+		# positions a given search radius can also overflow q3c's internal range
+		# capacity; a larger radius produces fewer, coarser ranges, so grow the radius
+		# and retry on either failure mode. The exact filter below still applies the
+		# radius actually requested, so a wider search only adds candidate rows.
 		search_radius = max(radius, 1e-6)
-		if search_radius != radius:
-			fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, search_radius)
-		while len(fulls) + len(partials) == 0 and search_radius < 1.0:
-			search_radius = max(search_radius * 10, 1e-6)
-			fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, search_radius)
+		while True:
+			try:
+				fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, search_radius)
+			except RuntimeError:
+				if search_radius >= 180.0:
+					raise # even a whole-sphere search failed
+				search_radius = min(search_radius * 10, 180.0)
+				continue
+			if len(fulls) + len(partials) > 0 or search_radius >= 180.0:
+				break
+			search_radius = min(search_radius * 10, 180.0)
 
 		# number of ipix bits to shift from depth 30 down to the index depth
 		k = 2 * (30 - self.qlsc.depth)

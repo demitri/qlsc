@@ -65,8 +65,11 @@ def test_radial_query_radius_inclusive():
 	assert matches.shape == (2, 2)
 
 # (10,20) and (0,0) are positions where q3c_radial_query produces no candidate
-# ranges at all for tiny radii; (12,34) is a position where it does
-@pytest.mark.parametrize("ra, dec", [(10., 20.), (0., 0.), (12., 34.), (45., 45.), (200., -60.)])
+# ranges at all for tiny radii; (12,34) is a position where it does; the last
+# position is one where a 1e-6 degree search radius overflows q3c's internal
+# range capacity and the search must be retried with a larger radius
+@pytest.mark.parametrize("ra, dec", [(10., 20.), (0., 0.), (12., 34.), (45., 45.), (200., -60.),
+                                     (316.73891370708168, 3.0827793488343289)])
 def test_radial_query_zero_radius(ra, dec):
 	'''
 	Test that a radius of zero returns only exactly coincident points
