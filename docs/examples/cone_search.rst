@@ -214,6 +214,8 @@ The alternative is to compute the separation to every source with NumPy and
 threshold it. That is a perfectly good approach for one query. It is a bad one
 for a thousand.
 
+.. check-outputs: run-only -- wall-clock timings differ between machines and runs
+
 .. code-block:: python
 
 	import time

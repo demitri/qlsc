@@ -202,11 +202,11 @@ nested, similar ellipses:
 .. code-block:: text
 
 	 a/arcmin   objects   disc   background
-	     3        18     10        8
-	     6        98     47       51
-	     9       221     99      122
-	    12       412    193      219
-	    15       661    299      362
+	       3        18     10        8
+	       6        98     47       51
+	       9       221     99      122
+	      12       412    193      219
+	      15       661    299      362
 
 The background column grows as :math:`a^2`, as it must for a fixed axis ratio; the
 disc column grows the same way here only because the toy disc has a uniform

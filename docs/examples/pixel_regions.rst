@@ -38,14 +38,14 @@ The neighbours of a pixel
 .. code-block:: text
 
 	depth 6, ipix 9200 has 8 neighbours: [9167 9178 9179 9189 9191 9201 9202 9203]
-	  9167  centre ( 81.9953, -7.9277)  2.4551 deg away
-	  9178  centre ( 83.7581, -7.9579)  1.7527 deg away
-	  9179  centre ( 85.5328, -7.9807)  2.5008 deg away
-	  9189  centre ( 81.9953, -6.1816)  1.7527 deg away
-	  9191  centre ( 81.9953, -4.4238)  2.5008 deg away
-	  9201  centre ( 85.5328, -6.2231)  1.7644 deg away
-	  9202  centre ( 83.7581, -4.4408)  1.7644 deg away
-	  9203  centre ( 85.5328, -4.4536)  2.4880 deg away
+	    9167  centre ( 81.9953, -7.9277)  2.4551 deg away
+	    9178  centre ( 83.7581, -7.9579)  1.7527 deg away
+	    9179  centre ( 85.5328, -7.9807)  2.5008 deg away
+	    9189  centre ( 81.9953, -6.1816)  1.7527 deg away
+	    9191  centre ( 81.9953, -4.4238)  2.5008 deg away
+	    9201  centre ( 85.5328, -6.2231)  1.7644 deg away
+	    9202  centre ( 83.7581, -4.4408)  1.7644 deg away
+	    9203  centre ( 85.5328, -4.4536)  2.4880 deg away
 
 Eight neighbours — four sharing an edge at about 1.76°, four sharing only a
 corner at about 2.49°, which is the √2 you would expect from a square grid. Note

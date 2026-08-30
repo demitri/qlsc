@@ -42,6 +42,12 @@ An index supports the context manager protocol, and can be closed explicitly:
 
 .. code-block:: python
 
+	import os
+	import numpy as np
+	from qlsc import QLSC, QLSCIndex
+
+	path = "demo.qlscidx"
+
 	with QLSCIndex(filepath=path, name="demo", description="a small demo index") as index:
 		index.add_points(ra=np.array([1., 2., 3.]), dec=np.array([1., 2., 3.]))
 		print("inside the context manager:", len(index))
@@ -185,6 +191,8 @@ Where it differs from a dictionary, and it matters:
 
 .. code-block:: python
 
+	index = QLSCIndex()
+	index.add_point(4., 4., key="k")
 	try:
 		42 in index
 	except TypeError as e:
@@ -243,9 +251,19 @@ a polygon has no centre to measure from, so it has no such option.
 **The return type depends on those flags.** With both left ``False`` you get a
 plain ``(n,2)`` array of coordinates. With either set you get a
 :class:`numpy.recarray` with named fields, in the order ``ra``, ``dec``,
-``key``, ``distance``:
+``key``, ``distance``. Using a fresh index of fifty thousand points:
 
 .. code-block:: python
+
+	import numpy as np
+	from qlsc import QLSCIndex
+
+	rng = np.random.default_rng(seed=20200422)
+	ra  = rng.uniform(0., 360., 50_000)
+	dec = np.degrees(np.arcsin(rng.uniform(-1., 1., 50_000)))
+
+	index = QLSCIndex()
+	index.add_points(ra=ra, dec=dec, keys=[f"S{i:05d}" for i in range(50_000)])
 
 	r1 = index.radial_query(ra=100., dec=10., radius=2.)
 	r2 = index.radial_query(ra=100., dec=10., radius=2., return_key=True)
@@ -263,7 +281,6 @@ plain ``(n,2)`` array of coordinates. With either set you get a
 	return_key       type=recarray   shape=(18,) fields=('ra', 'dec', 'key')
 	return_distance  type=recarray   shape=(18,) fields=('ra', 'dec', 'distance')
 	both             type=recarray   shape=(18,) fields=('ra', 'dec', 'key', 'distance')
-
 	(99.23592352159642, 8.642793354892902, 'S29764', 1.5525712338207096)
 
 The record form is the more convenient one: it sorts by field

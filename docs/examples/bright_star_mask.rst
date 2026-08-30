@@ -1,6 +1,8 @@
 Bright Star Avoidance With a Real Catalog
 =========================================
 
+.. check-outputs-page: needs-network -- every block depends on the Bright Star Catalogue fetched from the VizieR TAP service
+
 .. contents::
    :local:
    :depth: 2

@@ -131,7 +131,6 @@ block: the first ``nside**2`` pixel numbers are on face 0, the next
 	  ipix  42: ipix // nside**2 -> 2   face_number(centre) -> 2
 	  ipix  95: ipix // nside**2 -> 5   face_number(centre) -> 5
 
-
 The pixel number
 ----------------
 

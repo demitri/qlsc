@@ -138,7 +138,6 @@ using the same test:
 	  ( 149.5, +3.5) north-west quadrant    tile=True  notched=False
 	  ( 146.0, +2.0) outside the tile       tile=False notched=False
 
-
 The edges are great circles
 ---------------------------
 

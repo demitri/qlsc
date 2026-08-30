@@ -85,6 +85,7 @@ grouping:
 		ipix = q.ang2ipix(ra=ra, dec=dec)
 		occupied, counts = np.unique(ipix, return_counts=True)
 
+		print()
 		pixel_area = q.ipix_area(0, depth) * (180./np.pi)**2
 		print(f"depth {depth}: {q.nbins:,} pixels, {pixel_area:.4g} square degrees each")
 		print(f"  occupied pixels: {len(occupied):,} ({100*len(occupied)/q.nbins:.1f}%)")
@@ -94,6 +95,7 @@ grouping:
 		print(f"  densest pixel: ipix {hottest} centred at ({hra:.3f}, {hdec:+.3f})")
 
 .. code-block:: text
+
 
 	depth 3: 384 pixels, 107.4 square degrees each
 	  occupied pixels: 384 (100.0%)
@@ -182,8 +184,8 @@ The seams where the blocks change orientation, most visible near α = 270° and
 α = 105° and around the poles, are the edges of the cube faces.
 
 For anything beyond a quick look, a projection-aware plotting library will serve
-you better; the author's sibling *astplot-js* project renders sky maps
-like this properly.
+you better. The author has a sibling project, *astplot-js*, that renders sky maps
+like this properly; it is not public at the time of writing.
 
 
 The same map on the cube

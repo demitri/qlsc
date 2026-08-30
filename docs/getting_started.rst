@@ -28,9 +28,9 @@ into the module ``qlsc.q3c`` and wrapped by the Python classes. Installing
 therefore compiles that code, which needs a C compiler and the NumPy headers.
 Both are handled automatically by pip's build isolation — the source distribution
 declares its build requirements — so in practice ``pip install qlsc`` works on any
-machine with a working compiler toolchain. Where a pre-built binary wheel is
-available for your platform, pip installs that instead and no compiler is needed
-at all.
+machine with a working compiler toolchain. Binary wheels are being added for
+common platforms; where one matches, pip installs it and no compiler is needed at
+all, and where none does, pip falls back to building from source.
 
 NumPy is the only hard dependency. `astropy <https://www.astropy.org>`_ and
 `pandas <https://pandas.pydata.org>`_ are optional: if astropy is present, angles
@@ -86,6 +86,8 @@ Your first cone search
 
 Build an index. With no arguments it is created in memory at the finest
 resolution the scheme supports (``depth=30``):
+
+.. check-outputs: setup -- introduces the imports and the index the blocks below use
 
 .. code-block:: python
 

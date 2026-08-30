@@ -82,6 +82,18 @@
 * `docs/generate_figures.py` generates every figure in `docs/_static/figures` from
   seeded synthetic catalogs; none are hand-made. It needs matplotlib and astropy,
   neither of which is required to build the documentation.
+* `docs/check_example_outputs.py` re-runs the documentation's example code and diffs
+  it against the output the pages show, so the claim that every output block was
+  really produced by the code above it is enforced rather than merely asserted. It
+  covers 77 code/output pairs across twelve pages. Blocks that cannot run
+  hermetically are marked in the page source with the reason (`run-only` for
+  wall-clock timings, `setup` for a block whose output is not shown, and the
+  page-level `needs-network` for the VizieR fetch, which runs only under
+  `--network`). Its docstring states its blind spots — unpaired code blocks, numbers
+  quoted in prose, and the figures, all of which stay a manual duty. Running it for
+  the first time found seventeen output blocks whose leading whitespace had been
+  lost in transcription; those are now the real output. `docs/README.md` documents
+  how to build, check, and regenerate the documentation.
 * Added `.readthedocs.yaml`, which Read the Docs now requires; without it the build
   has no configuration file to read.
 * Fixed a malformed inline literal in the `QLSCIndex` docstring (``` ``file://` ```)
