@@ -8,9 +8,10 @@ from qlsc.generate import sunflower_points_on_sphere
 # Tests for QLSCIndex.ellipse_query.
 #
 # The reference answer is a brute-force sweep of every indexed point through
-# QLSC.point_in_ellipse, the same exact test the query uses to filter its
-# candidates; an ellipse with an axis ratio of 1 is additionally checked against
-# radial_query, which reaches the same points by an entirely different route.
+# QLSC.point_in_ellipse, the same exact test the query uses to filter its candidates.
+# That shares a predicate with the thing under test, so the circular case is also
+# checked against the great-circle distance, an oracle that shares nothing with it -
+# see test_circular_ellipse_against_the_distance_oracle and its neighbours below.
 
 sample_points = sunflower_points_on_sphere(n=10_000)
 
@@ -21,8 +22,11 @@ index.add_points(points=sample_points)
 
 def as_pairs(result:np.ndarray) -> np.ndarray:
 	'''
-	Reshape a query result to (n,2). A single match is returned with shape (2,) and
-	no matches with shape (0,2); this is the documented (and awkward) return shape.
+	Reshape a query result to (n,2).
+
+	These queries already promise (n,2) (see the shape contract tests below); this
+	keeps the comparison helpers usable for the brute-force reference arrays too,
+	which are built with reshape(-1,2) and can be empty.
 	'''
 	result = np.asarray(result)
 	if result.size == 0:
@@ -91,8 +95,9 @@ circle_cases = [
 def test_ellipse_with_axis_ratio_one_agrees_with_radial_query(ra, dec, radius):
 	'''
 	Test that an ellipse degenerating to a circle returns the same points as a cone
-	search of the same radius. The two share no filtering code: radial_query compares
-	sin^2(d/2) against the radius, ellipse_query evaluates q3c's conic.
+	search of the same radius. ellipse_query answers this case BY running the cone
+	search, so what this pins is that it keeps doing so - including that the position
+	angle, which a circle has no use for, does not change the answer.
 	'''
 	for position_angle in (0., 42.):
 		ellipse_matches = sorted_pairs(index.ellipse_query(ra=ra, dec=dec, semi_major_axis=radius,
@@ -101,6 +106,101 @@ def test_ellipse_with_axis_ratio_one_agrees_with_radial_query(ra, dec, radius):
 
 		assert ellipse_matches.shape == radial_matches.shape, "a circular ellipse query returned a different number of matches than the equivalent radial query"
 		np.testing.assert_allclose(ellipse_matches, radial_matches)
+
+# An independent oracle for the circular case. Everything above compares
+# ellipse_query with point_in_ellipse, which is the predicate it filters with; these
+# compare it with the great-circle distance instead, which shares no code with it.
+# Radii at and beyond 90 degrees are the cases that were wrong: Q3C's elliptical
+# predicate is a conic in the tangent plane at the center, so it rejected every point
+# more than 90 degrees away whatever the radius, and was not monotonic beyond that -
+# a 150 degree "circle" held less than a 60 degree one.
+
+def offset_point(ra0:float, dec0:float, separation:float, position_angle:float):
+	'''
+	Return the point `separation` degrees from (ra0,dec0) along the great circle at
+	the given position angle (measured from north through east).
+	'''
+	d0 = np.radians(dec0)
+	s = np.radians(separation)
+	pa = np.radians(position_angle)
+	dec = np.arcsin(np.sin(d0)*np.cos(s) + np.cos(d0)*np.sin(s)*np.cos(pa))
+	dra = np.arctan2(np.sin(pa)*np.sin(s)*np.cos(d0), np.cos(s) - np.sin(d0)*np.sin(dec))
+	return (np.degrees(dra) + ra0) % 360, np.degrees(dec)
+
+@pytest.mark.parametrize("radius", [1., 34.9, 35., 60., 89.9, 90., 90.1, 120., 179., 180.])
+def test_circular_ellipse_against_the_distance_oracle(radius):
+	'''
+	Test a circular ellipse query against the angular separation of every indexed
+	point, computed directly. This is the check that would have caught the semi-major
+	axis being run through Q3C's conic: at radius=120 the conic returned nothing beyond
+	90 degrees, so more than half the matches were missing.
+	'''
+	from qlsc import distance
+
+	matches = sorted_pairs(index.ellipse_query(ra=10., dec=20., semi_major_axis=radius, axis_ratio=1.))
+	expected = sorted_pairs(np.array([p for p in sample_points if distance(p[0], p[1], 10., 20.) <= radius]).reshape(-1,2))
+
+	assert matches.shape == expected.shape, f"a circular ellipse of radius {radius} deg did not match the distance oracle"
+	np.testing.assert_allclose(matches, expected)
+
+@pytest.mark.parametrize("radius", [0.5, 5., 45., 90., 135.])
+def test_circular_ellipse_includes_points_exactly_on_its_edge(radius):
+	'''
+	Test the boundary convention for a circle: a point at exactly the radius is inside,
+	as it is for a cone search. Q3C's conic uses a strict inequality and would have
+	excluded it.
+
+	The point is placed due north of a center on the equator, where the separation is a
+	difference of declinations and the comparison is exact rather than a round trip
+	through a spherical offset.
+	'''
+	edge_index = QLSCIndex(qlsc=QLSC(depth=20))
+	edge_index.add_point(ra=10., dec=radius, key="on-edge")
+	edge_index.add_point(ra=10., dec=radius - 1e-6, key="inside")
+	edge_index.add_point(ra=10., dec=radius + 1e-6, key="outside")
+
+	found = set(edge_index.ellipse_query(ra=10., dec=0., semi_major_axis=radius,
+										 axis_ratio=1., return_key=True).key)
+	assert found == {"on-edge", "inside"}
+	# and the cone search agrees, point for point
+	assert found == set(edge_index.radial_query(ra=10., dec=0., radius=radius, return_key=True).key)
+
+@pytest.mark.parametrize("radius", [0.5, 45., 90., 135.])
+def test_circular_ellipse_agrees_with_the_cone_search_off_the_meridian(radius):
+	'''
+	Test that the circular case matches the cone search for points placed at an
+	arbitrary position angle, where a point nominally on the edge may land on either
+	side of it by a floating point hair. Whichever side it lands on, the two queries
+	must land there together.
+	'''
+	offset_index = QLSCIndex(qlsc=QLSC(depth=20))
+	for i, scale in enumerate((1 - 1e-9, 1.0, 1 + 1e-9)):
+		point_ra, point_dec = offset_point(10., 20., radius * scale, 55.)
+		offset_index.add_point(ra=point_ra, dec=point_dec, key=f"point-{i}")
+
+	assert (set(offset_index.ellipse_query(ra=10., dec=20., semi_major_axis=radius,
+										   axis_ratio=1., return_key=True).key)
+			== set(offset_index.radial_query(ra=10., dec=20., radius=radius, return_key=True).key))
+
+def test_point_in_ellipse_circle_against_the_distance_oracle():
+	'''
+	Test the circular case of the predicate itself against the great-circle distance,
+	over random points and radii spanning the whole [0,180] range.
+	'''
+	from qlsc import distance
+
+	rng = np.random.default_rng(20260830)
+	centers = np.column_stack((rng.uniform(0, 360, 40), np.degrees(np.arcsin(rng.uniform(-1, 1, 40)))))
+	points = np.column_stack((rng.uniform(0, 360, 40), np.degrees(np.arcsin(rng.uniform(-1, 1, 40)))))
+
+	for (center_ra, center_dec), (point_ra, point_dec) in zip(centers, points):
+		separation = distance(point_ra, point_dec, center_ra, center_dec)
+		for radius in (0., 1., 30., 89., 90., 91., 120., 179., 180.):
+			expected = separation <= radius
+			got = q30.point_in_ellipse(ra=point_ra, dec=point_dec, ra_cen=center_ra, dec_cen=center_dec,
+									   semi_major_axis=radius, axis_ratio=1., position_angle=17.)
+			assert got == expected, (f"a point {separation} degrees from the center was reported "
+									 f"{'inside' if got else 'outside'} a circle of radius {radius}")
 
 @pytest.mark.parametrize("depth", [0, 2, 5, 10, 20, 30])
 def test_ellipse_query_at_every_depth(depth):
@@ -223,6 +323,40 @@ def test_astropy_quantity_parameters():
 									 axis_ratio=0.4, position_angle=np.pi/4 * astropy_units.rad)
 	degrees = index.ellipse_query(ra=10., dec=20., semi_major_axis=5., axis_ratio=0.4, position_angle=45.)
 	np.testing.assert_allclose(sorted_pairs(quantities), sorted_pairs(degrees))
+
+def test_ellipse_query_result_is_always_two_dimensional():
+	'''
+	Test the return shape contract: (n,2) for any number of matches, including one.
+
+	radial_query squeezes its result, so a single match comes back with shape (2,) and
+	``matches[:,0]`` fails for exactly that case. That wart is kept for compatibility
+	and queued for a 2.0 release; this query must not inherit it, and neither must the
+	circular case, which is answered by handing the query to radial_query.
+	'''
+	one_point = QLSCIndex(qlsc=QLSC(depth=10))
+	one_point.add_point(ra=10., dec=20.)
+
+	for axis_ratio in (0.5, 1.0):
+		matches = one_point.ellipse_query(ra=10., dec=20., semi_major_axis=1., axis_ratio=axis_ratio)
+		assert matches.shape == (1,2)
+		assert matches[:,0][0] == pytest.approx(10.)
+
+	empty = QLSCIndex(qlsc=QLSC(depth=10))
+	empty.add_point(ra=180., dec=0.)
+	assert empty.ellipse_query(ra=10., dec=20., semi_major_axis=1., axis_ratio=0.5).shape == (0,2)
+	assert empty.ellipse_query(ra=10., dec=20., semi_major_axis=1., axis_ratio=1.0).shape == (0,2)
+
+	many = index.ellipse_query(ra=10., dec=20., semi_major_axis=5., axis_ratio=0.4)
+	assert many.ndim == 2 and many.shape[1] == 2
+
+def test_radial_query_keeps_its_historical_shape():
+	'''
+	Test that the shape fix above was NOT applied to radial_query; changing it would
+	break existing callers, and it is queued for 2.0 instead.
+	'''
+	one_point = QLSCIndex(qlsc=QLSC(depth=10))
+	one_point.add_point(ra=10., dec=20.)
+	assert np.asarray(one_point.radial_query(ra=10., dec=20., radius=1.)).shape == (2,)
 
 def test_ellipse_query_on_a_closed_index_raises():
 	'''

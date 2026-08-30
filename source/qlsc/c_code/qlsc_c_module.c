@@ -10,6 +10,39 @@
 
 #define Q3C_STRUCT_POINTER_BUFFER "Q3C_prm_struct_pointer"
 
+// ------------------------------------------------------------------
+// Right ascension conventions in the vendored Q3C code
+// ------------------------------------------------------------------
+//
+// Several vendored functions carry the documented precondition "strictly
+// 0<=ra<360" and do nothing to enforce it: q3c_get_facenum computes the cube
+// face as (char)fmod((ra + 45) / 90, 4) + 1, which for a negative ra truncates
+// toward zero and can return a face number that is not even in [0,5] (ra=-315
+// returns -2). Everything downstream of a wrong face is wrong or spuriously
+// rejected as "too large".
+//
+// This wrapper is the boundary where that is fixed - the vendored files are not
+// edited for it. Every entry point below that hands an ra to Q3C is audited here;
+// re-run this audit when a Q3C function is newly exported or the vendored code is
+// synced (scripts/sync_q3c.py diffs the declarations this depends on).
+//
+//   SAFE, unwraps internally:
+//     q3c_ang2ipix, q3c_ang2ipix_xy  - both call UNWRAP_RA(ra0) on entry
+//   SAFE, periodic in ra with period 360:
+//     q3c_dist, q3c_sindist  - ra enters only as sin((ra1-ra2)/2)^2
+//     q3c_in_ellipse         - ra enters only as cos/sin of (alpha1-alpha)
+//     q3c_xy2ang, q3c_xy2facenum, q3c_ipix2ang, q3c_ipix2xy, q3c_pixarea
+//                            - take no ra at all
+//   NEEDS UNWRAPPING BY THIS WRAPPER:
+//     q3c_get_facenum        - unwrapped in qlsc_q3c_facenum
+//     q3c_radial_query       - unwrapped in qlsc_q3c_radial_query
+//     q3c_ellipse_query      - unwrapped in qlsc_q3c_ellipse_query
+//     q3c_check_sphere_point_in_poly, q3c_poly_query
+//                            - both reach q3c_get_facenum through
+//                              q3c_get_facenum_poly, which reads the FIRST
+//                              polygon vertex; the vertex ra values are unwrapped
+//                              into a local buffer by polygon_vertex_views
+
 void *get_item_pointer(int ndim, void *buf, Py_ssize_t *strides,
    Py_ssize_t *suboffsets, Py_ssize_t *indices) {
    char *pointer = (char*)buf;
@@ -467,14 +500,37 @@ ipix_from_object(PyObject *obj, q3c_ipix_t *ipix)
 // values, validating every element against the scheme. Returns a new reference
 // on success, NULL with an exception set otherwise.
 //
-// PyArray_FROM_OTF is used rather than the raw buffer handling in ang2ipix
-// above: it deals with strides, non-contiguous input, and integer types other
-// than int64 in one call, and it refuses (rather than truncates) a float input
-// because NPY_ARRAY_FORCECAST is deliberately not requested.
+// The dtype of the input is settled BEFORE anything is converted. Asking NumPy
+// for an int64 array directly is not enough: the "safe cast" rule that refuses
+// an existing float64 array does not apply to a value NumPy is constructing for
+// the first time, so [1.5, 2.5], [True, False] and ["10", "20"] would all be
+// built into an int64 array without a word - 1.5 silently becoming pixel 1.
+// Inferring the dtype first and requiring an integer type rejects all three.
 static PyArrayObject *
 ipix_array_from_object(struct q3c_prm *hprm, PyObject *obj)
 {
-	PyArrayObject *array = (PyArrayObject *)PyArray_FROM_OTF(obj, NPY_INT64, NPY_ARRAY_IN_ARRAY);
+	// dtype NULL: infer it from the object rather than imposing one
+	PyArrayObject *source = (PyArrayObject *)PyArray_FromAny(obj, NULL, 0, 0, 0, NULL);
+	if (source == NULL)
+		return NULL;
+
+	// PyTypeNum_ISINTEGER spans the signed and unsigned integer types and
+	// excludes bool, float, and everything else
+	if (!PyTypeNum_ISINTEGER(PyArray_TYPE(source))) {
+		PyErr_Format(PyExc_TypeError,
+					 "The ipix values must be integers; was given an array of dtype '%S'.",
+					 (PyObject *)PyArray_DESCR(source));
+		Py_DECREF(source);
+		return NULL;
+	}
+
+	// NPY_ARRAY_IN_ARRAY handles strides and non-contiguous input; the source is
+	// known to be an integer array by this point, so the only conversion that is
+	// not value-preserving is uint64 above INT64_MAX, and those values land in
+	// the negative half of int64 where the bounds check below rejects them.
+	PyArrayObject *array = (PyArrayObject *)PyArray_FROM_OTF((PyObject *)source, NPY_INT64,
+															NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+	Py_DECREF(source);
 	if (array == NULL)
 		return NULL;
 
@@ -778,9 +834,21 @@ qlsc_q3c_facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 	 }
 	
 	//hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
-	
+
+	// Non-finite values reach an undefined float->int conversion in the (char)
+	// cast inside q3c_get_facenum (upstream q3c issue #52).
+	if ((!isfinite(ra)) || (!isfinite(dec)))
+	{
+		PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' values must be finite.");
+		return NULL;
+	}
+
+	// q3c_get_facenum is documented "strictly 0<=ra<360" and does not enforce it;
+	// see the audit at the top of this file. Without this, ra=-315 returns -2.
+	ra = UNWRAP_RA(ra);
+
 	facenum = q3c_get_facenum(ra, dec);
-	
+
 	return PyLong_FromLong((long)facenum);
 }
 
@@ -1029,8 +1097,18 @@ ipix_range_arrays(const q3c_ipix_t *fulls_padded, const q3c_ipix_t *partials_pad
 // validate them. On success returns 0 with both views held (the caller must
 // release them) and *n set to the vertex count; on failure returns -1 with an
 // exception set and no views held.
+//
+// 'unwrapped_ra' is filled with the vertex ra values reduced to [0,360). Both
+// polygon entry points reach q3c_get_facenum (through q3c_get_facenum_poly, which
+// reads the first vertex), which requires that range; see the audit at the top of
+// this file. A polygon written with negative ra - the natural way to describe one
+// straddling ra=0 - otherwise picked the wrong cube face, and was then either
+// projected wrongly or rejected as "too large". The values are copied rather than
+// reduced in place: the buffer belongs to the caller's NumPy array.
+// It must have room for Q3C_MAX_N_POLY_VERTEX values.
 static int
-polygon_vertex_views(PyObject *poly_ra, PyObject *poly_dec, Py_buffer *ra_view, Py_buffer *dec_view, int *n)
+polygon_vertex_views(PyObject *poly_ra, PyObject *poly_dec, Py_buffer *ra_view, Py_buffer *dec_view,
+					 int *n, q3c_coord_t *unwrapped_ra)
 {
 	if (PyObject_GetBuffer(poly_ra, ra_view, PyBUF_FULL_RO) == -1)
 		return -1;
@@ -1059,6 +1137,21 @@ polygon_vertex_views(PyObject *poly_ra, PyObject *poly_dec, Py_buffer *ra_view, 
 		PyErr_Format(PyExc_ValueError, "The polygon must have between 3 and %d vertices (was given %d).",
 					 Q3C_MAX_N_POLY_VERTEX, *n);
 		POLY_VIEWS_FAIL();
+	}
+
+	{
+		const q3c_coord_t *ra_values = (const q3c_coord_t *)ra_view->buf;
+		const q3c_coord_t *dec_values = (const q3c_coord_t *)dec_view->buf;
+		int i;
+		for (i = 0; i < *n; i++) {
+			// a non-finite vertex reaches undefined float->int conversions in the
+			// face selection below (upstream q3c issue #52)
+			if (!isfinite(ra_values[i]) || !isfinite(dec_values[i])) {
+				PyErr_SetString(PyExc_ValueError, "The polygon vertex values must all be finite.");
+				POLY_VIEWS_FAIL();
+			}
+			unwrapped_ra[i] = UNWRAP_RA(ra_values[i]);
+		}
 	}
 
 	#undef POLY_VIEWS_FAIL
@@ -1154,6 +1247,7 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	// see the q3c_poly.c points[8] note in CLAUDE.md.
 	q3c_coord_t xpj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ypj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t poly_ra_unwrapped[Q3C_MAX_N_POLY_VERTEX]; // vertex ra reduced to [0,360)
 	q3c_coord_t axpj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t aypj[5][Q3C_MAX_N_POLY_VERTEX];
 	char faces[5];
@@ -1177,11 +1271,18 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
-	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n) != 0)
+	// a non-finite point reaches an undefined float->int conversion inside
+	// q3c_ang2ipix_xy (upstream q3c issue #52)
+	if (!isfinite(ra0) || !isfinite(dec0)) {
+		PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' values must be finite.");
+		return NULL;
+	}
+
+	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n, poly_ra_unwrapped) != 0)
 		return NULL;
 
 	result = q3c_check_sphere_point_in_poly(hprm, n,
-											(q3c_coord_t *)ra_view.buf, (q3c_coord_t *)dec_view.buf,
+											poly_ra_unwrapped, (q3c_coord_t *)dec_view.buf,
 											ra0, dec0, &too_large,
 											0, // invocation = 0: always (re)project the polygon
 											xpj, ypj, axpj, aypj, faces, &multi_flag);
@@ -1195,6 +1296,143 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	}
 
 	return PyBool_FromLong(result);
+}
+
+static PyObject *
+qlsc_q3c_check_sphere_points_in_poly(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	PyObject *hprm_capsule;
+	PyObject *np_ra, *np_dec;
+	PyObject *np_poly_ra, *np_poly_dec;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	// per-face projection buffers; see the note in the scalar version above for why
+	// there are five rows rather than q3c's three
+	q3c_coord_t xpj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t ypj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t axpj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t aypj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t poly_ra_unwrapped[Q3C_MAX_N_POLY_VERTEX]; // vertex ra reduced to [0,360)
+	char faces[5];
+	char multi_flag = 0;
+	char too_large = 0;
+	int n;
+	Py_buffer poly_ra_view, poly_dec_view;
+	PyArrayObject *ra_array = NULL, *dec_array = NULL, *result_array = NULL;
+
+	static char *kwlist[] = {"hprm", "ra", "dec", "poly_ra", "poly_dec", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "OOOOO", // 5 objects
+									 kwlist,
+									 &hprm_capsule, &np_ra, &np_dec, &np_poly_ra, &np_poly_dec))
+	{
+		// unable to parse inputs -> raise exception
+		return NULL;
+	}
+
+	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
+	// PyArray_FROM_OTF deals with strides, non-contiguous input and integer types in
+	// one call, as the ipix2* helpers above do
+	ra_array = (PyArrayObject *)PyArray_FROM_OTF(np_ra, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+	if (ra_array == NULL)
+		return NULL;
+	dec_array = (PyArrayObject *)PyArray_FROM_OTF(np_dec, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+	if (dec_array == NULL) {
+		Py_DECREF(ra_array);
+		return NULL;
+	}
+	if (PyArray_NDIM(ra_array) != 1 || PyArray_NDIM(dec_array) != 1 ||
+		PyArray_SIZE(ra_array) != PyArray_SIZE(dec_array)) {
+		PyErr_SetString(PyExc_ValueError, "'ra' and 'dec' must be 1D arrays of the same length.");
+		Py_DECREF(ra_array);
+		Py_DECREF(dec_array);
+		return NULL;
+	}
+
+	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &poly_ra_view, &poly_dec_view, &n, poly_ra_unwrapped) != 0) {
+		Py_DECREF(ra_array);
+		Py_DECREF(dec_array);
+		return NULL;
+	}
+
+	{
+		const q3c_coord_t *ra_data = (const q3c_coord_t *)PyArray_DATA(ra_array);
+		const q3c_coord_t *dec_data = (const q3c_coord_t *)PyArray_DATA(dec_array);
+		q3c_coord_t *poly_dec = (q3c_coord_t *)poly_dec_view.buf;
+		npy_intp n_points = PyArray_SIZE(ra_array);
+		npy_intp i;
+		npy_bool *result_data;
+		npy_intp dims[1];
+
+		for (i = 0; i < n_points; i++) {
+			// a non-finite point reaches an undefined float->int conversion inside
+			// q3c_ang2ipix_xy (upstream q3c issue #52)
+			if (!isfinite(ra_data[i]) || !isfinite(dec_data[i])) {
+				PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' arrays must contain only finite values.");
+				goto points_in_poly_fail;
+			}
+		}
+
+		dims[0] = n_points;
+		result_array = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_BOOL);
+		if (result_array == NULL)
+			goto points_in_poly_fail;
+		result_data = (npy_bool *)PyArray_DATA(result_array);
+
+		// The polygon is projected onto the cube faces ONCE, by the invocation=0 call;
+		// every later call passes invocation=1 and reuses the projection held in
+		// xpj/ypj/axpj/aypj/faces/multi_flag. That is the whole point of this function:
+		// the scalar wrapper reprojects all n vertices for every point tested, which is
+		// the dominant cost of filtering a large candidate set through a polygon.
+		// An empty point array still runs the projection, using the polygon's own first
+		// vertex as the probe point, so that a polygon too large to project is reported
+		// rather than passing silently.
+		{
+			q3c_coord_t probe_ra = (n_points > 0) ? ra_data[0] : poly_ra_unwrapped[0];
+			q3c_coord_t probe_dec = (n_points > 0) ? dec_data[0] : poly_dec[0];
+			int first = q3c_check_sphere_point_in_poly(hprm, n, poly_ra_unwrapped, poly_dec,
+													   probe_ra, probe_dec, &too_large,
+													   0, // invocation = 0: project the polygon
+													   xpj, ypj, axpj, aypj, faces, &multi_flag);
+			if (too_large) {
+				PyErr_SetString(PyExc_ValueError, "The polygon is too large for the Q3C face projection; "
+												  "split it into smaller polygons.");
+				goto points_in_poly_fail;
+			}
+			if (n_points > 0)
+				result_data[0] = first ? NPY_TRUE : NPY_FALSE;
+		}
+
+		for (i = 1; i < n_points; i++) {
+			int inside = q3c_check_sphere_point_in_poly(hprm, n, poly_ra_unwrapped, poly_dec,
+														ra_data[i], dec_data[i], &too_large,
+														1, // invocation = 1: reuse the projection
+														xpj, ypj, axpj, aypj, faces, &multi_flag);
+			result_data[i] = inside ? NPY_TRUE : NPY_FALSE;
+		}
+	}
+
+	PyBuffer_Release(&poly_ra_view);
+	PyBuffer_Release(&poly_dec_view);
+	Py_DECREF(ra_array);
+	Py_DECREF(dec_array);
+
+	// "N" steals the reference; "O" would leak one per call
+	return Py_BuildValue("N", result_array);
+
+points_in_poly_fail:
+	PyBuffer_Release(&poly_ra_view);
+	PyBuffer_Release(&poly_dec_view);
+	Py_DECREF(ra_array);
+	Py_DECREF(dec_array);
+	Py_XDECREF(result_array);
+	return NULL;
 }
 
 static PyObject *
@@ -1216,6 +1454,7 @@ qlsc_q3c_poly_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	q3c_coord_t y[Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ax[Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ay[Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t poly_ra_unwrapped[Q3C_MAX_N_POLY_VERTEX]; // vertex ra reduced to [0,360)
 	q3c_poly qp;
 	char too_large = 0;
 	int n, overflowed;
@@ -1236,12 +1475,12 @@ qlsc_q3c_poly_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
-	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n) != 0)
+	if (polygon_vertex_views(np_poly_ra, np_poly_dec, &ra_view, &dec_view, &n, poly_ra_unwrapped) != 0)
 		return NULL;
 
 	// q3c_project_poly only reads ra,dec; the projections are written to x,y,ax,ay
 	qp.n = n;
-	qp.ra  = (q3c_coord_t *)ra_view.buf;
+	qp.ra  = poly_ra_unwrapped;
 	qp.dec = (q3c_coord_t *)dec_view.buf;
 	qp.x = x;
 	qp.y = y;
@@ -1409,6 +1648,24 @@ qlsc_q3c_in_ellipse(PyObject *module, PyObject *args, PyObject *kwargs)
 		PyErr_SetString(PyExc_ValueError, msg);
 		return NULL;
 	}
+	// q3c_in_ellipse evaluates a conic in the gnomonic (tangent plane) projection about
+	// the center, where the region has semi-axes tan(semi_major_axis) and
+	// tan(semi_major_axis)*axis_ratio. Only the near hemisphere projects, so the test
+	// is meaningful strictly inside 90 degrees; at and past it the function silently
+	// answers about a different region (it rejects every point more than 90 degrees
+	// from the center, and its sin^2 term stops being monotonic in the semi-major axis,
+	// so a 150 degree "ellipse" is smaller than a 60 degree one). Refuse rather than
+	// return a wrong answer; QLSC.point_in_ellipse handles the circular case, where the
+	// tangent plane is not needed, without this restriction.
+	if (!(semi_major_axis < 90)) {
+		char msg[256];
+		snprintf(msg, sizeof msg,
+				 "The 'semi_major_axis' value must be less than 90 degrees (was given %.17g): Q3C's ellipse is "
+				 "a conic in the tangent plane at its center, which only reaches the near hemisphere.",
+				 semi_major_axis);
+		PyErr_SetString(PyExc_ValueError, msg);
+		return NULL;
+	}
 
 	// argument order as in q3c.c's pgq3c_in_ellipse: center first, then the point
 	result = q3c_in_ellipse(ra_cen, dec_cen, ra, dec, semi_major_axis,
@@ -1442,6 +1699,7 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"xy2ang", (PyCFunction)qlsc_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
 	{"xy2facenum", (PyCFunction)qlsc_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
 	{"check_sphere_point_in_poly", (PyCFunction)qlsc_q3c_check_sphere_point_in_poly, METH_VARARGS|METH_KEYWORDS, "Test whether an ra,dec point lies inside a spherical polygon."},
+	{"check_sphere_points_in_poly", (PyCFunction)qlsc_q3c_check_sphere_points_in_poly, METH_VARARGS|METH_KEYWORDS, "Test an array of ra,dec points against a spherical polygon, projecting the polygon once; returns a boolean array."},
 	{"in_ellipse", (PyCFunction)qlsc_q3c_in_ellipse, METH_VARARGS|METH_KEYWORDS, "Test whether an ra,dec point lies inside an ellipse on the sphere."},
 	{"radial_query", (PyCFunction)qlsc_q3c_radial_query, METH_VARARGS|METH_KEYWORDS, "Return the (fulls,partials) ipix ranges covering a cone."},
 	{"poly_query", (PyCFunction)qlsc_q3c_poly_query, METH_VARARGS|METH_KEYWORDS, "Return the (fulls,partials) ipix ranges covering a spherical polygon."},

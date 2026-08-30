@@ -1,6 +1,7 @@
 
 import os
 import sys
+import enum
 import math
 import pathlib
 import sqlite3
@@ -127,8 +128,41 @@ def _degrees_or_unchanged(value):
 		return value.to(u.deg).value
 	return value
 
+def _zip_exact(*sequences):
+	'''
+	Combine sequences elementwise, refusing to silently truncate.
+
+	``zip`` stops at its shortest input, which turns a length mismatch into missing
+	rows rather than an error — this is how ``add_points`` came to store two points
+	when given three coordinates and two keys. Every use here is building rows to
+	insert into the index, where a short sequence is a bug in the caller, not a
+	shorter insert. (``zip(..., strict=True)`` would do the same, but it needs
+	Python 3.10 and this package supports 3.6.)
+
+	:param sequences: the sequences to combine; all must be the same length
+	:returns: an iterator of tuples, as ``zip`` returns
+	'''
+	lengths = [len(sequence) for sequence in sequences]
+	if len(set(lengths)) != 1:
+		raise ValueError(f"Refusing to combine sequences of unequal length ({lengths}); "
+						 f"this would silently drop the values past the shortest one.")
+	return zip(*sequences)
+
+class MatchArrayShape(enum.Enum):
+	'''
+	The shape a region query gives its plain (no flags set) array of matches.
+
+	``SQUEEZED`` is :py:func:`QLSCIndex.radial_query`'s historical shape and only it:
+	the result is passed through :func:`numpy.squeeze`, so a single match comes back
+	with shape (2,) rather than (1,2) and ``matches[:,0]`` fails for exactly that one
+	case. Changing it would break callers, so it is queued for a 2.0 release; every
+	query added since is ``STABLE`` and always returns (n,2).
+	'''
+	STABLE = "stable"
+	SQUEEZED = "squeezed"
+
 def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:list,
-				  return_key:bool, return_distance:bool,
+				  return_key:bool, return_distance:bool, shape:MatchArrayShape,
 				  match_target_index:list=None, return_target_index:bool=False):
 	'''
 	Assemble the return value shared by the region query methods.
@@ -139,6 +173,7 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 	:param match_distance: the angular separations of the matches, if they were collected
 	:param return_key: whether the "key" field was requested
 	:param return_distance: whether the "distance" field was requested
+	:param shape: the :class:`MatchArrayShape` this query promises for its plain array result
 	:param match_target_index: the index of the query target each match belongs to, for a batch query
 	:param return_target_index: whether the "target_index" field was requested
 	:returns: an array of shape (n,2) if no flag is set, otherwise a :class:`numpy.recarray`
@@ -168,8 +203,52 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 		# np.rec is the public spelling of this module; np.core.records is
 		# deprecated in NumPy 1.25+ and gone from the NumPy 2 namespace.
 		return np.rec.fromarrays(arrays, names=",".join(names))
-	else:
+	elif shape is MatchArrayShape.SQUEEZED:
 		return np.squeeze(np.dstack((match_ra,match_dec)))
+	else:
+		return np.column_stack((np.asarray(match_ra, dtype=np.double),
+								np.asarray(match_dec, dtype=np.double)))
+
+#: The largest semi-major axis a genuinely elliptical (axis_ratio < 1) region may have.
+#:
+#: Q3C's ellipse is a conic in the gnomonic projection about its center, and only the
+#: near hemisphere projects. At and past 90 degrees ``q3c_in_ellipse`` silently answers
+#: about a different region: it rejects every point more than 90 degrees from the center
+#: whatever the semi-major axis, and the sin^2 term it compares against stops being
+#: monotonic, so a 150 degree "ellipse" is smaller than a 60 degree one. Verified against
+#: the C source and numerically (the boundary matches the tangent-plane conic to 3e-10
+#: degrees across 1120 configurations); see test_ellipse_geometry.py.
+ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS = 90.0
+
+def _validate_ellipse(semi_major_axis:float, axis_ratio:float):
+	'''
+	Check the size and shape of an ellipse against the domain Q3C's geometry supports.
+
+	:param semi_major_axis: semi-major axis of the ellipse (degrees)
+	:param axis_ratio: ratio of the semi-minor to the semi-major axis
+	'''
+	if not (0 < axis_ratio <= 1):
+		raise ValueError(f"The value for axis_ratio must be in the range (0,1]; was given '{axis_ratio}'.")
+
+	if axis_ratio == 1:
+		# a circle is a distance test, with the same domain as a cone search
+		if not (0 <= semi_major_axis <= 180):
+			raise ValueError(f"The value for semi_major_axis must be in the range [0,180]; was given '{semi_major_axis}'.")
+	elif not (0 <= semi_major_axis < ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS):
+		raise ValueError(
+			f"The value for semi_major_axis must be in the range [0,{ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS:g}) for an "
+			f"axis_ratio below 1; was given '{semi_major_axis}'. Q3C's ellipse is a conic in the tangent plane at "
+			f"its center, which only reaches the near hemisphere, so a larger one is not the region asked for. "
+			f"Use axis_ratio=1 (or radial_query) for a circle of any radius up to 180 degrees.")
+
+def _as_stable_pairs(matches:np.ndarray) -> np.ndarray:
+	'''
+	Reshape a :py:data:`MatchArrayShape.SQUEEZED` plain array result to (n,2).
+
+	:param matches: the result of a squeezed-shape query with no flags set
+	:returns: the same coordinates with shape (n,2)
+	'''
+	return np.asarray(matches, dtype=np.double).reshape(-1, 2)
 
 class QLSC:
 	'''
@@ -326,6 +405,7 @@ class QLSC:
 		Non-integer values (including floats that happen to be whole numbers) and
 		values outside [0, nbins) raise ValueError rather than being truncated or
 		clamped: both would silently return the coordinates of a different pixel.
+		Integer arrays of any width are accepted, unsigned ones included.
 
 		:param ipix: an ipix number or an array-like of ipix numbers
 		:returns: an ``int`` for scalar input, an ``np.int64`` array otherwise
@@ -338,6 +418,19 @@ class QLSC:
 
 		if not np.issubdtype(values.dtype, np.integer):
 			raise ValueError(f"The ipix value(s) must be integers; was given a value of type '{values.dtype}'.")
+
+		if values.dtype == np.uint64:
+			# uint64 is the one integer dtype whose range does not fit in int64, so
+			# it is narrowed here rather than in the bounds check below: how NumPy
+			# promotes a uint64 array compared against a Python int is exactly the
+			# corner that changed between NumPy versions (NEP 50), and float64 -
+			# a plausible common type - has a spacing of 1024 at nbins for depth 30.
+			# Every valid ipix fits in int64; reject what does not and compare there.
+			too_large = values[values > np.uint64(np.iinfo(np.int64).max)]
+			if too_large.size > 0:
+				raise ValueError(f"An ipix number is out of bounds for this scheme (depth={self.depth}); "
+								 f"range: [0,{self.nbins-1}], first offending value: {too_large.flat[0]}.")
+			values = values.astype(np.int64)
 
 		# perform a bounds check
 		out_of_range = values[(values < 0) | (values >= self.nbins)]
@@ -624,7 +717,11 @@ class QLSC:
 		|  face 4 = 225° ≤ α < 315
 		|  face 5 = bottom
 
-		:param ra: right ascension in degrees; must be in [0,360]
+		Right ascension is periodic and is accepted at any value, as
+		:py:func:`ang2ipix` accepts it: ``face_number(-350, 20)`` and
+		``face_number(370, 20)`` both answer for ra=10.
+
+		:param ra: right ascension in degrees; any value, reduced to [0,360) internally
 		:param dec: declination in degrees; must be in [-90,90]
 		:param ipix: the pixel identifier number
 		:returns: the cube face number
@@ -644,8 +741,10 @@ class QLSC:
 			dec = _as_float_scalar(dec, "dec")
 			if not -90 <= dec <= 90:
 				raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
-			if not -360 <= ra <= 360:
-				raise ValueError(f"The value of 'ra' must be normalized to [0,360]; was given '{ra}'.")
+			# ra needs no range check: it is periodic, and the C wrapper reduces it
+			# to [0,360) before handing it to q3c_get_facenum, which requires that
+			# range and does not enforce it. Rejecting ra outside [-360,360] used to
+			# hide the fact that everything in [-360,0) was answered wrongly.
 
 		if ipix:
 			ra,dec = self.ipix2ang(ipix)
@@ -732,9 +831,16 @@ class QLSC:
 		projected face by face (:py:func:`xy2ang` takes one face number), so the shape and
 		the grouping gain nothing over calling this method in a loop.
 
+		The default is the open form: four corners, shape (4,2), with the edge from the
+		last back to the first left implicit. Set ``duplicate_endpoint`` for the closed
+		form, five rows with the first repeated as the last, which is what most drawing
+		code wants. Either form may be handed to :py:func:`point_in_polygon` and
+		:py:func:`QLSCIndex.polygon_query`; a repeated vertex makes a zero-length edge,
+		which contributes nothing to the containment test.
+
 		:param ipix: the pixel identifier number
 		:param duplicate_endpoint: if True, repeat the first coordinate in the polygon as the last element
-		:returns: an array of ra,dec coordinates in degrees
+		:returns: an array of ra,dec coordinates in degrees, with shape (4,2) or, with ``duplicate_endpoint`` set, (5,2)
 		'''
 		if ipix is None:
 			raise ValueError(f"An 'ipix' value must be specified.")
@@ -748,24 +854,15 @@ class QLSC:
 
 		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
 
-		if duplicate_endpoint:
-			polygon = np.array([
-					[  x ,  y  ],
-					[ x+d,  y  ],
-					[ x+d, y+d ],
-					[  x , y+d ],
-					[  x ,  y  ]
-				], dtype=np.double)
-		else:
-			polygon = np.array([
-					[  x ,  y  ],
-					[ x+d,  y  ],
-					[ x+d, y+d ],
-					[  x , y+d ]
-				], dtype=np.double)
+		polygon = np.array([
+				[  x ,  y  ],
+				[ x+d,  y  ],
+				[ x+d, y+d ],
+				[  x , y+d ]
+			], dtype=np.double)
 
-		if duplicate_endpoint == True:
-			polygon = polygon[:-1]
+		if duplicate_endpoint:
+			polygon = np.vstack((polygon, polygon[:1]))
 
 		return self.xy2ang(facenum=facenum, points=polygon)
 
@@ -807,17 +904,31 @@ class QLSC:
 		'''
 		Test whether an ra,dec point lies inside an ellipse on the sphere.
 
-		The ellipse is the one Q3C defines: centered on (``ra_cen``, ``dec_cen``), with the
-		given semi-major axis, axis ratio (semi-minor over semi-major, in ``(0,1]``, where 1
-		is a circle) and position angle. This is the exact containment test used to filter
-		:py:func:`QLSCIndex.ellipse_query` results, and its answer does not depend on this
-		object's depth.
+		The ellipse is the one Q3C defines: **a conic in the gnomonic (tangent plane)
+		projection about its center**, with semi-axes ``tan(semi_major_axis)`` and
+		``tan(semi_major_axis) * axis_ratio`` in that plane. Along the major axis its
+		edge is exactly ``semi_major_axis`` degrees from the center; across the minor
+		axis the edge is at ``arctan(tan(semi_major_axis) * axis_ratio)``, which is
+		close to ``semi_major_axis * axis_ratio`` for a small ellipse and noticeably
+		wider for a large one. The answer does not depend on this object's depth.
+
+		Only the near hemisphere has a tangent plane projection, so a genuinely
+		elliptical region (``axis_ratio`` below 1) is limited to a semi-major axis of
+		**less than 90 degrees**; anything larger raises ``ValueError`` rather than
+		answering about a region that is not the one asked for. An ``axis_ratio`` of
+		exactly 1 is a circle, needs no tangent plane, and is instead tested by angular
+		separation over the whole [0,180] range — the identical (and inclusive) test
+		:py:func:`QLSCIndex.radial_query` applies, so the two always agree.
+
+		A point exactly on the edge of a genuinely elliptical region counts as outside,
+		which is Q3C's own convention; a point exactly on the edge of a circular one
+		counts as inside, matching the cone search.
 
 		:param ra: right ascension of the point to test (degrees)
 		:param dec: declination of the point to test (degrees)
 		:param ra_cen: right ascension of the center of the ellipse (degrees)
 		:param dec_cen: declination of the center of the ellipse (degrees)
-		:param semi_major_axis: semi-major axis of the ellipse (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param semi_major_axis: semi-major axis of the ellipse (degrees); in [0,90) unless ``axis_ratio`` is 1, when [0,180] is accepted. Accepts a `float` value or `astropy.units.Quantity`
 		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
 		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
 		:returns: True if the point is inside the ellipse
@@ -839,8 +950,14 @@ class QLSC:
 		if not (-90 <= dec_cen <= 90):
 			ra_cen, dec_cen = _normalize_ang(ra_cen, dec_cen)
 
-		# the remaining validation (axis ratio range, negative semi-major axis) is
-		# performed in the C layer, which raises ValueError
+		_validate_ellipse(semi_major_axis, axis_ratio)
+
+		if axis_ratio == 1:
+			# A circle, where Q3C's tangent-plane conic is neither needed nor usable
+			# past 90 degrees: the region is the spherical cap of that radius, and the
+			# test is exactly radial_query's, boundary included.
+			return sindist(ra, dec, ra_cen, dec_cen) <= pow(sin(deg2rad(semi_major_axis)/2.), 2)
+
 		return q3c.in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
 							  semi_major_axis=semi_major_axis, axis_ratio=axis_ratio,
 							  position_angle=position_angle)
@@ -949,6 +1066,28 @@ class QLSCIndex:
 	The underlying storage is an SQLite database, but this should be considered an implementation
 	detail and can change. (This may be documented for expanded use in the future.)
 
+	**Keys**
+
+	A point may be given a ``key``: a string label, optional, and not required to be
+	unique. The index is therefore a collection of points that happen to be labelled —
+	a multimap of keys to points — and not a dictionary of keys to single points.
+	The mapping-style operations follow from that, and this is their contract:
+
+	* ``len(index)`` counts **points**, whether they carry a key or not.
+	* ``key in index`` is True if at least one point carries that key.
+	* iterating the index, or :py:func:`keys`, yields one key **per point**: a key
+	  shared by three points is yielded three times, and points stored without a key
+	  are not represented at all. The number of keys yielded can therefore be either
+	  more or less than ``len(index)``.
+	* :py:func:`find_by_key` returns **every** point carrying a key, and
+	  :py:func:`remove_point` with a key removes every point carrying it.
+	* A point stored without a key can only be found by position (:py:func:`radial_query`
+	  and its siblings) and only be removed by coordinate.
+	* Keys must be strings. Anything else raises ``TypeError`` at every boundary,
+	  including :py:func:`add_point` and :py:func:`add_points`: the underlying column
+	  has SQLite's TEXT affinity, so a key of ``5`` would be stored as ``'5'`` and
+	  could then never be found with ``5``.
+
 	:param qlsc: an instance of :py:class:`QLSC` set to the desired segmentation level
 	:param filepath: the file path (string path, ``pathlib.Path``, or ``file://` URL) where a persistent index will be stored; the default is to create the index in memory
 	:param name: a user-provided name for the index
@@ -1047,9 +1186,36 @@ class QLSCIndex:
 			if not db_ok:
 				connection.close()
 				raise Exception(f"The file provided is an SQLite database (good) but not in a format I recognize (bad).")
+			self._ensure_key_index(connection)
 
 		if not self._is_in_memory_db():
 			connection.close()
+
+	def _ensure_key_index(self, connection:sqlite3.Connection):
+		'''
+		Add the index on the "key" column to an index file that predates it.
+
+		Index files written by qlsc 1.1 and earlier have an index on ipix but none on
+		key, so every lookup or removal by key scans the whole table. The index is
+		additive — no table, column, or row changes, and an older qlsc simply ignores
+		an index it does not know about — so an existing file is upgraded in place
+		when it is opened, and the schema version does not move.
+
+		A file that cannot be written to (a read-only file or filesystem, or one
+		locked by another process) keeps the index it has: this is an optimization,
+		every operation returns exactly the same answer without it, and refusing to
+		open a file that opened fine before would be the worse failure. That case is
+		reported at warning level rather than passed over in silence. Any error that
+		is not SQLite refusing the write is a real problem and is left to propagate.
+
+		:param connection: an open connection to an existing index database
+		'''
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				cursor.execute(f"CREATE INDEX IF NOT EXISTS key_idx ON {self.database_tablename}(key)")
+		except sqlite3.OperationalError as e:
+			logger.warning(f"The index on the 'key' column of '{self.db_filepath}' could not be created ({e}). "
+						   f"Lookups and removals by key will scan the whole table; results are unaffected.")
 
 	def _validate_db_as_qlsc_index(self, connection:sqlite3.Connection):
 		'''
@@ -1148,6 +1314,10 @@ class QLSCIndex:
 
 			cursor.execute(f'''CREATE INDEX ipix_idx ON {self.database_tablename}(ipix); ''')
 
+			# Not unique: keys are labels, and several points may share one.
+			# Without this, every lookup or removal by key scans the whole table.
+			cursor.execute(f'''CREATE INDEX key_idx ON {self.database_tablename}(key); ''')
+
             # Create a metadata table - COUNT(*) on SQLite databases always does a full scan,
             # so keep track of rows count here.
             # Could add additional information here.
@@ -1226,13 +1396,16 @@ class QLSCIndex:
 
 		:param ra: a single right ascension value, in degrees
 		:param dec: a single declination value, in degrees
-		:param key: a unique identifier for the coordinate (optional)
+		:param key: a string identifier for the coordinate (optional, and not required to be unique)
 		'''
 
 		self._ensure_open()
 
 		if any([x is None for x in [ra,dec]]):
 			raise ValueError("Both 'ra' and 'dec' values must be specified.")
+
+		# validated on the way in as well as on the way out; see _validated_key
+		key = self._validated_key(key, allow_none=True, description="the 'key' argument")
 
 		# Coerce scalar-like values: without this, a NumPy array passed here would be
 		# stored by sqlite3 as a BLOB via the buffer protocol - silently losing the
@@ -1281,24 +1454,38 @@ class QLSCIndex:
 		:param ra: an Iterable (e.g. NumPy array) of right ascension points in degrees
 		:param dec: an Iterable of declination points in degrees
 		:param points: an Iterable of tuples of (ra,dec) pairs
-		:param key: an Iterable of unique identifiers for each point
+		:param keys: an Iterable of string identifiers, one per point; an entry of ``None`` means that point has no key
 		'''
 		self._ensure_open()
 
 		if all([x is None for x in [ra,dec,points]]):
 			raise ValueError("'ra','dec' OR 'points' must be specified.")
-		if all([x is True for x in [ra, dec, points]]):
+		# This was written as "all([x is True for x in [ra, dec, points]])", which is
+		# never satisfied by an array (or by anything but the literal True), so both
+		# forms could be given at once and the 'ra','dec' pair was silently discarded
+		# by the reassignment below.
+		if points is not None and (ra is not None or dec is not None):
 			raise ValueError("Only 'ra','dec' OR 'points' can be specified.")
 		elif points is None and any([x is None for x in [ra,dec]]):
 			raise ValueError("If 'ra' or dec' is given, then other parameter must also be provided.")
 
 		if keys is not None:
+			# zip() stops at the shortest input, so an unequal number of keys silently
+			# drops points instead of failing. Nothing below may assume these lengths
+			# agree; check them here, before any database work.
 			if points is not None:
 				if len(points) != len(keys):
 					raise ValueError(f"The number of points provided ({len(points)}) does not match the number of keys ({len(keys)}).")
 			else:
-				if len(ra) != len(dec) != len(keys):
+				# NOT "len(ra) != len(dec) != len(keys)": that chained comparison is
+				# False whenever len(ra) == len(dec), whatever len(keys) is, so three
+				# coordinates and two keys stored two points and dropped the third.
+				if not (len(ra) == len(dec) == len(keys)):
 					raise ValueError(f"The number of ra,dec coordinates provided ({len(ra)},{len(dec)}) does not match the number of keys ({len(keys)}).")
+			# validated up front rather than inside the executemany generator: an
+			# exception raised mid-insert would leave the in-memory connection holding
+			# an open transaction
+			self._validate_keys(keys)
 
 #		if pandas_available:
 #			if isinstance(ra, pandas.core.series.Series):
@@ -1336,10 +1523,10 @@ class QLSCIndex:
 					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec) VALUES (?, ?, ?)"
 					# use individual lists instead of something like np.dstack- we don't want
 					# the 64-bit ipix integers converted to floats and risk changing the value due to rounding
-					cursor.executemany(query, zip(ipix, ra, dec)) # pass list of tuples (e.g. use zip)
+					cursor.executemany(query, _zip_exact(ipix, ra, dec))
 				else:
 					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec, key) VALUES (?, ?, ?, ?)"
-					cursor.executemany(query, zip(ipix, ra, dec, keys))
+					cursor.executemany(query, _zip_exact(ipix, ra, dec, keys))
 
 				cursor.execute("COMMIT")
 
@@ -1425,18 +1612,80 @@ class QLSCIndex:
 
 		return removed
 
-	def _validated_key(self, key) -> str:
+	def _validated_key(self, key, allow_none:bool=False, description:str="the key") -> str:
 		'''
-		Validate a key used to look up or remove points.
+		Validate a key on its way into, or into a lookup against, the index.
 
-		The ``key`` column has SQLite's TEXT affinity, so a non-string key would be
-		stored (and compared) as its text representation — a silent mismatch waiting
-		to happen. Require a string and say so instead.
+		The ``key`` column has SQLite's TEXT affinity, so a non-string key is stored
+		as its text representation: ``add_point(..., key=5)`` used to succeed while
+		``5 in index`` raised and ``'5' in index`` was the only way to find it back.
+		Requiring a string at every boundary is what keeps the value that goes in
+		equal to the value that comes out.
+
+		``None`` means "this point has no key" and is accepted where that is
+		meaningful (adding points), but not in a lookup, where there is no such key
+		to find.
+
+		:param key: the value to validate
+		:param allow_none: whether ``None`` (meaning "no key") is acceptable here
+		:param description: how to refer to the value in an error message
+		:returns: the key, unchanged
 		'''
+		if key is None and allow_none:
+			return None
 		if not isinstance(key, str):
 			raise TypeError(f"Index keys are strings (the underlying column has TEXT affinity); "
-							f"was given '{key!r}' of type '{type(key).__name__}'.")
+							f"{description} is '{key!r}' of type '{type(key).__name__}'.")
 		return key
+
+	def _validate_keys(self, keys:Iterable):
+		'''
+		Validate every key in an iterable on its way into the index.
+
+		A ``None`` entry means that particular point has no key.
+
+		:param keys: an iterable of keys, one per point
+		'''
+		if isinstance(keys, np.ndarray) and keys.dtype.kind == "U":
+			return # a unicode array cannot hold a non-string element
+		for position, key in enumerate(keys):
+			self._validated_key(key, allow_none=True, description=f"keys[{position}]")
+
+	def find_by_key(self, key:str) -> np.recarray:
+		'''
+		Return the coordinates of every point in this index carrying the given key.
+
+		Keys are not required to be unique, so this returns every match, not one.
+		The result is always a :class:`numpy.recarray` with the fields "ra" and "dec",
+		even for a single match — unlike the default return of :py:func:`radial_query`,
+		which squeezes.
+
+		A key that is not in the index raises ``KeyError``, as :py:func:`remove_point`
+		does; use ``key in index`` for a check that does not raise.
+
+		:param key: the key of the point(s) to return
+		:returns: a :class:`numpy.recarray` with the fields ``ra,dec``
+		'''
+		self._ensure_open()
+		key = self._validated_key(key)
+
+		match_ra = list()
+		match_dec = list()
+
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				for row in cursor.execute(f"SELECT ra,dec FROM {self.database_tablename} WHERE key=?", (key,)):
+					match_ra.append(row["ra"])
+					match_dec.append(row["dec"])
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+		if len(match_ra) == 0:
+			raise KeyError(f"No point with the key '{key}' was found in this index.")
+
+		return np.rec.fromarrays([match_ra, match_dec], names="ra,dec")
 
 	def keys(self) -> Iterable[str]:
 		'''
@@ -1979,8 +2228,9 @@ class QLSCIndex:
 			self._cone_matches(ra, dec, radius, return_key, return_distance, None,
 							   match_ra, match_dec, match_key, match_distance, match_target_index)
 
+			# radial_query keeps its historical squeezed shape; see MatchArrayShape
 			return _match_result(match_ra, match_dec, match_key, match_distance,
-								 return_key, return_distance)
+								 return_key, return_distance, MatchArrayShape.SQUEEZED)
 
 		target_ra, target_dec, target_radius = self._validated_targets(ra, dec, radius)
 
@@ -1992,8 +2242,11 @@ class QLSCIndex:
 							   match_ra, match_dec, match_key, match_distance, match_target_index)
 			counts[n] = len(match_ra) - before
 
+		# A batch result always carries "target_index", so it is always a recarray and the
+		# plain-array shape never applies; SQUEEZED is passed for consistency with the
+		# scalar path of the same method rather than because it has any effect here.
 		matches = _match_result(match_ra, match_dec, match_key, match_distance,
-								return_key, return_distance,
+								return_key, return_distance, MatchArrayShape.SQUEEZED,
 								match_target_index=match_target_index, return_target_index=True)
 
 		if return_counts:
@@ -2024,7 +2277,8 @@ class QLSCIndex:
 		polygon can include area outside it. That produces extra candidates, never missing
 		ones, and the extras are removed by the exact test.)
 
-		The default return value is an array of the matching coordinates with shape (n,2).
+		The default return value is an array of the matching coordinates with shape (n,2)
+		— always (n,2), including for a single match, unlike :py:func:`radial_query`.
 		If ``return_key`` is set the result is instead a :class:`numpy.recarray` with the
 		fields "ra", "dec" and "key". There is no ``return_distance``: a polygon has no
 		center to measure a separation from.
@@ -2054,20 +2308,33 @@ class QLSCIndex:
 		query = self._candidate_row_query(merged_ranges, columns,
 										  f"polygon query over a polygon with {len(poly_ra)} vertices")
 
-		# the C function is called directly rather than through QLSC.point_in_polygon:
-		# the vertices have already been validated and converted above, and doing that
-		# again for every candidate row is the whole cost of this loop. The test itself
-		# is identical.
-		query_hprm = self._query_scheme()._hprm
+		# The candidates are gathered first and filtered in one batched C call rather
+		# than one call per row: q3c projects all n vertices onto the cube faces on
+		# every scalar call, which is the dominant cost of filtering a large candidate
+		# set. check_sphere_points_in_poly projects once and reuses it (q3c's own
+		# invocation=1 path), and the answers are identical.
+		candidate_ra = list()
+		candidate_dec = list()
+		candidate_key = list()
 		for row in self._select_candidate_rows(query):
-			row_ra, row_dec = row["ra"], row["dec"]
-			if q3c.check_sphere_point_in_poly(query_hprm, row_ra, row_dec, poly_ra, poly_dec):
-				match_ra.append(row_ra)
-				match_dec.append(row_dec)
-				if return_key:
-					match_key.append(row["key"])
+			candidate_ra.append(row["ra"])
+			candidate_dec.append(row["dec"])
+			if return_key:
+				candidate_key.append(row["key"])
 
-		return _match_result(match_ra, match_dec, match_key, None, return_key, False)
+		if candidate_ra:
+			inside = q3c.check_sphere_points_in_poly(self._query_scheme()._hprm,
+													 np.asarray(candidate_ra, dtype=np.double),
+													 np.asarray(candidate_dec, dtype=np.double),
+													 poly_ra, poly_dec)
+			for i in np.flatnonzero(inside):
+				match_ra.append(candidate_ra[i])
+				match_dec.append(candidate_dec[i])
+				if return_key:
+					match_key.append(candidate_key[i])
+
+		return _match_result(match_ra, match_dec, match_key, None, return_key, False,
+							 MatchArrayShape.STABLE)
 
 	def ellipse_query(self, ra:float=None, dec:float=None, semi_major_axis:Union[float, "Quantity"]=None,
 					  axis_ratio:float=None, position_angle:Union[float, "Quantity"]=0.0,
@@ -2075,16 +2342,24 @@ class QLSCIndex:
 		'''
 		Return the points of the index that fall inside an ellipse on the sphere.
 
-		The ellipse is centered on (``ra``, ``dec``) with the given semi-major axis, axis
-		ratio (semi-minor over semi-major, in ``(0,1]``) and position angle. An
-		``axis_ratio`` of 1 is a circle and returns the same points as
-		:py:func:`radial_query` with that radius.
+		The ellipse is the one :py:func:`QLSC.point_in_ellipse` describes: centered on
+		(``ra``, ``dec``), with the given semi-major axis, axis ratio (semi-minor over
+		semi-major, in ``(0,1]``) and position angle, and shaped as a conic in the
+		gnomonic projection about its center.
 
 		Matches are found by selecting the pixels covering the ellipse and then testing
 		every candidate with :py:func:`QLSC.point_in_ellipse`, the exact containment test,
 		so the result contains exactly the indexed points inside the ellipse.
 
-		The default return value is an array of the matching coordinates with shape (n,2).
+		An ``axis_ratio`` of exactly 1 is a circle, and this method then **is** a cone
+		search: it hands the query to :py:func:`radial_query` and returns what that
+		returns, so the two agree by construction rather than by coincidence, for any
+		radius up to 180 degrees. A genuinely elliptical query (``axis_ratio`` below 1)
+		is limited to a semi-major axis of less than 90 degrees, the extent of the
+		tangent plane the shape is defined in; a larger one raises ``ValueError``.
+
+		The default return value is an array of the matching coordinates with shape (n,2)
+		— always (n,2), including for a single match, unlike :py:func:`radial_query`.
 		If either ``return_key`` or ``return_distance`` is set, the result is instead a
 		:class:`numpy.recarray` whose fields are "ra", "dec", then "key" and "distance" for
 		whichever flags were set. The "distance" field is the angular separation between
@@ -2093,7 +2368,7 @@ class QLSCIndex:
 
 		:param ra: right ascension of the center of the ellipse (degrees)
 		:param dec: declination of the center of the ellipse (degrees)
-		:param semi_major_axis: semi-major axis of the ellipse (degrees), in the range [0,180], accepts a `float` value or `astropy.units.Quantity`
+		:param semi_major_axis: semi-major axis of the ellipse (degrees); in [0,90) unless ``axis_ratio`` is 1, when [0,180] is accepted. Accepts a `float` value or `astropy.units.Quantity`
 		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
 		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
 		:param return_key: if set to True, include the key value as provided when added to the index
@@ -2114,12 +2389,19 @@ class QLSCIndex:
 		if abs(dec) > 90:
 			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
 
-		# the same bound radial_query places on its radius: beyond 180 degrees a
-		# semi-major axis has no meaning on a sphere
-		if not (0 <= semi_major_axis <= 180):
-			raise ValueError(f"The value for semi_major_axis must be in the range [0,180]; was given '{semi_major_axis}'.")
-		if not (0 < axis_ratio <= 1):
-			raise ValueError(f"The value for axis_ratio must be in the range (0,1]; was given '{axis_ratio}'.")
+		_validate_ellipse(semi_major_axis, axis_ratio)
+
+		if axis_ratio == 1:
+			# A circle is a cone search, so run one: the promise that the two agree is
+			# then structural. Q3C's elliptical predicate could not keep that promise -
+			# it is a tangent plane conic, so it rejects everything past 90 degrees from
+			# the center and is not even monotonic in the semi-major axis beyond that.
+			matches = self.radial_query(ra=ra, dec=dec, radius=semi_major_axis,
+										return_key=return_key, return_distance=return_distance)
+			if return_key or return_distance:
+				return matches
+			# radial_query keeps its historical squeezed shape; this method promises (n,2)
+			return _as_stable_pairs(matches)
 
 		center_ra = ra
 		center_dec = dec
@@ -2171,7 +2453,8 @@ class QLSCIndex:
 					else:
 						match_distance.append(_sindist2deg(sindist(row_ra, row_dec, center_ra, center_dec)))
 
-		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance)
+		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance,
+							 MatchArrayShape.STABLE)
 
 	def coverage(self, depth:int=None, value_domain:Iterable=None, meta:dict=None) -> dict:
 		'''
