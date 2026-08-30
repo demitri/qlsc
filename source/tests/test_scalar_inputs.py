@@ -19,7 +19,10 @@ POLYGON = np.array([[5.,-5.],[5.,5.],[-5.,5.]])
 def _query_index(wrap):
 	idx = QLSCIndex(qlsc=q30)
 	idx.add_point(10., 30.)
-	return idx.radial_query(ra=wrap(10.), dec=wrap(30.), radius=wrap(1.))
+	matches = idx.radial_query(ra=wrap(10.), dec=wrap(30.), radius=wrap(1.))
+	# guard against a vacuous comparison: two empty results would compare equal
+	assert matches.shape == (2,), f"radial_query did not find the indexed point (matches shape: {matches.shape})"
+	return matches
 
 def _add_point_index(wrap):
 	idx = QLSCIndex(qlsc=q30)
