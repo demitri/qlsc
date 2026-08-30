@@ -95,6 +95,26 @@ def _degrees(value:Union[float, "Quantity"], name:str) -> float:
 		value = value.to(u.deg).value
 	return _as_float_scalar(value, name)
 
+def _zip_exact(*sequences):
+	'''
+	Combine sequences elementwise, refusing to silently truncate.
+
+	``zip`` stops at its shortest input, which turns a length mismatch into missing
+	rows rather than an error — this is how ``add_points`` came to store two points
+	when given three coordinates and two keys. Every use here is building rows to
+	insert into the index, where a short sequence is a bug in the caller, not a
+	shorter insert. (``zip(..., strict=True)`` would do the same, but it needs
+	Python 3.10 and this package supports 3.6.)
+
+	:param sequences: the sequences to combine; all must be the same length
+	:returns: an iterator of tuples, as ``zip`` returns
+	'''
+	lengths = [len(sequence) for sequence in sequences]
+	if len(set(lengths)) != 1:
+		raise ValueError(f"Refusing to combine sequences of unequal length ({lengths}); "
+						 f"this would silently drop the values past the shortest one.")
+	return zip(*sequences)
+
 def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:list,
 				  return_key:bool, return_distance:bool):
 	'''
@@ -1170,17 +1190,27 @@ class QLSCIndex:
 
 		if all([x is None for x in [ra,dec,points]]):
 			raise ValueError("'ra','dec' OR 'points' must be specified.")
-		if all([x is True for x in [ra, dec, points]]):
+		# This was written as "all([x is True for x in [ra, dec, points]])", which is
+		# never satisfied by an array (or by anything but the literal True), so both
+		# forms could be given at once and the 'ra','dec' pair was silently discarded
+		# by the reassignment below.
+		if points is not None and (ra is not None or dec is not None):
 			raise ValueError("Only 'ra','dec' OR 'points' can be specified.")
 		elif points is None and any([x is None for x in [ra,dec]]):
 			raise ValueError("If 'ra' or dec' is given, then other parameter must also be provided.")
 
 		if keys is not None:
+			# zip() stops at the shortest input, so an unequal number of keys silently
+			# drops points instead of failing. Nothing below may assume these lengths
+			# agree; check them here, before any database work.
 			if points is not None:
 				if len(points) != len(keys):
 					raise ValueError(f"The number of points provided ({len(points)}) does not match the number of keys ({len(keys)}).")
 			else:
-				if len(ra) != len(dec) != len(keys):
+				# NOT "len(ra) != len(dec) != len(keys)": that chained comparison is
+				# False whenever len(ra) == len(dec), whatever len(keys) is, so three
+				# coordinates and two keys stored two points and dropped the third.
+				if not (len(ra) == len(dec) == len(keys)):
 					raise ValueError(f"The number of ra,dec coordinates provided ({len(ra)},{len(dec)}) does not match the number of keys ({len(keys)}).")
 
 #		if pandas_available:
@@ -1219,10 +1249,10 @@ class QLSCIndex:
 					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec) VALUES (?, ?, ?)"
 					# use individual lists instead of something like np.dstack- we don't want
 					# the 64-bit ipix integers converted to floats and risk changing the value due to rounding
-					cursor.executemany(query, zip(ipix, ra, dec)) # pass list of tuples (e.g. use zip)
+					cursor.executemany(query, _zip_exact(ipix, ra, dec))
 				else:
 					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec, key) VALUES (?, ?, ?, ?)"
-					cursor.executemany(query, zip(ipix, ra, dec, keys))
+					cursor.executemany(query, _zip_exact(ipix, ra, dec, keys))
 
 				cursor.execute("COMMIT")
 

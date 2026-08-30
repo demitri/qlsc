@@ -86,6 +86,17 @@
 * `QLSC.ipix2xy` did not bounds check its ipix value and silently returned the
   coordinates of no pixel at all for out-of-range input; it now raises `ValueError`,
   as `ipix2ang` already did. The check is also enforced in the C extension.
+* `QLSCIndex.add_points` silently dropped points when given fewer keys than
+  coordinates: the length check was the chained comparison
+  `len(ra) != len(dec) != len(keys)`, which Python evaluates as
+  `(len(ra) != len(dec)) and (len(dec) != len(keys))` — false whenever the
+  coordinates agree, whatever the key count is. Three coordinates and two keys
+  stored two points. It now raises `ValueError`, and the rows are built with a
+  guard that refuses to combine sequences of unequal length, so the invariant is
+  enforced where it is relied on and not only where the arguments are checked.
+* `QLSCIndex.add_points` accepted `points` together with `ra`,`dec` and silently
+  discarded the `ra`,`dec` pair; the check (`all([x is True for x in ...])`) could
+  not be satisfied by an array. It now raises `ValueError`.
 * `QLSCIndex.radial_query` built its record array through `np.core.records`, which
   NumPy 1.25 deprecated and NumPy 2 removed; it now uses the public `np.rec`
   spelling, which has been available since long before the declared NumPy floor.
