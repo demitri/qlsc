@@ -41,6 +41,45 @@ DENSITY_CMAP = "cividis"
 
 SEED = 20200422
 
+SQ_DEG_PER_STERADIAN = (180. / np.pi) ** 2
+
+
+# ---------------------------------------------------------------------------
+# Pixel areas.
+#
+# QLSC pixels are only approximately equal in area: at any depth they vary by a
+# factor of about 5.2, from the pixels at a cube VERTEX (the smallest) to those
+# at a face centre (the largest). Pixel 0 is a cube-vertex pixel, so
+# ``ipix_area(0, depth)`` is the SMALLEST area in the scheme and about 2.55
+# times below the mean - which is what these figures used to divide their
+# counts by, overstating every density by that factor while the surrounding
+# prose said the mean had been used.
+#
+# There are two defensible scales and this file uses both, deliberately and by
+# name: the mean, for anything characterising the scheme as a whole (a pixel
+# side against depth), and the pixel's own area, for anything showing a real
+# density. Neither is ``ipix_area(0, ...)``, and test_figure_pixel_areas.py
+# fails if that spelling comes back.
+# ---------------------------------------------------------------------------
+
+def mean_pixel_area_sq_deg(q):
+	'''
+	The mean area of a pixel of a scheme, in square degrees: the sphere divided by
+	the number of pixels. This is the scale that characterises a depth.
+	'''
+	return 4. * np.pi / q.nbins * SQ_DEG_PER_STERADIAN
+
+
+def pixel_areas_sq_deg(q, ipix):
+	'''
+	The area of each of the given pixels, in square degrees.
+
+	This is the scale that turns a count into a density, because the count came
+	from that pixel and no other.
+	'''
+	return np.array([q.ipix_area(int(p), q.depth) for p in np.atleast_1d(ipix)]) \
+		* SQ_DEG_PER_STERADIAN
+
 
 def _style(ax, xlabel="right ascension (deg)", ylabel="declination (deg)"):
 	ax.set_xlabel(xlabel)
@@ -329,10 +368,16 @@ def figure_sky_density(path, depth=5):
 									+ 1. / n_dec))
 	mesh_ra, mesh_dec = np.meshgrid(grid_ra, grid_dec)
 	ipix = q.ang2ipix(ra=mesh_ra.ravel().copy(), dec=mesh_dec.ravel().copy())
-	image = np.array([count_of.get(int(p), 0) for p in ipix]).reshape(mesh_dec.shape)
 
-	area = q.ipix_area(0, depth) * (180. / np.pi) ** 2
-	density = image / area
+	# Each pixel's count is divided by THAT pixel's area, so the map is a real
+	# density and not a count map with a single scale factor on it. Only the
+	# occupied pixels need an area, and each is computed once however many grid
+	# cells fall in it.
+	areas = dict(zip(occupied.tolist(), pixel_areas_sq_deg(q, occupied).tolist()))
+	density_of = {p: count_of[p] / areas[p] for p in count_of}
+
+	density = np.array([density_of.get(int(p), 0.) for p in ipix]).reshape(mesh_dec.shape)
+	mean_area = mean_pixel_area_sq_deg(q)
 
 	fig, ax = plt.subplots(figsize=(9.4, 4.8))
 	mesh = ax.pcolormesh(grid_ra, np.degrees(np.arcsin(
@@ -343,8 +388,9 @@ def figure_sky_density(path, depth=5):
 	bar.ax.tick_params(labelsize=8)
 	ax.set_xlim(360., 0.)
 	ax.set_ylim(-90., 90.)
-	ax.set_title(f"counts per depth-{depth} pixel ({q.nbins:,} pixels, "
-				 f"{area:.3g} sq deg each)", fontsize=10)
+	ax.set_title(f"source density at depth {depth} ({q.nbins:,} pixels, "
+				 f"{mean_area:.3g} sq deg on average), each pixel's count "
+				 f"divided by its own area", fontsize=10)
 	_style(ax)
 	ax.grid(False)
 	ax.set_xticks([0, 60, 120, 180, 240, 300, 360])
@@ -361,10 +407,11 @@ def figure_cube_faces(path, depth=5):
 	occupied, counts = np.unique(q.ang2ipix(ra=ra, dec=dec), return_counts=True)
 	facenum, x, y = q.ipix2xy(occupied)
 
-	area = q.ipix_area(0, depth) * (180. / np.pi) ** 2
+	# as in figure_sky_density: each count divided by its own pixel's area
+	densities = counts / pixel_areas_sq_deg(q, occupied)
 	side = 2. / q.nside
-	vmin = np.log10(max(counts.min(), 1) / area)
-	vmax = np.log10(counts.max() / area)
+	vmin = np.log10(max(densities.min(), 1e-3))
+	vmax = np.log10(densities.max())
 
 	# the conventional unfolded-cube layout: the four side faces in a row with
 	# the top and bottom faces above and below face 1.
@@ -380,7 +427,7 @@ def figure_cube_faces(path, depth=5):
 		grid = np.full((q.nside, q.nside), np.nan)
 		i = np.round((x[sel] + 1.) / side).astype(int)
 		j = np.round((y[sel] + 1.) / side).astype(int)
-		grid[j, i] = np.log10(counts[sel] / area)
+		grid[j, i] = np.log10(densities[sel])
 		mesh = ax.imshow(grid, origin="lower", extent=(-1, 1, -1, 1),
 						 cmap=DENSITY_CMAP, vmin=vmin, vmax=vmax,
 						 interpolation="nearest")
@@ -396,7 +443,7 @@ def figure_cube_faces(path, depth=5):
 	bar = fig.colorbar(mesh, ax=axes, fraction=0.03, pad=0.02)
 	bar.set_label("log$_{10}$ sources per square degree", fontsize=9)
 	bar.ax.tick_params(labelsize=8)
-	fig.suptitle(f"the same counts on the six cube faces, in face (x,y) "
+	fig.suptitle(f"the same density on the six cube faces, in face (x,y) "
 				 f"coordinates (depth {depth})", fontsize=10)
 	fig.savefig(path, dpi=110, facecolor="white")
 	plt.close(fig)
@@ -408,7 +455,10 @@ def figure_cube_faces(path, depth=5):
 
 def figure_pixel_scale(path):
 	depths = np.arange(0, 31)
-	sides = np.array([np.sqrt(QLSC(depth=int(d)).ipix_area(0, int(d))) * 180. / np.pi
+	# the MEAN pixel side, sqrt(4*pi/nbins), which is the number
+	# docs/user_guide/depth.rst tabulates and the code block on that page prints;
+	# ipix_area(0, d) is the smallest pixel in the scheme, about 1.6 times narrower
+	sides = np.array([np.sqrt(4. * np.pi / QLSC(depth=int(d)).nbins) * 180. / np.pi
 					  for d in depths])
 
 	fig, ax = plt.subplots(figsize=(7.4, 4.4))
@@ -423,8 +473,8 @@ def figure_pixel_scale(path):
 		ax.annotate(label, xy=(30.4, scale_arcsec), fontsize=8, color="#555555",
 					va="center", ha="left", annotation_clip=False)
 	ax.set_xlim(-0.5, 30.5)
-	ax.set_title("pixel side length against depth", fontsize=10)
-	_style(ax, xlabel="depth", ylabel="pixel side (arcsec)")
+	ax.set_title("mean pixel side length against depth", fontsize=10)
+	_style(ax, xlabel="depth", ylabel="mean pixel side (arcsec)")
 	ax.set_xticks(np.arange(0, 31, 2))
 	fig.tight_layout()
 	fig.savefig(path, dpi=110, facecolor="white")

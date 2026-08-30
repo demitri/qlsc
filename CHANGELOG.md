@@ -306,6 +306,15 @@
   so a geographic method added later that takes a latitude fails the gate until it is
   covered. `QLSC` is unchanged: an unnormalized declination is a legitimate celestial
   coordinate and is still read as the point past the pole.
+* The documentation's two density figures showed densities about 2.55 times too high.
+  Both divided every pixel's count by `ipix_area(0, depth)` — pixel 0 sits at a cube
+  vertex, which makes it the *smallest* pixel in the scheme, not a representative one —
+  while the page beside them said the mean area had been used. The pixel-scale figure had
+  the same fault, plotting the smallest pixel's side against a page that tabulates the
+  mean. The density figures now divide each count by that pixel's own area (a true
+  density), the scale figure plots the mean side, the prose agrees with both, and
+  `test_figure_pixel_areas.py` fails if a figure takes one pixel's area as the area of a
+  pixel again.
 * `QLSC.point_in_ellipse` now gives the same answer for a point however its coordinates
   are written. `ra=0` and `ra=360` are the same meridian and at a pole the right ascension
   is arbitrary, but neither of the two containment tests is exact on those: the circular

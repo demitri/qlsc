@@ -179,9 +179,11 @@ pixels on the polar faces span most of the right-ascension axis when projected
 this way, and the resulting polygons are unreadable. Sampling avoids that
 entirely — for each grid cell, ask which pixel contains it and look up the count.
 
-The blockiness is real: those are the depth-5 pixels, 6.7 square degrees each.
+The blockiness is real: those are the depth-5 pixels, 6.7 square degrees on average.
 The seams where the blocks change orientation, most visible near α = 270° and
-α = 105° and around the poles, are the edges of the cube faces.
+α = 105° and around the poles, are the edges of the cube faces. The colour is a
+density — each pixel's count divided by that pixel's own area, not by one number
+for the whole map; see `From counts to densities`_ below for why that matters.
 
 For anything beyond a quick look, a projection-aware plotting library will serve
 you better. The author has a sibling project, *astplot-js*, that renders sky maps
@@ -231,11 +233,24 @@ From counts to densities
 
 The last step, turning counts into sources per square degree, is the one that
 needs care, because pixel areas vary by up to a factor of about 5.2 (see
-:ref:`how-equal-are-the-pixels` and :ref:`pixel-area-trap`). The counts above were
-divided by ``4*pi/nbins``, the *mean* area, which is the right scale for comparing
-depths but not for any one pixel; :py:func:`~qlsc.QLSC.ipix_area` gives a pixel its
-own area. A latitude profile is fine either way, because it compares pixels drawn
-from all over the sphere:
+:ref:`how-equal-are-the-pixels` and :ref:`pixel-area-trap`). The two figures above
+divide each pixel's count by *that pixel's own* area, which
+:py:func:`~qlsc.QLSC.ipix_area` gives::
+
+	q5 = QLSC(depth=5)
+	occ, cnt = np.unique(q5.ang2ipix(ra=ra, dec=dec), return_counts=True)
+	areas = np.array([q5.ipix_area(int(p), q5.depth) for p in occ]) * (180/np.pi)**2
+	density = cnt / areas
+
+The tempting shortcut is one number for every pixel — ``4*pi/nbins``, the *mean*
+area, which is the right scale for comparing depths and a defensible approximation
+for a quick look, provided the approximation is stated. What is never right is
+``ipix_area(0, depth)``: pixel 0 sits at a cube vertex, so it is the *smallest*
+pixel in the scheme, about 2.55 times below the mean at depth 5, and dividing by it
+overstates every density by that factor.
+
+A latitude profile is fine either way, because it compares pixels drawn from all
+over the sphere:
 
 .. code-block:: python
 
