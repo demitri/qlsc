@@ -724,9 +724,16 @@ class QLSC:
 		projected face by face (:py:func:`xy2ang` takes one face number), so the shape and
 		the grouping gain nothing over calling this method in a loop.
 
+		The default is the open form: four corners, shape (4,2), with the edge from the
+		last back to the first left implicit. Set ``duplicate_endpoint`` for the closed
+		form, five rows with the first repeated as the last, which is what most drawing
+		code wants. Either form may be handed to :py:func:`point_in_polygon` and
+		:py:func:`QLSCIndex.polygon_query`; a repeated vertex makes a zero-length edge,
+		which contributes nothing to the containment test.
+
 		:param ipix: the pixel identifier number
 		:param duplicate_endpoint: if True, repeat the first coordinate in the polygon as the last element
-		:returns: an array of ra,dec coordinates in degrees
+		:returns: an array of ra,dec coordinates in degrees, with shape (4,2) or, with ``duplicate_endpoint`` set, (5,2)
 		'''
 		if ipix is None:
 			raise ValueError(f"An 'ipix' value must be specified.")
@@ -740,24 +747,15 @@ class QLSC:
 
 		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
 
-		if duplicate_endpoint:
-			polygon = np.array([
-					[  x ,  y  ],
-					[ x+d,  y  ],
-					[ x+d, y+d ],
-					[  x , y+d ],
-					[  x ,  y  ]
-				], dtype=np.double)
-		else:
-			polygon = np.array([
-					[  x ,  y  ],
-					[ x+d,  y  ],
-					[ x+d, y+d ],
-					[  x , y+d ]
-				], dtype=np.double)
+		polygon = np.array([
+				[  x ,  y  ],
+				[ x+d,  y  ],
+				[ x+d, y+d ],
+				[  x , y+d ]
+			], dtype=np.double)
 
-		if duplicate_endpoint == True:
-			polygon = polygon[:-1]
+		if duplicate_endpoint:
+			polygon = np.vstack((polygon, polygon[:1]))
 
 		return self.xy2ang(facenum=facenum, points=polygon)
 

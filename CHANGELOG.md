@@ -96,6 +96,13 @@
 
 ### Fixed
 
+* `QLSC.ipix2polygon(ipix, duplicate_endpoint=True)` did nothing. The branch built
+  the closed five-row polygon and the line after it stripped the extra row back off
+  unconditionally, so both forms returned the same four rows and the parameter was
+  silently ignored. It now returns the closed form, shape `(5,2)`, with the first
+  vertex repeated as the last. Either form may still be passed to `point_in_polygon`
+  and `polygon_query`: a repeated vertex makes a zero-length edge, which the crossing
+  test never counts.
 * `QLSC.ipix2ang` rejected NumPy integers (`isinstance(ipix, int)` is `False` for
   `np.int64`), so the ipix values returned by `ang2ipix` for array input could not be
   fed back to it. Integer values of any width are now accepted.
