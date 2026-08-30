@@ -173,6 +173,24 @@
   importable packages, and are now declared as such; the sdist and wheel contain
   exactly the same files as before.
 
+### Packaging
+
+* Releases now ship binary wheels, so installing no longer requires a working C
+  compiler and the NumPy headers. They cover Linux (x86_64 and aarch64,
+  manylinux and musllinux), macOS (arm64 and x86_64) and Windows (64-bit), for
+  CPython 3.10 through 3.14. The wheels are built and tested by GitHub Actions
+  (`.github/workflows/wheels.yml`, using cibuildwheel) when a version tag is
+  pushed, and uploaded to PyPI from that run as part of the manual release; the
+  full test suite is run against every wheel before it is published. The source
+  distribution is built by the same workflow and remains the install path for
+  every platform and interpreter outside that list.
+* The extension now compiles against an explicit NumPy C API level
+  (`NPY_TARGET_VERSION`) rather than whichever level the building NumPy happens
+  to default to. Without it, a wheel built with a current NumPy would refuse to
+  import under NumPy older than 1.25 while the package still declared
+  `numpy>=1.18`; CI now installs the built wheel against the oldest NumPy
+  available for the oldest supported interpreter and runs the tests.
+
 ## 1.1.0 (2026-08-30)
 
 ### Breaking changes

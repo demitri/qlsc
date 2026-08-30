@@ -29,7 +29,40 @@ cd docs && make html
 
 **Test gotcha:** the tests do `import qlsc`, and since the source tree contains no built `.so`, they run against the *installed* package, not the working tree. After changing anything under `source/qlsc/`, reinstall before running tests or you will test stale code. Test files prefixed `xtest_` (rather than `test_`) are deliberately disabled.
 
-**Releasing:** the version lives only in `source/qlsc/version.py` (kept out of `__init__.py` so `setup.py` can read it without importing dependencies). The commit convention is a dedicated "Bumping version to X.Y.Z." commit. The procedure (established for v1.1.0): update `CHANGELOG.md`; `cd source && rm -rf dist && python -m build` (builds sdist + a wheel for this machine only; everyone else builds the sdist, which works under pip's default build isolation via `pyproject.toml`); `twine check --strict dist/qlsc-X.Y.Z*`; `twine upload --repository qlsc dist/qlsc-X.Y.Z*` (the `[qlsc]` section in `~/.pypirc`; twine ≥6 requires sections be listed under its `[distutils] index-servers` header); `git tag vX.Y.Z && git push origin master vX.Y.Z`; `gh release create vX.Y.Z` with the version's CHANGELOG section as notes. The PyPI project page renders the repo-root README (read by `setup.py` at build time, Markdown, absolute image URLs) — it is baked at upload and immutable per release; the v1.1.0 page predates this and shows plain text, which self-corrects at the next upload.
+**Releasing:** the version lives only in `source/qlsc/version.py` (kept out of `__init__.py` so `setup.py` can read it without importing dependencies). The commit convention is a dedicated "Bumping version to X.Y.Z." commit. Since binary wheels are built in CI, the release is **tag-first**: the tag is what produces the files that get uploaded, so nothing is uploaded before it exists. The procedure:
+
+1. Update `CHANGELOG.md` and `source/qlsc/version.py`, commit, `git push origin master`.
+2. `git tag vX.Y.Z && git push origin vX.Y.Z` — the tag triggers `.github/workflows/wheels.yml`, which builds and tests wheels for every supported platform and builds the sdist.
+3. Wait for that run to go green, including its `verify` job: find it with `gh run list --workflow wheels.yml --limit 5` (the tag run is the one whose event is `push`, at the tag's SHA) and follow it with `gh run watch <run-id>`. `verify` is the gate — it runs `twine check --strict` over the whole set, checks that every expected interpreter/platform wheel is present (`.github/scripts/verify_artifacts.py`), that the tag matches `version.py`, and that the wheels import under the oldest supported NumPy.
+4. Download that run's artifacts into a *fresh* staging directory and collect the files into a *separate fresh* release directory (`gh run download` writes one subdirectory per artifact, so the files have to be gathered; the directories must not be left among them, and a reused directory would smuggle a stale local build into the upload):
+
+   ```bash
+   cd <repo root>
+   rm -rf release-staging release-dist && mkdir release-dist
+   gh run download <run-id> -D release-staging
+   find release-staging -type f \( -name '*.whl' -o -name '*.tar.gz' \) -exec mv -n {} release-dist/ \;
+   ```
+
+5. Verify locally, then upload — always naming the two globs rather than `release-dist/*`, so anything that is not a wheel or an sdist can never reach twine:
+
+   ```bash
+   python .github/scripts/verify_artifacts.py release-dist   # needs "packaging"
+   twine check --strict release-dist/*.whl release-dist/*.tar.gz
+   twine upload --repository qlsc release-dist/*.whl release-dist/*.tar.gz
+   ```
+
+   (the `[qlsc]` section in `~/.pypirc`; twine ≥6 requires sections be listed under its `[distutils] index-servers` header). Wheels and sdist go up together, in one upload. `rm -rf release-staging release-dist` afterwards.
+6. `gh release create vX.Y.Z` with the version's CHANGELOG section as notes.
+
+**If the tag build fails**, nothing has been published — the upload is step 5 and the tag only triggers a build — so the tag itself is the only thing to clean up, and the version number is still free:
+
+```bash
+git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z   # then fix, and re-tag the new commit
+```
+
+Re-tagging the same version is fine *as long as nothing was uploaded*. Once `twine upload` has succeeded, even partially, that version is spent: PyPI refuses a second upload of a filename it already has, and deleting a release to re-upload is not an option (it breaks anyone who pinned it). So if a failure appears after an upload has begun, do not re-tag — finish the interrupted upload with `twine upload --skip-existing …` if the artifacts are good, or bump to the next patch version and start again if they are not.
+
+Do **not** upload a locally built `python -m build` result: it produces a wheel for one machine and one interpreter only, and uploading it would claim the release while leaving every other platform on the sdist. A local `cd source && rm -rf dist && python -m build` remains useful for checking that the build works before tagging — just don't upload it. Publishing is deliberately not automated in the workflow (no trusted publishing, no API token in the repo); the workflow marks where such a job would go. The PyPI project page renders the repo-root README (read by `setup.py` at build time, Markdown, absolute image URLs) — it is baked at upload and immutable per release; the v1.1.0 page predates this and shows plain text, which self-corrects at the next upload.
 
 ## Architecture
 
