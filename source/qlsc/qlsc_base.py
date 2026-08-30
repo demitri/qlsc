@@ -2225,6 +2225,21 @@ class QLSCIndex:
 		``return_distance`` is set, the result is instead a :class:`numpy.recarray` whose
 		fields are "ra", "dec", then "key" and "distance" for whichever flags were set.
 
+		.. warning::
+
+			**That plain array is squeezed, so a single match comes back with shape (2,),
+			not (1,2)**, and ``matches[:,0]`` raises for exactly that one case. Nothing
+			else in the package does this — :py:func:`polygon_query` and
+			:py:func:`ellipse_query` always return (n,2) — but changing it here would
+			break existing callers without an error to warn them, so it is kept and
+			queued for a 2.0 release. It is named by
+			:class:`~qlsc.qlsc_base.MatchArrayShape` (``SQUEEZED``, which is this method
+			and only this method) so that which queries carry the wart is stated in one
+			place rather than left to be discovered. Use ``np.atleast_2d(matches)``, or
+			set ``return_distance``/``return_key`` and read the fields by name, to get a
+			shape that does not depend on how many points matched. The batch form below
+			is unaffected: it always returns a recarray.
+
 		The "distance" field is the angular separation between the query center and each
 		match, in degrees. It costs nothing to ask for: the cone filter already computes
 		the sine-squared half-distance of every candidate. Coordinates that are equivalent
