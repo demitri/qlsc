@@ -886,6 +886,44 @@ class QLSCIndex:
 			if not self._is_in_memory_db():
 				connection.close()
 
+	def _find_candidate_ranges(self, ra:float, dec:float, radius:float):
+		'''
+		Return the (fulls, partials) candidate ipix range arrays covering a cone search,
+		always computed at depth 30.
+
+		The underlying q3c_radial_query produces degenerate (empty) ipix ranges for some
+		queries at small nside values - upstream Q3C is only ever exercised at depth 30 -
+		so the search always runs at depth 30; the caller maps the ranges down to the
+		index's resolution.
+
+		For zero and very small (< ~1e-7 deg) radii, q3c produces no ranges at all at
+		some sky positions, and at seam/pole positions its ranges can omit the pixels
+		holding equivalent coordinate representations (e.g. a point stored as ra=360
+		queried as ra=0), so the search uses a radius of at least 1e-6 degrees. At rare
+		positions a given search radius can also overflow q3c's internal range capacity;
+		a larger radius produces fewer, coarser ranges, so the radius is grown and the
+		search retried on either failure mode, raising only if even a whole-sphere
+		search fails.
+
+		The ranges therefore cover at least the requested cone, possibly more; the
+		caller MUST filter the candidate rows by the radius actually requested.
+		'''
+		if self._query_qlsc is None:
+			self._query_qlsc = self.qlsc if self.qlsc.depth == 30 else QLSC(depth=30)
+
+		search_radius = max(radius, 1e-6)
+		while True:
+			try:
+				fulls, partials = q3c.radial_query(self._query_qlsc._hprm, ra, dec, search_radius)
+			except RuntimeError:
+				if search_radius >= 180.0:
+					raise # even a whole-sphere search failed
+				search_radius = min(search_radius * 10, 180.0)
+				continue
+			if len(fulls) + len(partials) > 0 or search_radius >= 180.0:
+				return fulls, partials
+			search_radius = min(search_radius * 10, 180.0)
+
 	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False) -> np.recarray:
 		'''
 		Given an ra,dec coordinate and a radius (all in degrees), return the points that fall in the cone search.
@@ -894,7 +932,7 @@ class QLSCIndex:
 
 		:param ra: right ascension (degrees)
 		:param dec: declination (degrees)
-		:param radius: radius (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param radius: radius (degrees) in the range [0,180], accepts a `float` value or `astropy.units.Quantity`
 		:param return_key: if set to True, returns the key value as provided when added to the index
 		:returns: if ``return_key=True``, returns a :class:`numpy.recarray` with keys ``ra,dec,key``; otherwise an array of matches, shape (n,2)
 		'''
@@ -922,34 +960,7 @@ class QLSCIndex:
 
 		#if isinstance(self._db, sqlite3.Connection):
 
-		# The underlying q3c_radial_query produces degenerate (empty) ipix ranges for
-		# some queries at small nside values - upstream Q3C is only ever exercised at
-		# depth 30. Always query at depth 30 and, if the index is at a lower depth,
-		# shift the ranges down to the index's resolution. The resulting over-coverage
-		# is removed by the exact filter applied to every candidate row below.
-		if self._query_qlsc is None:
-			self._query_qlsc = self.qlsc if self.qlsc.depth == 30 else QLSC(depth=30)
-
-		# For zero and very small (< ~1e-7 deg) radii, q3c produces no ranges at all at
-		# some sky positions, and at seam/pole positions its ranges can omit the pixels
-		# holding equivalent coordinate representations (e.g. a point stored as ra=360
-		# queried as ra=0), so search with at least a small positive radius. At rare
-		# positions a given search radius can also overflow q3c's internal range
-		# capacity; a larger radius produces fewer, coarser ranges, so grow the radius
-		# and retry on either failure mode. The exact filter below still applies the
-		# radius actually requested, so a wider search only adds candidate rows.
-		search_radius = max(radius, 1e-6)
-		while True:
-			try:
-				fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, search_radius)
-			except RuntimeError:
-				if search_radius >= 180.0:
-					raise # even a whole-sphere search failed
-				search_radius = min(search_radius * 10, 180.0)
-				continue
-			if len(fulls) + len(partials) > 0 or search_radius >= 180.0:
-				break
-			search_radius = min(search_radius * 10, 180.0)
+		fulls, partials = self._find_candidate_ranges(center_ra, center_dec, radius)
 
 		# number of ipix bits to shift from depth 30 down to the index depth
 		k = 2 * (30 - self.qlsc.depth)
