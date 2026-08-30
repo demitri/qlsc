@@ -98,6 +98,16 @@
 
 ### Breaking changes
 
+* `QLSC.ipix_area`'s `depth` parameter now means something, and is validated. It was
+  previously ignored along with `ipix`, so any value was accepted; it is now an
+  absolute depth in `[0, qlsc.depth]` naming the ancestor pixel to measure (`depth=0`
+  is a whole cube face), and it defaults to the scheme's own depth. A depth finer than
+  the scheme's raises `ValueError`: the underlying Q3C function takes a levels-up
+  offset rather than a depth, and past the scheme's own resolution it shifts the
+  pixel's coordinates out of the cube face and returns an area larger than a face
+  without complaint. Code passing a depth this scheme cannot resolve — for example
+  `QLSC(depth=5).ipix_area(ipix, 30)` — was already getting a meaningless answer and
+  must now pass a depth in range.
 * An empty `QLSCIndex` is now falsy. `QLSCIndex` defines `__len__`, so
   `if index:` asks whether the index holds any points, where it was previously
   always true. Use `if index is not None:` for the old meaning.
@@ -111,6 +121,13 @@
 
 ### Fixed
 
+* `QLSC.ipix_area` ignored both of its arguments and returned the mean pixel area,
+  `4π / nbins`, with a `NOTE` in its docstring saying so and claiming the pixels "are
+  very close" in size. They are not: the largest pixel of a cube face, at its centre,
+  is `3√3 ≈ 5.196` times the smallest, at a cube vertex, and the spread is already a
+  factor of 2.5 at `depth=2`. Against the mean the error runs from 1.91× too small to
+  2.72× too large. The method now returns the area of the pixel actually asked for,
+  from Q3C's own `q3c_pixarea`.
 * `QLSC.ipix2face` returned the wrong face for the last pixel of every face at depths
   above about 26, and a `float` at every depth. It divided the ipix value by
   `math.pow(nside,2)`, and past 2^53 a double cannot hold the operands exactly: at

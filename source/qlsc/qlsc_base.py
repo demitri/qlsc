@@ -755,31 +755,47 @@ class QLSC:
 		# 	else:
 		# 		return 5
 
-	def ipix_area(self, ipix:int, depth:int) -> float:
+	def ipix_area(self, ipix:int, depth:int=None) -> float:
 		'''
-		Return the area of a given QLSC pixel in steradians for a given ipix.
+		Return the area of a given QLSC pixel, in steradians.
 
-		NOTE: currently this method returns the average bin size and ignores the ipix and depth values!
+		This is the area of the pixel actually asked for, not an average. QLSC pixels
+		are **not** equal area: the largest, at the centre of a cube face, is
+		3·√3 ≈ 5.196 times the smallest, at a cube vertex. Relative to the mean
+		(4π / number of pixels) the range is about 1.91x down to 0.37x, and the spread
+		is already a factor of 2.5 at ``depth=2``. Where an approximate answer will do,
+		the mean is ``4 * math.pi / qlsc.nbins``; this method is for when it will not.
 
-		Not all pixels are guaranteed to be the same size, but they are very close,
-		i.e. the size of any one pixel is a good approximation to any other.
+		The areas of all the pixels of a scheme sum to 4π.
 
-		pixel area ≈ 4π / no. pixels on sphere
+		By default the pixel is measured at this object's own depth. Pass ``depth`` to
+		measure the ancestor pixel containing ``ipix`` at a coarser depth instead:
+		``depth=0`` is the whole cube face, and ``depth`` equal to this object's depth
+		(the default) is the pixel itself. A finer depth is refused - this scheme does
+		not resolve it, and the underlying Q3C function would answer with a silently
+		meaningless number rather than complain.
 
 		:param ipix: the pixel identifier number
+		:param depth: the depth at which to measure, in [0, this object's depth]; the default is this object's depth
 		:returns: the area of the specified pixel in steradians
 		'''
+		ipix = int(self._validated_ipix(ipix))
 
-		return 4. * math.pi / self.nbins
+		if depth is None:
+			depth = self.depth
+		if isinstance(depth, bool) or not isinstance(depth, (int, np.integer)):
+			raise ValueError(f"The value for 'depth' must be an integer; was given '{depth}'.")
+		if not (0 <= depth <= self.depth):
+			raise ValueError(f"The value for 'depth' must be in the range [0,{self.depth}] for this scheme; "
+							 f"was given '{depth}'. A depth finer than the scheme's own is not resolved by it.")
 
-		#if not (0 <= depth <= 30):
-		#	raise ValueError(f"The depth provided {depth} is out of the range 0-30")
-
-		# The paramter call for the underlying C function is q3c_pixarea(hprm, ipix, depth).
-		# It's not clear why "depth" is a parameter since it should be read from hprm.
-		# I left the parameter exposed in the Python wrapper, but in this method will just pass depth.
-
-		#return q3c.pixarea(self._hprm, ipix, depth)
+		# q3c_pixarea's third argument is not a depth: it is the number of levels to go
+		# UP from the scheme's own resolution, applied as (x0 >> n) << n to the pixel's
+		# face coordinates. So the scheme's own depth is offset 0, and depth 0 - a whole
+		# face - is offset self.depth. Past self.depth the shift walks the coordinates
+		# out of the face entirely and q3c returns an area larger than a face without a
+		# word of complaint, which is why the range check above is not optional.
+		return q3c.pixarea(self._hprm, ipix, self.depth - depth)
 
 	def ang2ipix_at_depth(self, ra:float, dec:float, depth:int) -> int:
 		'''
