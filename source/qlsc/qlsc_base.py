@@ -613,7 +613,7 @@ class QLSCIndex:
 		''' Destructor method. '''
 		# if we had an open SQLite connection, close it
 		if self._is_in_memory_db():
-			self.db_filepath.close()
+			self.memory_db_connection.close()
 
 	def _is_in_memory_db(self):
 		#return (self.db_filepath == ":memory:") or self.db_filepath.startswith("file::memory:")

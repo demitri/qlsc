@@ -715,14 +715,13 @@ qlsc_q3c_xy2ang(PyObject *module, PyObject *args, PyObject *kwargs)
 	return Py_BuildValue("dd", ra, dec);
 }
 
-/* I don't really know what this does.
 static PyObject *
 qlsc_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
 	q3c_coord_t x, y;
 	char facenum;
-	
+
 	static char *kwlist[] = {"x", "y", "facenum", NULL};
 
 	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
@@ -731,16 +730,13 @@ qlsc_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 									 &x, &y, &facenum))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
 		return NULL;
 	}
-	
+
 	char result = q3c_xy2facenum(x, y, facenum);
-	PySys_WriteStdout("(%.4f, %.4f) | %d -> %hhd\n", x, y, facenum, result);
-		
+
 	return PyLong_FromLong( (long) result );
 }
-*/
 
 static PyObject *
 qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
@@ -919,7 +915,7 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"distance", (PyCFunction)qlsc_q3c_dist, METH_VARARGS|METH_KEYWORDS, "Calculates angular distance between two points on a sphere."},
 	{"sindist", (PyCFunction)qlsc_q3c_sindist, METH_VARARGS|METH_KEYWORDS, "Calculates the sine of the angular distance between two points on a sphere."},
 	{"xy2ang", (PyCFunction)qlsc_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
-//	{"xy2facenum", (PyCFunction)qlsc_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
+	{"xy2facenum", (PyCFunction)qlsc_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
 	{"radial_query_it", (PyCFunction)qlsc_q3c_radial_query_it, METH_VARARGS|METH_KEYWORDS, ""},
 	{"radial_query", (PyCFunction)qlsc_q3c_radial_query, METH_VARARGS|METH_KEYWORDS, ""},
 	{NULL, NULL, 0, NULL}	// sentinel
