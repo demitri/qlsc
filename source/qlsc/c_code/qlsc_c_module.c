@@ -741,6 +741,19 @@ qlsc_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 	return PyLong_FromLong( (long) result );
 }
 
+// Raise a RuntimeError for a q3c_radial_query ipix range overflow,
+// reporting the query values as used (i.e. after ra normalization).
+static void raise_radial_query_overflow(q3c_coord_t ra, q3c_coord_t dec, q3c_coord_t radius)
+{
+	char msg[512];
+	snprintf(msg, sizeof msg,
+			 "q3c_radial_query: too many ipix ranges for the query ra=%.10g, dec=%.10g, radius=%.10g "
+			 "(degrees; the ra value is normalized to [0,360)). This is an internal error in the embedded "
+			 "Q3C code; please report it with these values at https://github.com/segasai/q3c/issues .",
+			 ra, dec, radius);
+	PyErr_SetString(PyExc_RuntimeError, msg);
+}
+
 static PyObject *
 qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 {
@@ -788,7 +801,7 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
 	if (q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls_padded, partials_padded))
 	{
-		PyErr_SetString(PyExc_RuntimeError, "q3c_radial_query: too many ipix ranges. This is an internal error in the embedded Q3C code; please report it (with the ra/dec/radius values used) at https://github.com/segasai/q3c/issues .");
+		raise_radial_query_overflow(ra_cen, dec_cen, radius);
 		return NULL;
 	}
 
@@ -893,7 +906,7 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
 	if (q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls, partials))
 	{
-		PyErr_SetString(PyExc_RuntimeError, "q3c_radial_query: too many ipix ranges. This is an internal error in the embedded Q3C code; please report it (with the ra/dec/radius values used) at https://github.com/segasai/q3c/issues .");
+		raise_radial_query_overflow(ra_cen, dec_cen, radius);
 		return NULL;
 	}
 
