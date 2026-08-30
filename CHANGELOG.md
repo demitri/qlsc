@@ -82,6 +82,20 @@
   form is about the bookkeeping rather than speed: it runs one query per target (the
   ipix ranges covering a cone depend on where the cone is), and measured about 9%
   faster than the equivalent Python loop.
+* `qlsc.crossmatch(index_a, index_b, radius, nearest_only=False, return_keys=True)`
+  spatially joins two catalogs locally — the Q3C headline feature, without PostgreSQL.
+  It returns a `numpy.recarray` of the pairs within the radius, with the fields
+  `ra_a, dec_a, key_a, ra_b, dec_b, key_b, distance` (the key fields unless
+  `return_keys=False`; a point stored without a key reports `None`). `nearest_only`
+  keeps only the closest counterpart of each `index_a` point. The pairs are grouped by
+  the `index_a` point in ascending `(ra_a, dec_a)` order and sorted by separation within
+  a group, so the ordering is determined by the data alone. The search iterates over
+  whichever index holds fewer points and runs the same z-order range search
+  `radial_query` does against the other, filtering every candidate exactly with
+  `sindist`; the two indices do **not** have to share a depth. Both in-memory and
+  file-backed indices work, in any combination. Measured at about 15,000 points of the
+  smaller catalog per second on in-memory indices at depth 30 (50,000 against 200,000
+  points at one arcsecond, 22,593 pairs, in 3.3 seconds).
 
 ### Development
 

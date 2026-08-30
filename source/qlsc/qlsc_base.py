@@ -1441,6 +1441,36 @@ class QLSCIndex:
 			if not self._is_in_memory_db():
 				connection.close()
 
+	def _all_points(self, with_keys:bool=False):
+		'''
+		Read every point of the index into memory.
+
+		This is the whole index, materialized: it is used by :py:func:`qlsc.crossmatch`,
+		which iterates over the smaller of two catalogs, and the memory cost of doing so is
+		documented there. There is deliberately no public equivalent — the index is a
+		query structure, and a caller that wants the points back has them already.
+
+		:param with_keys: whether to read the key column as well
+		:returns: a tuple of (ra, dec, keys), where keys is a list of str-or-None, or None if it was not asked for
+		'''
+		self._ensure_open()
+
+		columns = "ra,dec,key" if with_keys else "ra,dec"
+
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				rows = cursor.execute(f"SELECT {columns} FROM {self.database_tablename}").fetchall()
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+		ra = np.fromiter((row["ra"] for row in rows), dtype=np.double, count=len(rows))
+		dec = np.fromiter((row["dec"] for row in rows), dtype=np.double, count=len(rows))
+		keys = [row["key"] for row in rows] if with_keys else None
+
+		return ra, dec, keys
+
 	def __len__(self) -> int:
 		'''
 		Return the number of coordinate points in the index.
