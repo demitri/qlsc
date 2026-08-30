@@ -40,7 +40,9 @@ def test_missing_cornish_raises_import_error(monkeypatch):
 	Every public function must fail with a descriptive ImportError, never quietly,
 	when cornish is unavailable.
 	'''
+	original = ImportError("No module named 'cornish'")
 	monkeypatch.setattr(cornish_interop, "cornish_available", False)
+	monkeypatch.setattr(cornish_interop, "cornish_import_error", original)
 
 	q = QLSC(depth=4)
 	index = QLSCIndex(qlsc=q)
@@ -51,7 +53,10 @@ def test_missing_cornish_raises_import_error(monkeypatch):
 		with pytest.raises(ImportError) as excinfo:
 			call()
 		assert "cornish" in str(excinfo.value)
-		assert "not installed" in str(excinfo.value)
+		assert "could not be imported" in str(excinfo.value)
+		# the underlying reason must survive: "not installed" and "installed but broken"
+		# are different problems and must not be reported as the same one
+		assert excinfo.value.__cause__ is original
 
 def test_module_imports_without_cornish():
 	'''

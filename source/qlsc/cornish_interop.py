@@ -42,8 +42,13 @@ try:
 	import cornish
 	from cornish import ASTRegion, ASTPolygon, ASTMoc, ASTICRSFrame
 	cornish_available = True
-except ImportError:
+	cornish_import_error = None
+except ImportError as e:
 	cornish_available = False
+	# Keep the original error: "cornish is not installed" and "cornish is installed but its
+	# own starlink-pyast import failed" are different problems with the same symptom here,
+	# and reporting the first when it is really the second sends the user the wrong way.
+	cornish_import_error = e
 
 from .qlsc_base import QLSC, QLSCIndex, _match_result
 from .utilities import _as_float_scalar
@@ -53,13 +58,16 @@ DEFAULT_FRAME = "ICRS"
 
 def _require_cornish():
 	'''
-	Raise a descriptive :class:`ImportError` when the optional ``cornish`` package is absent.
+	Raise a descriptive :class:`ImportError` when the optional ``cornish`` package could
+	not be imported. The original import error is chained, since a broken ``starlink-pyast``
+	underneath an installed cornish looks identical from here otherwise.
 	'''
 	if not cornish_available:
 		raise ImportError(
-			"The 'cornish' package is required for qlsc.cornish_interop but is not installed. "
-			"Install it with 'pip install cornish' (it in turn requires 'starlink-pyast'), "
-			"or see https://github.com/demitri/cornish .")
+			"The 'cornish' package is required for qlsc.cornish_interop but could not be "
+			f"imported ({cornish_import_error}). Install it with 'pip install cornish' (it in "
+			"turn requires 'starlink-pyast'), or see https://github.com/demitri/cornish ."
+			) from cornish_import_error
 
 def _check_region(region, frame:Union[str,None]) -> None:
 	'''
