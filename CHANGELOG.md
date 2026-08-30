@@ -83,6 +83,54 @@
   neighborhood searches. Eight neighbors in the interior of a cube face; **seven**
   for the 24 pixels on a corner of the cube, where three faces meet and there is no
   eighth pixel across the vertex; four at `depth=0`, where a face is a single pixel.
+* `QLSC.coverage(ipix, values=None, ...)` and `QLSCIndex.coverage(depth=None, ...)`
+  export sky coverage as a "sky-coverage" version 1 document — the JSON interchange
+  format specified by the [astplot-js](https://github.com/demitri/astplot-js) project,
+  whose `CoverageLayer` renders it as a filled-polygon coverage map or choropleth in
+  any projection. Both return a plain Python dictionary; writing it out is one
+  `json.dumps` with the standard library encoder, no custom `default=` hook (NumPy
+  input does not leak `np.int64`/`np.float64` into the document). Each pixel becomes
+  one polygon carrying its four corners as `vertices`, its ipix number as `id`, and
+  optionally a scalar as `value`. The document declares degrees, the ICRS frame and
+  geodesic edges, and records the qlsc version, the scheme and the depth in `meta`;
+  no `equinox` is written, since ICRS has none and the format makes declaring one an
+  error. `QLSCIndex.coverage` counts the index's points per pixel with a single
+  `GROUP BY` over the ipix column — one query, no per-point work in Python — and
+  defaults to depth 5 (6,144 pixels for the whole sky), or the index's depth if that
+  is coarser. A depth finer than the index's raises `ValueError`. A per-pixel value that
+  `float()` would convert but that is not a number — a numeric string, a boolean — is
+  refused rather than coerced, matching qlsc's strictness about ipix values.
+  `examples/sky_coverage_density_map.py` writes such a document from the WISE sample
+  catalog.
+* `QLSCIndex.radial_query(ra=array, dec=array, radius=...)` runs a cone search for a
+  whole list of targets — matching a target list against the catalog — with `radius`
+  either one value for every target or one value per target. The result is a
+  `numpy.recarray` whose first field is `target_index`: the position in the target list
+  each match belongs to. A target that matches nothing contributes no rows;
+  `return_counts=True` returns `(matches, counts)` instead, where `counts` has one
+  `np.int64` entry per target and a zero for a target that found none. A scalar query
+  is unchanged, including the rule that a size-1 array is a scalar value; a target list
+  with exactly one entry is therefore expressed with `return_counts=True`. The batch
+  form is about the bookkeeping rather than speed: it runs one query per target (the
+  ipix ranges covering a cone depend on where the cone is), and measured about 9%
+  faster than the equivalent Python loop. `ra` and `dec` now accept an
+  `astropy.units.Quantity` as `radius` already did, scalar or array: `np.asarray` on a
+  Quantity discards its units, so a target list in radians would otherwise have been
+  read as degrees and quietly returned the wrong points.
+* `qlsc.crossmatch(index_a, index_b, radius, nearest_only=False, return_keys=True)`
+  spatially joins two catalogs locally — the Q3C headline feature, without PostgreSQL.
+  It returns a `numpy.recarray` of the pairs within the radius, with the fields
+  `ra_a, dec_a, key_a, ra_b, dec_b, key_b, distance` (the key fields unless
+  `return_keys=False`; a point stored without a key reports `None`). `nearest_only`
+  keeps only the closest counterpart of each `index_a` point. The pairs are grouped by
+  the `index_a` point in ascending `(ra_a, dec_a)` order and sorted by separation within
+  a group, so the ordering is determined by the data alone. The search iterates over
+  whichever index holds fewer points and runs the same z-order range search
+  `radial_query` does against the other, filtering every candidate exactly with
+  `sindist`; the two indices do **not** have to share a depth. Both in-memory and
+  file-backed indices work, in any combination. Measured at about 15,000 points of the
+  smaller catalog per second on in-memory indices at depth 30 (50,000 against 200,000
+  points at one arcsecond, 22,593 pairs, in 3.3 seconds).
 
 ### Development
 

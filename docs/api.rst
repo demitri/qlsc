@@ -19,6 +19,11 @@ QLSC Index
    :members:
    :inherited-members:
 
+Cross-matching
+--------------
+
+.. autofunction:: qlsc.crossmatch
+
 Point Generation
 ----------------
 
