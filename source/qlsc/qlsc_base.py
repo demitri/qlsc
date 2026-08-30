@@ -192,52 +192,100 @@ class QLSC:
 
 		return q3c.ang2ipix_xy(self._hprm, ra, dec)
 
-	def ipix2ang(self, ipix:int) -> Tuple[float, float]:
+	def _validated_ipix(self, ipix:Union[int,Iterable]) -> Union[int, np.ndarray]:
+		'''
+		Validate scalar or array-like ipix input for this scheme.
+
+		Returns a Python ``int`` for scalar input (a Python or NumPy integer, or a
+		0-d array) and a C-contiguous ``np.int64`` array for array-like input,
+		mirroring the scalar/array convention of :py:func:`ang2ipix`.
+
+		Non-integer values (including floats that happen to be whole numbers) and
+		values outside [0, nbins) raise ValueError rather than being truncated or
+		clamped: both would silently return the coordinates of a different pixel.
+
+		:param ipix: an ipix number or an array-like of ipix numbers
+		:returns: an ``int`` for scalar input, an ``np.int64`` array otherwise
+		'''
+		values = np.asarray(ipix)
+
+		if values.size == 0:
+			# nothing to type check or bounds check; preserve the input shape
+			return np.empty(values.shape, dtype=np.int64)
+
+		if not np.issubdtype(values.dtype, np.integer):
+			raise ValueError(f"The ipix value(s) must be integers; was given a value of type '{values.dtype}'.")
+
+		# perform a bounds check
+		out_of_range = values[(values < 0) | (values >= self.nbins)]
+		if out_of_range.size > 0:
+			raise ValueError(f"An ipix number is out of bounds for this scheme (depth={self.depth}); "
+							 f"range: [0,{self.nbins-1}], first offending value: {out_of_range.flat[0]}.")
+
+		if values.ndim == 0:
+			return int(values)
+
+		return np.ascontiguousarray(values, dtype=np.int64)
+
+	def ipix2ang(self, ipix:Union[int,Iterable]) -> Tuple[Union[float,np.ndarray], Union[float,np.ndarray]]:
 		'''
 		Convert an ipix number to the ra,dec coordinate of the center of the pixel, in degrees.
+
+		This method accepts a single ipix value or an array-like of them (a NumPy array,
+		list, or tuple of integers). A scalar returns a tuple of two floats; array input
+		returns a tuple of two arrays of the same shape, following the same scalar/array
+		convention as :py:func:`ang2ipix`.
 
 		This method matches the behavior of the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_
 		(v2.0.1 and later). Note that prior to qlsc v1.1, this method returned the "lower left"
 		corner of the pixel, matching older versions of the plugin. To work with the pixel
 		corners, see :py:func:`ipix2xy` and :py:func:`ipix2polygon`.
 
-		:param ipix: ipix number
-		:returns: ra,dec in degrees as a tuple of the center of the pixel
+		Example usage:
+
+		.. code-block:: python
+
+			ra, dec = qlsc.ipix2ang(294541929365396512)
+			ra, dec = qlsc.ipix2ang(catalog_ipix_array)
+
+		:param ipix: an ipix number, or an array-like of ipix numbers
+		:returns: the ra,dec of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input)
 		'''
-		if isinstance(ipix, int) is False:
-			raise ValueError(f"The ipix value must be an integer; was given '{type(ipix)}'.")
+		return q3c.ipix2ang(self._hprm, self._validated_ipix(ipix))
 
-		# perform a bounds check
-		if not (0 <= ipix < self.nbins):
-			raise ValueError(f"The ipix number is out of bounds for this scheme; range: [0,{self.nbins-1}].")
-
-		return q3c.ipix2ang(self._hprm, ipix)
-
-	def ipix2ang_center(self, ipix:int) -> Tuple[float, float]:
+	def ipix2ang_center(self, ipix:Union[int,Iterable]) -> Tuple[Union[float,np.ndarray], Union[float,np.ndarray]]:
 		'''
 		Convert an ipix number to the ra,dec coordinate of the center of the pixel, in degrees.
 
 		This is a synonym of :py:func:`ipix2ang`, kept for callers who want the "center"
-		semantics to be explicit at the call site.
+		semantics to be explicit at the call site. Like :py:func:`ipix2ang`, it accepts a
+		single ipix value or an array-like of them.
 
 		The pixel "center" here is defined in the x,y coordinates;
 		the point projected on the sphere is the one returned.
 
-		:param ipix: ipix number
-		:returns: ra,dec in degrees as a tuple of the center of the pixel
+		:param ipix: an ipix number, or an array-like of ipix numbers
+		:returns: the ra,dec of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input)
 		'''
 		return self.ipix2ang(ipix)
 
 
-	def ipix2xy(self, ipix:int) -> Tuple[int, float, float]:
+	def ipix2xy(self, ipix:Union[int,Iterable]) -> Tuple[Union[int,np.ndarray], Union[float,np.ndarray], Union[float,np.ndarray]]:
 		'''
 		Convert an ipix value to the (x,y) position on the corresponding square face; returns (facenum,x,y).
 
-		:param ipix: ipix number
-		:returns: (facenum,x,y) as a tuple
-		'''
+		The (x,y) returned is the "lower left" corner of the pixel on the face,
+		where the face coordinates run from -1 to +1 in both axes.
 
-		return q3c.ipix2xy(self._hprm, ipix)
+		This method accepts a single ipix value or an array-like of them (a NumPy array,
+		list, or tuple of integers). A scalar returns ``(facenum, x, y)`` as an int and two
+		floats; array input returns three arrays of the same shape (the face numbers as
+		``np.int64``), following the same scalar/array convention as :py:func:`ang2ipix`.
+
+		:param ipix: an ipix number, or an array-like of ipix numbers
+		:returns: (facenum,x,y) as a tuple of scalars (scalar input) or a tuple of arrays (array input)
+		'''
+		return q3c.ipix2xy(self._hprm, self._validated_ipix(ipix))
 
 	def xy2ang(self, facenum:int=None, x:float=None, y:float=None, points:collections.abc.Iterable=None): # -> Tuple[float,float]:
 		'''
@@ -460,6 +508,11 @@ class QLSC:
 
 		All lines between each coordinate in the polygon should be drawn on great circles.
 		The `Cornish library <http://github.com/demitri/cornish>`_ can be useful for this.
+
+		Unlike :py:func:`ipix2ang` and :py:func:`ipix2xy`, this method takes a single ipix
+		value. Vectorizing it would return a (n,4,2) array whose corners must still be
+		projected face by face (:py:func:`xy2ang` takes one face number), so the shape and
+		the grouping gain nothing over calling this method in a loop.
 
 		:param ipix: the pixel identifier number
 		:param duplicate_endpoint: if True, repeat the first coordinate in the polygon as the last element

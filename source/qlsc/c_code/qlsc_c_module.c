@@ -409,29 +409,114 @@ qlsc_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> c
 	return return_dict;
 }
 
+// ------------------------------------------------------------------
+// Shared helpers for the ipix2* functions, which accept either a
+// single ipix value or an array of them.
+// ------------------------------------------------------------------
+
+// Validate a single ipix value against the scheme described by hprm.
+// Returns 0 if the value is in range, -1 with an exception set otherwise.
+// Out-of-range values are not silently clamped: q3c_ipix2ang would happily
+// decode them into coordinates that belong to no pixel of this scheme.
+static int
+ipix_bounds_check(struct q3c_prm *hprm, q3c_ipix_t ipix)
+{
+	// nside <= 2^30, so 6 * nside^2 <= 6.92e18 and cannot overflow int64
+	q3c_ipix_t nbins = 6 * hprm->nside * hprm->nside;
+	if (ipix < 0 || ipix >= nbins) {
+		PyErr_Format(PyExc_ValueError,
+					 "The ipix value %lld is out of range for this scheme; expected [0,%lld].",
+					 (long long)ipix, (long long)(nbins - 1));
+		return -1;
+	}
+	return 0;
+}
+
+// True if the given object should be handled as an array of ipix values
+// rather than as a single value. A 0-d NumPy array is a scalar here, matching
+// the convention ang2ipix uses for its ra,dec arguments.
+static int
+is_ipix_array_input(PyObject *obj)
+{
+	if (PyArray_Check(obj))
+		return PyArray_NDIM((PyArrayObject *)obj) > 0;
+	if (PyList_Check(obj) || PyTuple_Check(obj))
+		return 1;
+	return 0;
+}
+
+// Extract a single ipix value from a Python object.
+// Returns 0 on success, -1 with an exception set otherwise. PyNumber_Index
+// accepts Python and NumPy integers (and 0-d integer arrays) but rejects
+// floats, so a fractional pixel number fails loudly rather than truncating.
+static int
+ipix_from_object(PyObject *obj, q3c_ipix_t *ipix)
+{
+	PyObject *index = PyNumber_Index(obj);
+	if (index == NULL)
+		return -1;
+	long long value = PyLong_AsLongLong(index);
+	Py_DECREF(index);
+	if (value == -1 && PyErr_Occurred())
+		return -1;
+	*ipix = (q3c_ipix_t)value;
+	return 0;
+}
+
+// Convert an array-like object to a C-contiguous, aligned int64 array of ipix
+// values, validating every element against the scheme. Returns a new reference
+// on success, NULL with an exception set otherwise.
+//
+// PyArray_FROM_OTF is used rather than the raw buffer handling in ang2ipix
+// above: it deals with strides, non-contiguous input, and integer types other
+// than int64 in one call, and it refuses (rather than truncates) a float input
+// because NPY_ARRAY_FORCECAST is deliberately not requested.
+static PyArrayObject *
+ipix_array_from_object(struct q3c_prm *hprm, PyObject *obj)
+{
+	PyArrayObject *array = (PyArrayObject *)PyArray_FROM_OTF(obj, NPY_INT64, NPY_ARRAY_IN_ARRAY);
+	if (array == NULL)
+		return NULL;
+
+	q3c_ipix_t *data = (q3c_ipix_t *)PyArray_DATA(array);
+	npy_intp n = PyArray_SIZE(array);
+	for (npy_intp i = 0; i < n; i++) {
+		if (ipix_bounds_check(hprm, data[i]) != 0) {
+			Py_DECREF(array);
+			return NULL;
+		}
+	}
+	return array;
+}
+
 static PyObject *
 qlsc_q3c_ipix2ang(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast as PyCFunctionWithKeywords
 {
 	// external parameters
-	q3c_ipix_t ipix; // int64_t
-	struct q3c_prm *hprm;
-	
-	// internal variables
-	q3c_coord_t ra; // double
-	q3c_coord_t dec;
 	PyObject *hprm_capsule;
+	PyObject *ipix_obj;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	q3c_ipix_t ipix; // int64_t
+	q3c_coord_t ra;  // double
+	q3c_coord_t dec;
 
 	static char *kwlist[] = {"hprm", "ipix", NULL};
 
+	// We accept one of two parameter signatures:
+	//  ipix2ang ( <object>, <int> )        -> (ra,dec) as floats
+	//  ipix2ang ( <object>, <array-like> ) -> (ra,dec) as two arrays
+
     if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-    								 "OL",			// object + longlong
+    								 "OO",			// object + object
     								 kwlist,
-    								 &hprm_capsule, &ipix))
+    								 &hprm_capsule, &ipix_obj))
 	{
 		// unable to parse inputs -> raise exception
         return NULL;
 	}
-		
+
 	//PyObject *hprm_attr_name = PyUnicode_FromString("_hprm");
 	//PySys_WriteStdout("has attr: %d\n", PyObject_HasAttr(self, hprm_attr_name));
 
@@ -439,11 +524,52 @@ qlsc_q3c_ipix2ang(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
+	if (is_ipix_array_input(ipix_obj)) {
+		// ARRAY VERSION
+
+		PyArrayObject *ipix_array = ipix_array_from_object(hprm, ipix_obj);
+		if (ipix_array == NULL)
+			return NULL;
+
+		// the outputs mirror the shape of the input; NumPy owns this memory
+		PyObject *np_ra = PyArray_SimpleNew(PyArray_NDIM(ipix_array), PyArray_DIMS(ipix_array), NPY_DOUBLE);
+		if (np_ra == NULL) {
+			Py_DECREF(ipix_array);
+			return NULL;
+		}
+		PyObject *np_dec = PyArray_SimpleNew(PyArray_NDIM(ipix_array), PyArray_DIMS(ipix_array), NPY_DOUBLE);
+		if (np_dec == NULL) {
+			Py_DECREF(ipix_array);
+			Py_DECREF(np_ra);
+			return NULL;
+		}
+
+		q3c_ipix_t *ipix_data = (q3c_ipix_t *)PyArray_DATA(ipix_array);
+		q3c_coord_t *ra_data  = (q3c_coord_t *)PyArray_DATA((PyArrayObject *)np_ra);
+		q3c_coord_t *dec_data = (q3c_coord_t *)PyArray_DATA((PyArrayObject *)np_dec);
+		npy_intp n = PyArray_SIZE(ipix_array);
+
+		for (npy_intp i = 0; i < n; i++)
+			q3c_ipix2ang(hprm, ipix_data[i], &ra_data[i], &dec_data[i]);
+
+		Py_DECREF(ipix_array);
+
+		// "N" steals the references; "O" would leak one per call
+		return Py_BuildValue("NN", np_ra, np_dec);
+	}
+
+	// SCALAR VERSION
+
+	if (ipix_from_object(ipix_obj, &ipix) != 0)
+		return NULL;
+	if (ipix_bounds_check(hprm, ipix) != 0)
+		return NULL;
+
 	q3c_ipix2ang(hprm, ipix, &ra, &dec);
-	
+
 	// debug
 	//PySys_WriteStdout("ipix=%lld, ra,dec=(%.4f, %.4f)\n", ipix, ra, dec);
-	
+
 	return Py_BuildValue("dd", ra, dec);
 }
 
@@ -489,29 +615,34 @@ static PyObject *
 qlsc_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 {
 	// external parameters
-	q3c_ipix_t ipix;
 	PyObject *hprm_capsule;
-	
+	PyObject *ipix_obj;
+
 	// internal variables
 	struct q3c_prm *hprm;
+	q3c_ipix_t ipix;
 //	const q3c_ipix_t ii1 = 1 << (Q3C_INTERLEAVED_NBITS / 2);
 //	q3c_ipix_t nside;
 //	q3c_ipix_t ipix1;
 //	q3c_ipix_t *xbits1;
 //	q3c_ipix_t *ybits1;
 //	q3c_ipix_t i2, i3, x0, y0;
-	
+
 	// return values
 	//char face_num;
 	int face_num;
 	q3c_coord_t x, y;
 
 	static char *kwlist[] = {"hprm", "ipix", NULL};
-	
+
+	// We accept one of two parameter signatures:
+	//  ipix2xy ( <object>, <int> )        -> (facenum,x,y) as scalars
+	//  ipix2xy ( <object>, <array-like> ) -> (facenum,x,y) as three arrays
+
     if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-    								 "OL",						// object + longlong
+    								 "OO",						// object + object
     								 kwlist,					//
-    								 &hprm_capsule, &ipix))
+    								 &hprm_capsule, &ipix_obj))
 	{
 		// unable to parse inputs -> raise exception
         return NULL;
@@ -520,6 +651,57 @@ qlsc_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
 	if (hprm == NULL)
 		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
+	if (is_ipix_array_input(ipix_obj)) {
+		// ARRAY VERSION
+
+		PyArrayObject *ipix_array = ipix_array_from_object(hprm, ipix_obj);
+		if (ipix_array == NULL)
+			return NULL;
+
+		int ndim = PyArray_NDIM(ipix_array);
+		npy_intp *dims = PyArray_DIMS(ipix_array);
+
+		// the outputs mirror the shape of the input; NumPy owns this memory
+		PyObject *np_facenum = PyArray_SimpleNew(ndim, dims, NPY_INT64);
+		PyObject *np_x = NULL;
+		PyObject *np_y = NULL;
+		if (np_facenum != NULL)
+			np_x = PyArray_SimpleNew(ndim, dims, NPY_DOUBLE);
+		if (np_x != NULL)
+			np_y = PyArray_SimpleNew(ndim, dims, NPY_DOUBLE);
+		if (np_y == NULL) {
+			Py_DECREF(ipix_array);
+			Py_XDECREF(np_facenum);
+			Py_XDECREF(np_x);
+			return NULL;
+		}
+
+		q3c_ipix_t *ipix_data    = (q3c_ipix_t *)PyArray_DATA(ipix_array);
+		q3c_ipix_t *facenum_data = (q3c_ipix_t *)PyArray_DATA((PyArrayObject *)np_facenum);
+		q3c_coord_t *x_data      = (q3c_coord_t *)PyArray_DATA((PyArrayObject *)np_x);
+		q3c_coord_t *y_data      = (q3c_coord_t *)PyArray_DATA((PyArrayObject *)np_y);
+		npy_intp n = PyArray_SIZE(ipix_array);
+
+		for (npy_intp i = 0; i < n; i++) {
+			// integer arithmetic - see the note in the scalar branch below
+			facenum_data[i] = ipix_data[i] / (hprm->nside * hprm->nside);
+			ipix_to_xy(hprm, ipix_data[i], &x_data[i], &y_data[i]);
+		}
+
+		Py_DECREF(ipix_array);
+
+		// "N" steals the references; "O" would leak one per call
+		return Py_BuildValue("NNN", np_facenum, np_x, np_y);
+	}
+
+	// SCALAR VERSION
+
+	if (ipix_from_object(ipix_obj, &ipix) != 0)
+		return NULL;
+	if (ipix_bounds_check(hprm, ipix) != 0)
+		return NULL;
+
 	// integer arithmetic - going through doubles (e.g. pow()) rounds ipix values
 	// near face boundaries onto the wrong face at depths ≳26
 	face_num = (int)(ipix / (hprm->nside * hprm->nside));
@@ -528,9 +710,9 @@ qlsc_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 //	PySys_WriteStdout("ipix = %"PRId64"\n", ipix);
 //	PySys_WriteStdout("face_num = %d\n", face_num);
 //	PySys_WriteStdout("hprm->nside = %f\n", pow(hprm->nside,2));
-	
+
 	ipix_to_xy(hprm, ipix, &x, &y);
-	
+
 	return Py_BuildValue("ldd", face_num, x, y);
 }
 
@@ -995,8 +1177,8 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"version", (PyCFunction)qlsc_q3c_version, METH_NOARGS, "Return the version of the embedded Q3C code."},
 	{"ang2ipix", (PyCFunction)qlsc_q3c_ang2ipix, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value."},
 	{"ang2ipix_xy", (PyCFunction)qlsc_q3c_ang2ipix_xy, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value, also returning (x,y) and the face number in a dictionary."},
-	{"ipix2ang", (PyCFunction)qlsc_q3c_ipix2ang, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value to ra,dec tuple."},
-	{"ipix2xy", (PyCFunction)qlsc_q3c_ipix2xy, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value to the (x,y) coordinate on the square face with the face number as a tuple: (facenum,x,y)."},
+	{"ipix2ang", (PyCFunction)qlsc_q3c_ipix2ang, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value (or an array of them) to a ra,dec tuple (or a tuple of ra,dec arrays)."},
+	{"ipix2xy", (PyCFunction)qlsc_q3c_ipix2xy, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value (or an array of them) to the (x,y) coordinate on the square face with the face number as a tuple: (facenum,x,y); array input returns a tuple of three arrays."},
 	{"facenum", (PyCFunction)qlsc_q3c_facenum, METH_VARARGS|METH_KEYWORDS, "Return the cube face number for the given coordinates."},
 	{"pixarea", (PyCFunction)qlsc_q3c_pixarea, METH_VARARGS|METH_KEYWORDS, "Return the area of a given Q3C pixel for a given ipix and depth."},
 	{"distance", (PyCFunction)qlsc_q3c_dist, METH_VARARGS|METH_KEYWORDS, "Calculates angular distance between two points on a sphere."},

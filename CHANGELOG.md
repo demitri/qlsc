@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+* `QLSC.ipix2ang`, `QLSC.ipix2ang_center`, and `QLSC.ipix2xy` accept an array-like of
+  ipix values (NumPy array, list, or tuple) in addition to a single value, following
+  the same scalar/array convention as `ang2ipix`: a scalar (or 0-d array) returns
+  scalars, anything with a shape returns arrays of that shape. The loop runs in the
+  C extension. `ipix2polygon` remains scalar-only (see its docstring for why).
+
+### Fixed
+
+* `QLSC.ipix2ang` rejected NumPy integers (`isinstance(ipix, int)` is `False` for
+  `np.int64`), so the ipix values returned by `ang2ipix` for array input could not be
+  fed back to it. Integer values of any width are now accepted; floats and other
+  non-integer types still raise `ValueError` rather than being truncated.
+* `QLSC.ipix2xy` did not bounds check its ipix value and silently returned the
+  coordinates of no pixel at all for out-of-range input; it now raises `ValueError`,
+  as `ipix2ang` already did. The check is also enforced in the C extension.
+
 ## 1.1.0 (unreleased)
 
 ### Breaking changes
