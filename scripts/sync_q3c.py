@@ -59,7 +59,6 @@ is still human work to do; it prints the checklist.
 '''
 
 import argparse
-import dataclasses
 import difflib
 import enum
 import pathlib
@@ -111,10 +110,13 @@ class PatchState(enum.Enum):
 	ALREADY_UPSTREAM = "already upstream"  # upstream now carries the fix; drop the patch
 
 
-@dataclasses.dataclass(frozen=True)
 class Patch:
 	'''
 	One local divergence from upstream, expressed as an exact-match text substitution.
+
+	Written out rather than declared with :mod:`dataclasses`, which arrived in Python
+	3.7 while the package declares ``python_requires='>=3.6'``; the tests import this
+	script, so a dataclass here would fail the suite on a supported interpreter.
 
 	:param name: short identifier used in this script's output
 	:param filename: the vendored file the patch applies to
@@ -124,13 +126,19 @@ class Patch:
 	:param issue: the upstream issue this patch works around
 	:param guard_test: the test in source/tests/test_source_invariants.py that guards it
 	'''
-	name: str
-	filename: str
-	upstream_text: str
-	patched_text: str
-	occurrences: int
-	issue: str
-	guard_test: str
+	__slots__ = ("name", "filename", "upstream_text", "patched_text", "occurrences", "issue", "guard_test")
+
+	def __init__(self, name, filename, upstream_text, patched_text, occurrences, issue, guard_test):
+		self.name = name
+		self.filename = filename
+		self.upstream_text = upstream_text
+		self.patched_text = patched_text
+		self.occurrences = occurrences
+		self.issue = issue
+		self.guard_test = guard_test
+
+	def __repr__(self):
+		return "Patch(name={!r}, filename={!r}, occurrences={!r})".format(self.name, self.filename, self.occurrences)
 
 
 # ------------------------------------------------------------------
