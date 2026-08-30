@@ -32,6 +32,18 @@
   for the 24 pixels on a corner of the cube, where three faces meet and there is no
   eighth pixel across the vertex; four at `depth=0`, where a face is a single pixel.
 
+### Development
+
+* `scripts/sync_q3c.py` mechanizes the vendored-Q3C upstream sync documented in
+  `CLAUDE.md`: it fetches a q3c tag, checks that the vendored files are the previous
+  release plus exactly the two documented local patches, decides for each patch
+  whether the new release already contains the fix, re-applies the ones still needed
+  by exact match (never fuzzed — an anchor that no longer matches stops the run),
+  diffs every `common.h` declaration, struct and macro the C wrapper depends on,
+  updates the `Q3C_VERSION` string, and runs the guard tests and the full suite.
+  `--dry-run` reports without writing. This is a repository tool; it is not part of
+  the installed package.
+
 ### Breaking changes
 
 * An empty `QLSCIndex` is now falsy. `QLSCIndex` defines `__len__`, so
