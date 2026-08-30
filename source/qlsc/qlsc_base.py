@@ -218,7 +218,11 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 #: monotonic, so a 150 degree "ellipse" is smaller than a 60 degree one. Verified against
 #: the C source and numerically (the boundary matches the tangent-plane conic to 3e-10
 #: degrees across 1120 configurations); see test_ellipse_geometry.py.
-ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS = 90.0
+#:
+#: Read from the C extension rather than repeated here: the same limit is enforced on
+#: both exported ellipse functions in ``qlsc_c_module.c``, and two copies of a number
+#: are two chances to disagree.
+ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS = q3c.ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS
 
 def _validate_ellipse(semi_major_axis:float, axis_ratio:float):
 	'''
@@ -377,10 +381,32 @@ class QLSC:
 		'''
 		Convert an ra,dec position to an ipix number; also returns the face number, and (x,y) location on the square face.
 
+		.. warning::
+
+			**The x,y values returned here are on a different scale from every other
+			(x,y) in this package.** They span [-0.5,0.5] across a cube face, where
+			:py:func:`ipix2xy`, :py:func:`xy2ang` and :py:func:`xy2ipix` all use
+			[-1,1] — exactly a factor of two. Passing these values straight to
+			:py:func:`xy2ang` returns the wrong coordinate, silently, and no error is
+			raised because both scales are inside the accepted range. Double them
+			first::
+
+				position = qlsc.ang2ipix_xy(ra=10., dec=20.)
+				ra, dec = qlsc.xy2ang(facenum=position["facenum"],
+									  x=2 * position["x"], y=2 * position["y"])
+
+			This is Q3C's own internal convention surfacing through the wrapper. It is
+			kept as it is because changing the returned values would break existing
+			code without any error to warn them; it is queued for a 2.0 release
+			(see ``AI/FEATURE_IDEAS.md``) and pinned by ``test_face_xy_scale.py``.
+
+		Note also that ``x,y`` here locate the point itself, whereas
+		:py:func:`ipix2xy` returns the lower left corner of the pixel containing it.
+
 		:param ra: right ascension angle (degrees)
 		:param dec: declination angle (degrees), must be in [-90,90]
 		:param points: an array of ra,dec coordinates (shape: (n,2)) NOT YET SUPPORTED
-		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]
+		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]; note that `x` and `y` are on [-0.5,0.5], NOT the [-1,1] used elsewhere
 		'''
 
 		ra = _as_float_scalar(ra, "ra")
@@ -491,7 +517,9 @@ class QLSC:
 		Convert an ipix value to the (x,y) position on the corresponding square face; returns (facenum,x,y).
 
 		The (x,y) returned is the "lower left" corner of the pixel on the face,
-		where the face coordinates run from -1 to +1 in both axes.
+		where the face coordinates run from -1 to +1 in both axes. (:py:func:`ang2ipix_xy`
+		is the exception in this package: it returns the point itself, on [-0.5,0.5].
+		See the warning there.)
 
 		This method accepts a single ipix value or an array-like of them (a NumPy array,
 		list, or tuple of integers). A scalar returns ``(facenum, x, y)`` as an int and two
@@ -507,9 +535,14 @@ class QLSC:
 		'''
 		Convert an x,y coordinate pair on the given face number to (ra,dec).
 
+		The face coordinates run [-1,1] from edge to edge, as they do in
+		:py:func:`ipix2xy` and :py:func:`xy2ipix`. Values coming from
+		:py:func:`ang2ipix_xy` are on [-0.5,0.5] and must be doubled first; see the
+		warning there.
+
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
-		:param x: x coordinate on cube face
-		:param y: y coordinate on cube face
+		:param x: x coordinate on cube face, in [-1,1]
+		:param y: y coordinate on cube face, in [-1,1]
 		:param points: an array containing (x,y) coordinate pairs; shape = (n,2)
 		:returns: tuple of (ra,dec) corresponding to the location on the cube face
 		'''
@@ -553,9 +586,13 @@ class QLSC:
 		'''
 		Convert an x,y coordinate pair on the given face number to the ipix value.
 
+		The face coordinates run [-1,1] from edge to edge; values from
+		:py:func:`ang2ipix_xy` are on [-0.5,0.5] and must be doubled first, as its
+		warning explains.
+
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
-		:param x: x coordinate on cube face
-		:param y: y coordinate on cube face
+		:param x: x coordinate on cube face, in [-1,1]
+		:param y: y coordinate on cube face, in [-1,1]
 		'''
 		ra,dec = self.xy2ang(x=x, y=y, facenum=facenum)
 		return self.ang2ipix(ra, dec)
@@ -685,10 +722,23 @@ class QLSC:
 	def ipix2face(self, ipix:int) -> int:
 		'''
 		Return the face number the given ipix value falls on.
+
+		The ipix values of a face are contiguous, so the face is the integer quotient of
+		the ipix value and the number of pixels per face. The arithmetic is done in
+		integers: at depths above about 26 the operands exceed the 53 bits a double can
+		hold exactly, and going through floating point rounded the last pixel of every
+		face onto the next one - at depth 30 the very last pixel of the scheme was
+		reported as being on face 6, which is not a face at all. (The same trap was
+		fixed in the C extension's ipix2xy; see the note there.)
+
+		:param ipix: the pixel identifier number
+		:returns: the cube face number, an integer in [0,5]
 		'''
-		if not (0 <= ipix < self.nbins):
-			raise ValueError(f"ipix value out of range for this depth; should be in [0,{self.nbins}).")
-		return ipix // math.pow(self.nside, 2)
+		# _validated_ipix rejects non-integers and out-of-range values, and returns a
+		# Python int for a single value; int() then refuses an array rather than
+		# quietly returning one from a method documented to take one pixel.
+		ipix = int(self._validated_ipix(ipix))
+		return ipix // (self.nside * self.nside)
 
 	@property
 	def nside(self) -> int:
@@ -704,9 +754,9 @@ class QLSC:
 		'''
 		return int(pow(self.nside,2)) * 6
 
-	def face_number(self, ra:float, dec:float, ipix:int=None) -> int:
+	def face_number(self, ra:float=None, dec:float=None, ipix:int=None) -> int:
 		'''
-		Return the cube face number for the provided coordinate.
+		Return the cube face number for the provided coordinate, or for a pixel.
 
 		Cube faces are numbered as the following:
 
@@ -721,33 +771,40 @@ class QLSC:
 		:py:func:`ang2ipix` accepts it: ``face_number(-350, 20)`` and
 		``face_number(370, 20)`` both answer for ra=10.
 
+		Give it either a coordinate or an ``ipix`` value, not both. For a pixel the
+		answer is :py:func:`ipix2face`, which reads the face straight out of the pixel
+		number; it does not depend on this object's depth in the coordinate form.
+
 		:param ra: right ascension in degrees; any value, reduced to [0,360) internally
 		:param dec: declination in degrees; must be in [-90,90]
-		:param ipix: the pixel identifier number
-		:returns: the cube face number
+		:param ipix: the pixel identifier number, as an alternative to ra,dec
+		:returns: the cube face number, an integer in [0,5]
 		'''
-		# be careful with all() and any() as 0 is a legitimate value
+		# Every test below is against None, never truthiness: ipix=0 and dec=0 are both
+		# perfectly good values. Writing "if ipix:" made face_number(ipix=0) fall through
+		# to the coordinate branch and fail there complaining about a missing ra.
 
-		if ipix and True in [x is not None for x in [ra,dec]]:
-			raise ValueError("Only specify 'ra','dec' OR 'ipix', not all three.")
-		if (ra is not None or dec is not None) and (not all([x is not None for x in [ra,dec]])):
-			raise ValueError(f"Both parameters 'ra' and 'dec' are required when one is provided (ra={ra}, dec={dec}).")
-		if ipix:
-			if not (0 <= ipix < self.nbins):
-				raise ValueError(f"The ipix number provided ('{ipix}') is outside the range [0,{self.nbins-1}].")
-		else:
-			# ra,dec provided
-			ra = _as_float_scalar(ra, "ra")
-			dec = _as_float_scalar(dec, "dec")
-			if not -90 <= dec <= 90:
-				raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
-			# ra needs no range check: it is periodic, and the C wrapper reduces it
-			# to [0,360) before handing it to q3c_get_facenum, which requires that
-			# range and does not enforce it. Rejecting ra outside [-360,360] used to
-			# hide the fact that everything in [-360,0) was answered wrongly.
+		if ipix is not None and (ra is not None or dec is not None):
+			raise ValueError("Specify either 'ra' and 'dec' or 'ipix', not both.")
 
-		if ipix:
-			ra,dec = self.ipix2ang(ipix)
+		if ipix is not None:
+			# the face is an exact property of the pixel number; no need to go through
+			# a coordinate, which for a pixel on a face boundary is a round trip that
+			# only floating point can spoil
+			return self.ipix2face(ipix)
+
+		if ra is None or dec is None:
+			raise ValueError(f"Both 'ra' and 'dec' are required (ra={ra}, dec={dec}); "
+							 f"alternatively pass 'ipix' on its own.")
+
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
+		if not -90 <= dec <= 90:
+			raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
+		# ra needs no range check: it is periodic, and the C wrapper reduces it
+		# to [0,360) before handing it to q3c_get_facenum, which requires that
+		# range and does not enforce it. Rejecting ra outside [-360,360] used to
+		# hide the fact that everything in [-360,0) was answered wrongly.
 
 		return q3c.facenum(self._hprm, ra, dec)
 
@@ -779,31 +836,47 @@ class QLSC:
 		# 	else:
 		# 		return 5
 
-	def ipix_area(self, ipix:int, depth:int) -> float:
+	def ipix_area(self, ipix:int, depth:int=None) -> float:
 		'''
-		Return the area of a given QLSC pixel in steradians for a given ipix.
+		Return the area of a given QLSC pixel, in steradians.
 
-		NOTE: currently this method returns the average bin size and ignores the ipix and depth values!
+		This is the area of the pixel actually asked for, not an average. QLSC pixels
+		are **not** equal area: the largest, at the centre of a cube face, is
+		3·√3 ≈ 5.196 times the smallest, at a cube vertex. Relative to the mean
+		(4π / number of pixels) the range is about 1.91x down to 0.37x, and the spread
+		is already a factor of 2.5 at ``depth=2``. Where an approximate answer will do,
+		the mean is ``4 * math.pi / qlsc.nbins``; this method is for when it will not.
 
-		Not all pixels are guaranteed to be the same size, but they are very close,
-		i.e. the size of any one pixel is a good approximation to any other.
+		The areas of all the pixels of a scheme sum to 4π.
 
-		pixel area ≈ 4π / no. pixels on sphere
+		By default the pixel is measured at this object's own depth. Pass ``depth`` to
+		measure the ancestor pixel containing ``ipix`` at a coarser depth instead:
+		``depth=0`` is the whole cube face, and ``depth`` equal to this object's depth
+		(the default) is the pixel itself. A finer depth is refused - this scheme does
+		not resolve it, and the underlying Q3C function would answer with a silently
+		meaningless number rather than complain.
 
 		:param ipix: the pixel identifier number
+		:param depth: the depth at which to measure, in [0, this object's depth]; the default is this object's depth
 		:returns: the area of the specified pixel in steradians
 		'''
+		ipix = int(self._validated_ipix(ipix))
 
-		return 4. * math.pi / self.nbins
+		if depth is None:
+			depth = self.depth
+		if isinstance(depth, bool) or not isinstance(depth, (int, np.integer)):
+			raise ValueError(f"The value for 'depth' must be an integer; was given '{depth}'.")
+		if not (0 <= depth <= self.depth):
+			raise ValueError(f"The value for 'depth' must be in the range [0,{self.depth}] for this scheme; "
+							 f"was given '{depth}'. A depth finer than the scheme's own is not resolved by it.")
 
-		#if not (0 <= depth <= 30):
-		#	raise ValueError(f"The depth provided {depth} is out of the range 0-30")
-
-		# The paramter call for the underlying C function is q3c_pixarea(hprm, ipix, depth).
-		# It's not clear why "depth" is a parameter since it should be read from hprm.
-		# I left the parameter exposed in the Python wrapper, but in this method will just pass depth.
-
-		#return q3c.pixarea(self._hprm, ipix, depth)
+		# q3c_pixarea's third argument is not a depth: it is the number of levels to go
+		# UP from the scheme's own resolution, applied as (x0 >> n) << n to the pixel's
+		# face coordinates. So the scheme's own depth is offset 0, and depth 0 - a whole
+		# face - is offset self.depth. Past self.depth the shift walks the coordinates
+		# out of the face entirely and q3c returns an area larger than a face without a
+		# word of complaint, which is why the range check above is not optional.
+		return q3c.pixarea(self._hprm, ipix, self.depth - depth)
 
 	def ang2ipix_at_depth(self, ra:float, dec:float, depth:int) -> int:
 		'''
@@ -1952,13 +2025,21 @@ class QLSCIndex:
 		'''
 		query_hprm = self._query_scheme()._hprm
 
+		# An ellipse is not grown all the way to 180 degrees the way a cone is: the C
+		# wrapper refuses an elliptical region of ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS or more
+		# (the tangent plane it is defined in reaches no further), and there is nothing to
+		# gain by trying - from Q3C_MAXRAD upwards q3c stops doing geometry and returns
+		# the whole sphere, so no larger search can widen the coverage. The ceiling is
+		# raised to the requested size if that is already the larger of the two, so
+		# widening can never shrink the search below what was asked for.
 		return self._widened_candidate_ranges(
 			lambda size: q3c.ellipse_query(query_hprm, ra, dec, size, axis_ratio, position_angle),
 			semi_major_axis,
 			f"ellipse query at (ra={ra}, dec={dec}) with semi_major_axis={semi_major_axis} deg, "
-			f"axis_ratio={axis_ratio}, position_angle={position_angle} deg")
+			f"axis_ratio={axis_ratio}, position_angle={position_angle} deg",
+			maximum=min(q3c.Q3C_MAXRAD, ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS))
 
-	def _widened_candidate_ranges(self, region_query, size:float, description:str):
+	def _widened_candidate_ranges(self, region_query, size:float, description:str, maximum:float=180.0):
 		'''
 		Run a candidate range search, growing the region until it produces usable ranges.
 
@@ -1968,29 +2049,32 @@ class QLSCIndex:
 		queried as ra=0), so the search uses a size of at least 1e-6 degrees. At rare
 		positions a given size can also overflow q3c's internal range capacity; a larger
 		region produces fewer, coarser ranges, so the size is grown and the search retried
-		on either failure mode, raising only if even a whole-sphere search fails.
+		on either failure mode, raising only if even the largest search fails.
 
 		The region searched always contains the region asked for, so the ranges are a
-		superset and the caller's exact filter still gives the right answer.
+		superset and the caller's exact filter still gives the right answer. The ceiling
+		is never below the size actually requested, so widening cannot shrink the search.
 
 		:param region_query: a callable taking a size in degrees and returning the (fulls, partials) arrays
 		:param size: the requested size of the region in degrees (a radius or a semi-major axis)
 		:param description: the query, for the warning message
+		:param maximum: the largest size to grow the search to; growing past ``q3c.Q3C_MAXRAD`` cannot widen the coverage further, since q3c returns the whole sphere from there on
 		:returns: a tuple of the (fulls, partials) depth-30 ipix range arrays
 		'''
 		initial_search_size = max(size, 1e-6)
+		ceiling = max(initial_search_size, maximum)
 		search_size = initial_search_size
 		while True:
 			try:
 				fulls, partials = region_query(search_size)
 			except q3c.RangeOverflowError:
-				if search_size >= 180.0:
-					raise # even a whole-sphere search failed
-				search_size = min(search_size * 10, 180.0)
+				if search_size >= ceiling:
+					raise # even the widest permitted search failed
+				search_size = min(search_size * 10, ceiling)
 				continue
-			if len(fulls) + len(partials) > 0 or search_size >= 180.0:
+			if len(fulls) + len(partials) > 0 or search_size >= ceiling:
 				break
-			search_size = min(search_size * 10, 180.0)
+			search_size = min(search_size * 10, ceiling)
 
 		if search_size > initial_search_size:
 			logger.warning(f"The {description} required widening the candidate search region to {search_size} deg; results are correct, but the query may be slower than usual.")

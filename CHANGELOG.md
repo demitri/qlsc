@@ -146,6 +146,16 @@
 
 ### Breaking changes
 
+* `QLSC.ipix_area`'s `depth` parameter now means something, and is validated. It was
+  previously ignored along with `ipix`, so any value was accepted; it is now an
+  absolute depth in `[0, qlsc.depth]` naming the ancestor pixel to measure (`depth=0`
+  is a whole cube face), and it defaults to the scheme's own depth. A depth finer than
+  the scheme's raises `ValueError`: the underlying Q3C function takes a levels-up
+  offset rather than a depth, and past the scheme's own resolution it shifts the
+  pixel's coordinates out of the cube face and returns an area larger than a face
+  without complaint. Code passing a depth this scheme cannot resolve — for example
+  `QLSC(depth=5).ipix_area(ipix, 30)` — was already getting a meaningless answer and
+  must now pass a depth in range.
 * An empty `QLSCIndex` is now falsy. `QLSCIndex` defines `__len__`, so
   `if index:` asks whether the index holds any points, where it was previously
   always true. Use `if index is not None:` for the old meaning.
@@ -159,6 +169,56 @@
 
 ### Fixed
 
+* Documented a trap that has always been there: **`QLSC.ang2ipix_xy` returns face
+  coordinates on `[-0.5,0.5]`, while `ipix2xy`, `xy2ang` and `xy2ipix` use `[-1,1]`** —
+  exactly a factor of two. Feeding `ang2ipix_xy`'s `x,y` straight into `xy2ang` returns
+  the wrong coordinate and raises nothing, because a half-scale value is a perfectly
+  legal full-scale one; it just names a different point. `ang2ipix_xy` now carries a
+  warning with the doubling recipe, the other three point at it, and
+  `test_face_xy_scale.py` pins the factor. The values themselves are unchanged: making
+  the scales agree would break existing code with no error to warn it, so it is queued
+  for a 2.0 release alongside the `radial_query` return-shape cleanup.
+* `qlsc.sindist` (and `qlsc.q3c.sindist`) was documented as "the sine of the angular
+  distance between two points on a sphere". It returns the **haversine**, `sin²(d/2)`,
+  which is what Q3C computes and what every caller inside the package already assumed.
+  The difference matters: `sin(d)` peaks at 90 degrees and falls back to zero at 180,
+  so code that took the old description at face value and used the value as a distance
+  ordering was wrong for every separation past a quadrant. Only the documentation
+  changed; the returned values are unchanged. The docstring now also gives the
+  conversion back to degrees, and `distance` now states that its result is in degrees.
+* `QLSC.ipix_area` ignored both of its arguments and returned the mean pixel area,
+  `4π / nbins`, with a `NOTE` in its docstring saying so and claiming the pixels "are
+  very close" in size. They are not: the largest pixel of a cube face, at its centre,
+  is `3√3 ≈ 5.196` times the smallest, at a cube vertex, and the spread is already a
+  factor of 2.5 at `depth=2`. Against the mean the error runs from 1.91× too small to
+  2.72× too large. The method now returns the area of the pixel actually asked for,
+  from Q3C's own `q3c_pixarea`.
+* `QLSC.ipix2face` returned the wrong face for the last pixel of every face at depths
+  above about 26, and a `float` at every depth. It divided the ipix value by
+  `math.pow(nside,2)`, and past 2^53 a double cannot hold the operands exactly: at
+  depth 30 the very last pixel of the scheme was reported as being on **face 6**, which
+  does not exist. The division is now integer arithmetic, and the return value is an
+  `int` as the signature always said. Non-integer and out-of-range pixel numbers now
+  raise `ValueError` instead of being truncated or clamped onto some other face.
+* `QLSC.face_number(ipix=...)` raised `TypeError`. `ra` and `dec` were required
+  positional parameters, so the documented pixel-number form could not be called at
+  all; the only way in was the undocumented `face_number(None, None, ipix=n)`, and
+  even that failed for `ipix=0` because the branch was guarded by `if ipix:`, which is
+  false for the first pixel of face 0. `ra` and `dec` now default to `None`, every
+  test is against `None` rather than truthiness, and the pixel form answers from
+  `ipix2face` — exact integer arithmetic — rather than by converting the pixel to a
+  coordinate and back.
+* `qlsc.q3c.ellipse_query` accepted a semi-major axis of 90 degrees or more, where the
+  companion predicate `qlsc.q3c.in_ellipse` refused it. Q3C's ellipse is a conic in the
+  tangent plane at its center and means nothing past the near hemisphere, so a direct
+  caller of the C function got coarse ranges for a region that was not the one asked
+  for — safe today only because upstream returns the whole sphere for any region of
+  `Q3C_MAXRAD` (35) degrees or more. Both functions now enforce the same limit. The
+  `Python` layer was never affected: it validates first, and answers a circle of any
+  radius with a cone search. `qlsc.q3c` now also exports `Q3C_MAXRAD` and
+  `ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS`, and the whole-sphere fallback the safety argument
+  rests on is pinned by `test_q3c_maxrad_fallback.py` so an upstream sync cannot remove
+  it unnoticed.
 * `QLSC.ipix2polygon(ipix, duplicate_endpoint=True)` did nothing. The branch built
   the closed five-row polygon and the line after it stripped the extra row back off
   unconditionally, so both forms returned the same four rows and the parameter was
