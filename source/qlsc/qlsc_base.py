@@ -852,6 +852,28 @@ class QLSCIndex:
 	The underlying storage is an SQLite database, but this should be considered an implementation
 	detail and can change. (This may be documented for expanded use in the future.)
 
+	**Keys**
+
+	A point may be given a ``key``: a string label, optional, and not required to be
+	unique. The index is therefore a collection of points that happen to be labelled —
+	a multimap of keys to points — and not a dictionary of keys to single points.
+	The mapping-style operations follow from that, and this is their contract:
+
+	* ``len(index)`` counts **points**, whether they carry a key or not.
+	* ``key in index`` is True if at least one point carries that key.
+	* iterating the index, or :py:func:`keys`, yields one key **per point**: a key
+	  shared by three points is yielded three times, and points stored without a key
+	  are not represented at all. The number of keys yielded can therefore be either
+	  more or less than ``len(index)``.
+	* :py:func:`find_by_key` returns **every** point carrying a key, and
+	  :py:func:`remove_point` with a key removes every point carrying it.
+	* A point stored without a key can only be found by position (:py:func:`radial_query`
+	  and its siblings) and only be removed by coordinate.
+	* Keys must be strings. Anything else raises ``TypeError`` at every boundary,
+	  including :py:func:`add_point` and :py:func:`add_points`: the underlying column
+	  has SQLite's TEXT affinity, so a key of ``5`` would be stored as ``'5'`` and
+	  could then never be found with ``5``.
+
 	:param qlsc: an instance of :py:class:`QLSC` set to the desired segmentation level
 	:param filepath: the file path (string path, ``pathlib.Path``, or ``file://` URL) where a persistent index will be stored; the default is to create the index in memory
 	:param name: a user-provided name for the index
@@ -1129,13 +1151,16 @@ class QLSCIndex:
 
 		:param ra: a single right ascension value, in degrees
 		:param dec: a single declination value, in degrees
-		:param key: a unique identifier for the coordinate (optional)
+		:param key: a string identifier for the coordinate (optional, and not required to be unique)
 		'''
 
 		self._ensure_open()
 
 		if any([x is None for x in [ra,dec]]):
 			raise ValueError("Both 'ra' and 'dec' values must be specified.")
+
+		# validated on the way in as well as on the way out; see _validated_key
+		key = self._validated_key(key, allow_none=True, description="the 'key' argument")
 
 		# Coerce scalar-like values: without this, a NumPy array passed here would be
 		# stored by sqlite3 as a BLOB via the buffer protocol - silently losing the
@@ -1184,7 +1209,7 @@ class QLSCIndex:
 		:param ra: an Iterable (e.g. NumPy array) of right ascension points in degrees
 		:param dec: an Iterable of declination points in degrees
 		:param points: an Iterable of tuples of (ra,dec) pairs
-		:param key: an Iterable of unique identifiers for each point
+		:param keys: an Iterable of string identifiers, one per point; an entry of ``None`` means that point has no key
 		'''
 		self._ensure_open()
 
@@ -1212,6 +1237,10 @@ class QLSCIndex:
 				# coordinates and two keys stored two points and dropped the third.
 				if not (len(ra) == len(dec) == len(keys)):
 					raise ValueError(f"The number of ra,dec coordinates provided ({len(ra)},{len(dec)}) does not match the number of keys ({len(keys)}).")
+			# validated up front rather than inside the executemany generator: an
+			# exception raised mid-insert would leave the in-memory connection holding
+			# an open transaction
+			self._validate_keys(keys)
 
 #		if pandas_available:
 #			if isinstance(ra, pandas.core.series.Series):
@@ -1338,18 +1367,80 @@ class QLSCIndex:
 
 		return removed
 
-	def _validated_key(self, key) -> str:
+	def _validated_key(self, key, allow_none:bool=False, description:str="the key") -> str:
 		'''
-		Validate a key used to look up or remove points.
+		Validate a key on its way into, or into a lookup against, the index.
 
-		The ``key`` column has SQLite's TEXT affinity, so a non-string key would be
-		stored (and compared) as its text representation — a silent mismatch waiting
-		to happen. Require a string and say so instead.
+		The ``key`` column has SQLite's TEXT affinity, so a non-string key is stored
+		as its text representation: ``add_point(..., key=5)`` used to succeed while
+		``5 in index`` raised and ``'5' in index`` was the only way to find it back.
+		Requiring a string at every boundary is what keeps the value that goes in
+		equal to the value that comes out.
+
+		``None`` means "this point has no key" and is accepted where that is
+		meaningful (adding points), but not in a lookup, where there is no such key
+		to find.
+
+		:param key: the value to validate
+		:param allow_none: whether ``None`` (meaning "no key") is acceptable here
+		:param description: how to refer to the value in an error message
+		:returns: the key, unchanged
 		'''
+		if key is None and allow_none:
+			return None
 		if not isinstance(key, str):
 			raise TypeError(f"Index keys are strings (the underlying column has TEXT affinity); "
-							f"was given '{key!r}' of type '{type(key).__name__}'.")
+							f"{description} is '{key!r}' of type '{type(key).__name__}'.")
 		return key
+
+	def _validate_keys(self, keys:Iterable):
+		'''
+		Validate every key in an iterable on its way into the index.
+
+		A ``None`` entry means that particular point has no key.
+
+		:param keys: an iterable of keys, one per point
+		'''
+		if isinstance(keys, np.ndarray) and keys.dtype.kind == "U":
+			return # a unicode array cannot hold a non-string element
+		for position, key in enumerate(keys):
+			self._validated_key(key, allow_none=True, description=f"keys[{position}]")
+
+	def find_by_key(self, key:str) -> np.recarray:
+		'''
+		Return the coordinates of every point in this index carrying the given key.
+
+		Keys are not required to be unique, so this returns every match, not one.
+		The result is always a :class:`numpy.recarray` with the fields "ra" and "dec",
+		even for a single match — unlike the default return of :py:func:`radial_query`,
+		which squeezes.
+
+		A key that is not in the index raises ``KeyError``, as :py:func:`remove_point`
+		does; use ``key in index`` for a check that does not raise.
+
+		:param key: the key of the point(s) to return
+		:returns: a :class:`numpy.recarray` with the fields ``ra,dec``
+		'''
+		self._ensure_open()
+		key = self._validated_key(key)
+
+		match_ra = list()
+		match_dec = list()
+
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				for row in cursor.execute(f"SELECT ra,dec FROM {self.database_tablename} WHERE key=?", (key,)):
+					match_ra.append(row["ra"])
+					match_dec.append(row["dec"])
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+		if len(match_ra) == 0:
+			raise KeyError(f"No point with the key '{key}' was found in this index.")
+
+		return np.rec.fromarrays([match_ra, match_dec], names="ra,dec")
 
 	def keys(self) -> Iterable[str]:
 		'''

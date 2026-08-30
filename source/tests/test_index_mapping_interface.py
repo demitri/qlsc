@@ -76,6 +76,111 @@ def test_contains_rejects_non_strings(index):
 			bad in index
 
 
+def test_keys_must_be_strings_going_in(index):
+	'''
+	Test that a non-string key is refused by add_point and add_points, not just by
+	the lookup side.
+
+	Regression test: the key column has SQLite TEXT affinity, so add_point(key=5)
+	stored the string '5'. The point was then unreachable by its own key - `5 in
+	index` raised TypeError and only `'5' in index` found it. Validation now happens
+	at both ends, so what goes in is what comes back out.
+	'''
+	for bad in (5, 3.4, b"a", ["a"], object()):
+		with pytest.raises(TypeError):
+			index.add_point(50., 50., key=bad)
+		with pytest.raises(TypeError):
+			index.add_points(ra=np.array([50., 51.]), dec=np.array([50., 51.]), keys=[bad, "ok"])
+		with pytest.raises(TypeError):
+			index.add_points(points=np.array([[50., 50.], [51., 51.]]), keys=["ok", bad])
+
+	assert len(index) == 5, "a rejected call must not have stored anything"
+
+
+def test_key_error_message_names_the_position(index):
+	'''
+	Test that a bad key in a list is reported by position, not just by value.
+	'''
+	with pytest.raises(TypeError, match=r"keys\[2\]"):
+		index.add_points(ra=np.array([1., 2., 3.]), dec=np.array([1., 2., 3.]), keys=["a", "b", 7])
+
+
+def test_keyless_entries_in_a_key_list(index):
+	'''
+	Test that None is allowed inside a key list, meaning "this point has no key" -
+	the same meaning it has as add_point's default.
+	'''
+	index.add_points(ra=np.array([50., 51.]), dec=np.array([50., 51.]), keys=["kept", None])
+
+	assert len(index) == 7
+	assert "kept" in index
+	assert sorted(index.keys()) == ["a", "b", "b", "c", "kept"]
+
+
+def test_numpy_string_keys(index):
+	'''
+	Test that NumPy unicode arrays work as keys: np.str_ is a str subclass, and a
+	unicode array is the form a catalog column arrives in.
+	'''
+	index.add_points(ra=np.array([50., 51.]), dec=np.array([50., 51.]),
+					 keys=np.array(["np-a", "np-b"]))
+
+	assert "np-a" in index
+	assert index.find_by_key("np-b")["ra"][0] == 51.
+
+
+def test_find_by_key(index):
+	'''
+	Test retrieving points by key: every point carrying the key comes back.
+	'''
+	found = index.find_by_key("b")
+	assert found.dtype.names == ("ra", "dec")
+	assert len(found) == 2
+	assert sorted(found["ra"].tolist()) == [11., 12.]
+
+	single = index.find_by_key("a")
+	assert len(single) == 1, "a single match must still be an array, not a squeezed row"
+	assert single["ra"][0] == 10.
+	assert single["dec"][0] == 30.
+
+
+def test_find_by_key_missing_raises(index):
+	'''
+	Test that looking up an absent key raises KeyError, as removing one does.
+	'''
+	with pytest.raises(KeyError):
+		index.find_by_key("not-a-key")
+	with pytest.raises(TypeError):
+		index.find_by_key(5)
+	with pytest.raises(TypeError):
+		index.find_by_key(None)
+
+
+def test_find_by_key_tracks_removal(index):
+	'''
+	Test that find_by_key reflects removals, and raises once the last point
+	carrying a key is gone.
+	'''
+	assert len(index.find_by_key("b")) == 2
+
+	index.remove_point(ra=11., dec=30.)
+	assert len(index.find_by_key("b")) == 1
+
+	index.remove_point(key="b")
+	with pytest.raises(KeyError):
+		index.find_by_key("b")
+
+
+def test_find_by_key_on_a_closed_index():
+	'''
+	Test that find_by_key refuses to work on a closed index.
+	'''
+	index = _populate(QLSCIndex(qlsc=QLSC(depth=30)))
+	index.close()
+	with pytest.raises(RuntimeError):
+		index.find_by_key("a")
+
+
 def test_keys(index):
 	'''
 	Test iterating the keys.

@@ -31,6 +31,15 @@
   without a key are not represented in `keys()` at all (they can only be removed
   by coordinate). A non-string key raises `TypeError` rather than silently missing:
   the underlying column has SQLite's TEXT affinity.
+* `QLSCIndex.find_by_key(key)` returns the coordinates of every point carrying a
+  key, as a `numpy.recarray` with the fields `ra,dec` (always an array, even for a
+  single match). An absent key raises `KeyError`, as `remove_point` does; use
+  `key in index` for a check that does not raise.
+* The `QLSCIndex` class docstring now states the contract of the mapping-style
+  operations: the index is a collection of labelled points — a multimap — rather
+  than a dictionary, so `len()` counts points, iteration yields one key per point
+  (repeating a shared key, omitting keyless points), and lookup and removal by key
+  act on every point carrying it.
 * `QLSCIndex.polygon_query(polygon)` and
   `QLSCIndex.ellipse_query(ra, dec, semi_major_axis, axis_ratio, position_angle)`
   join `radial_query` as region searches over the index. Both take the coarse ipix
@@ -77,6 +86,13 @@
 * An empty `QLSCIndex` is now falsy. `QLSCIndex` defines `__len__`, so
   `if index:` asks whether the index holds any points, where it was previously
   always true. Use `if index is not None:` for the old meaning.
+* `QLSCIndex.add_point` and `QLSCIndex.add_points` require keys to be strings
+  (or `None`, meaning "no key"), where any object was previously accepted and
+  stored as its text representation. `add_point(..., key=5)` stored the string
+  `'5'`, after which `5 in index` raised and only `'5' in index` found the point —
+  the key that went in was not the key that came back out. Code passing integer
+  or other non-string keys must convert them: `key=str(catalog_id)`. Existing
+  index files are unaffected; their keys were always stored as text.
 
 ### Fixed
 
