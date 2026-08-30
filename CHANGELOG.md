@@ -54,6 +54,22 @@
   neighborhood searches. Eight neighbors in the interior of a cube face; **seven**
   for the 24 pixels on a corner of the cube, where three faces meet and there is no
   eighth pixel across the vertex; four at `depth=0`, where a face is a single pixel.
+* `QLSC.coverage(ipix, values=None, ...)` and `QLSCIndex.coverage(depth=None, ...)`
+  export sky coverage as a "sky-coverage" version 1 document — the JSON interchange
+  format specified by the [astplot-js](https://github.com/demitri/astplot-js) project,
+  whose `CoverageLayer` renders it as a filled-polygon coverage map or choropleth in
+  any projection. Both return a plain Python dictionary; writing it out is one
+  `json.dumps` with the standard library encoder, no custom `default=` hook (NumPy
+  input does not leak `np.int64`/`np.float64` into the document). Each pixel becomes
+  one polygon carrying its four corners as `vertices`, its ipix number as `id`, and
+  optionally a scalar as `value`. The document declares degrees, the ICRS frame and
+  geodesic edges, and records the qlsc version, the scheme and the depth in `meta`;
+  no `equinox` is written, since ICRS has none and the format makes declaring one an
+  error. `QLSCIndex.coverage` counts the index's points per pixel with a single
+  `GROUP BY` over the ipix column — one query, no per-point work in Python — and
+  defaults to depth 5 (6,144 pixels for the whole sky), or the index's depth if that
+  is coarser. A depth finer than the index's raises `ValueError`. `examples/sky_coverage_density_map.py`
+  writes such a document from the WISE sample catalog.
 
 ### Development
 

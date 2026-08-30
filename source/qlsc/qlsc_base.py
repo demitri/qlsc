@@ -33,11 +33,19 @@ from . import q3c
 from .q3c import sindist
 
 from .utilities import _normalize_ang, _as_float_scalar
+from .sky_coverage import _coverage_value, _polygon_entry, _sky_coverage_document
 
 # really important for the ipix values!
 sqlite3.register_adapter(np.int64, int)
 
 logger = logging.getLogger("qlsc")
+
+# The depth QLSCIndex.coverage bins to when the caller does not choose one. A coverage
+# map is a picture, so the useful default is the coarsest depth that still shows
+# structure rather than the depth the index happens to be stored at: depth 5 is 6,144
+# pixels for the whole sky (about 2.8 degrees across each), which a renderer draws
+# comfortably as individual polygons. Depth 30, the index default, would be 6.9e18.
+DEFAULT_COVERAGE_DEPTH = 5
 
 def _canonical_position(ra:float, dec:float) -> Tuple[float, float]:
 	'''
@@ -796,6 +804,93 @@ class QLSC:
 		return q3c.in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
 							  semi_major_axis=semi_major_axis, axis_ratio=axis_ratio,
 							  position_angle=position_angle)
+
+	def coverage(self, ipix:Union[int,Iterable]=None, values:Union[float,Iterable]=None,
+				 value_name:str=None, value_units:str=None, value_domain:Iterable=None,
+				 meta:dict=None) -> dict:
+		'''
+		Describe a set of pixels as a "sky-coverage" version 1 document.
+
+		The document is the JSON interchange format for coverage maps on the sphere
+		specified by the `astplot-js <https://github.com/demitri/astplot-js>`_ project: a
+		set of polygons in degrees, each optionally carrying a scalar value, which a
+		consumer renders as a filled-polygon coverage map or choropleth in any projection.
+		This method returns it as a plain Python dictionary; writing it out is one call to
+		:py:func:`json.dumps`, using the standard library encoder alone.
+
+		.. code-block:: python
+
+			import json
+			q = QLSC(depth=6)
+			with open("coverage.json", "w") as f:
+				json.dump(q.coverage(ipix_array, values=counts, value_name="count"), f)
+
+		Each pixel becomes one entry of the document's ``polygons`` array: its four corners
+		(as :py:func:`ipix2polygon` returns them) as ``vertices``, its ipix number as ``id``,
+		and, when ``values`` is given, the corresponding scalar as ``value``. The document
+		declares degrees, the ICRS frame and geodesic edges, and records this qlsc version
+		and this scheme's depth in ``meta``.
+
+		A single ipix value produces a document with one polygon; an array-like of them
+		produces one polygon each, in the order given. The ipix numbers are not required to
+		be unique or sorted, and no pixel is dropped or merged.
+
+		:param ipix: an ipix number, or a one-dimensional array-like of ipix numbers
+		:param values: the scalar to attach to each pixel, matching the shape of ``ipix``; the default attaches none
+		:param value_name: what the values are (e.g. "count"), recorded for the consumer's legend
+		:param value_units: the units of the values, recorded for the consumer's legend
+		:param value_domain: a [min,max] pair pinning the consumer's colour scale, so several documents can share one scale
+		:param meta: additional producer metadata to record; the "producer", "scheme" and "depth" keys are written by qlsc and cannot be replaced
+		:returns: the sky-coverage document as a plain Python dictionary
+		'''
+		if ipix is None:
+			raise ValueError("An 'ipix' value must be specified.")
+
+		validated = self._validated_ipix(ipix)
+
+		if isinstance(validated, (int, np.integer)):
+			# scalar input: one pixel, and a scalar value if one was given at all
+			ipix_values = [int(validated)]
+			scalar_input = True
+		else:
+			if validated.ndim != 1:
+				raise ValueError(f"The 'ipix' values must be a single value or a one-dimensional array-like; "
+								 f"was given shape {validated.shape}. A document is a flat list of polygons, "
+								 f"so a higher-dimensional array would have to be flattened, discarding its shape.")
+			ipix_values = validated
+			scalar_input = False
+
+		if values is None:
+			if any([x is not None for x in [value_name, value_units, value_domain]]):
+				raise ValueError("A 'value_name', 'value_units' or 'value_domain' describes the per-pixel "
+								 "'values', which were not provided; there would be nothing for the "
+								 "description to refer to.")
+			polygon_values = None
+		else:
+			given = np.asarray(values)
+			if scalar_input:
+				if given.ndim != 0:
+					raise ValueError(f"A single 'ipix' value takes a single value; was given {given.shape[0]} values.")
+				polygon_values = [_coverage_value(given.item(), "value for the pixel")]
+			else:
+				if given.ndim != 1:
+					raise ValueError(f"The 'values' must be a one-dimensional array-like parallel to 'ipix'; "
+									 f"was given shape {given.shape}.")
+				if given.shape[0] != len(ipix_values):
+					raise ValueError(f"The number of values ({given.shape[0]}) does not match the number of "
+									 f"ipix values ({len(ipix_values)}).")
+				polygon_values = [_coverage_value(v, f"value for ipix {int(i)}")
+								  for i,v in zip(ipix_values, given)]
+
+		polygons = list()
+		for n,pixel in enumerate(ipix_values):
+			pixel = int(pixel)
+			vertices = np.asarray(self.ipix2polygon(pixel), dtype=np.double)
+			polygons.append(_polygon_entry(pixel, vertices,
+										   None if polygon_values is None else polygon_values[n]))
+
+		return _sky_coverage_document(polygons, self.depth, value_name=value_name,
+									  value_units=value_units, value_domain=value_domain, meta=meta)
 
 
 class QLSCIndex:
@@ -1822,4 +1917,75 @@ class QLSCIndex:
 						match_distance.append(_sindist2deg(sindist(row_ra, row_dec, center_ra, center_dec)))
 
 		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance)
+
+	def coverage(self, depth:int=None, value_domain:Iterable=None, meta:dict=None) -> dict:
+		'''
+		Describe the sky coverage of this index as a "sky-coverage" version 1 document.
+
+		The index's points are counted per pixel at the requested depth, and each pixel
+		holding at least one point becomes a polygon of the document carrying that count as
+		its value. The result is what :py:func:`QLSC.coverage` returns — a plain Python
+		dictionary ready for :py:func:`json.dumps` — with the value described as a "count"
+		of "points". Pixels holding no points are not in the document at all: an empty
+		coverage is empty, not a field of zeros.
+
+		.. code-block:: python
+
+			import json
+			with open("coverage.json", "w") as f:
+				json.dump(index.coverage(depth=6), f)
+
+		The counting is a single ``GROUP BY`` over the ipix column, using the fact that an
+		ipix number at a coarser depth is the index's own ipix number shifted right by two
+		bits per level. There is therefore one query and no per-point work in Python,
+		whatever the size of the index.
+
+		The depth must not be finer than the index's own: the index stores the pixel each
+		point falls in at its own depth, and a finer pixel cannot be recovered from a
+		coarser one. Asking for one raises ``ValueError`` rather than silently returning the
+		index's depth.
+
+		:param depth: the depth to count at; must be in [0, this index's depth]. The default is depth 5 (6,144 pixels for the whole sky), or the index's depth if that is coarser.
+		:param value_domain: a [min,max] count range pinning the consumer's colour scale, so several documents can share one scale
+		:param meta: additional producer metadata to record; the "producer", "scheme" and "depth" keys are written by qlsc and cannot be replaced
+		:returns: the sky-coverage document as a plain Python dictionary
+		'''
+		self._ensure_open()
+
+		if depth is None:
+			depth = min(DEFAULT_COVERAGE_DEPTH, self.qlsc.depth)
+
+		if isinstance(depth, bool) or not isinstance(depth, (int, np.integer)):
+			raise TypeError(f"The 'depth' must be an integer; was given '{depth!r}'.")
+		depth = int(depth)
+		if depth < 0:
+			raise ValueError(f"The value for 'depth' must be an integer on [0,30]; was given '{depth}'.")
+		if depth > self.qlsc.depth:
+			raise ValueError(f"The coverage depth ({depth}) is finer than this index's depth ({self.qlsc.depth}); "
+							 f"the index does not record where within its own pixels its points fall, so a finer "
+							 f"pixel cannot be recovered.")
+
+		# Two ipix bits per depth level: the pixel containing a point at a coarser depth is
+		# the index's ipix value shifted right. This is the same mapping the region queries
+		# use to bring depth-30 candidate ranges down to the index's depth.
+		shift = 2 * (self.qlsc.depth - depth)
+
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				# One GROUP BY does all of the counting inside SQLite; the rows that come
+				# back are one per occupied pixel, not one per point.
+				rows = cursor.execute(f"SELECT ipix >> ? AS coverage_ipix, COUNT(*) AS point_count "
+									  f"FROM {self.database_tablename} GROUP BY coverage_ipix",
+									  (shift,)).fetchall()
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+		coverage_qlsc = self.qlsc if self.qlsc.depth == depth else QLSC(depth=depth)
+
+		return coverage_qlsc.coverage(ipix=[row["coverage_ipix"] for row in rows],
+									  values=[row["point_count"] for row in rows],
+									  value_name="count", value_units="points",
+									  value_domain=value_domain, meta=meta)
 
