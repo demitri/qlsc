@@ -170,7 +170,11 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 #: monotonic, so a 150 degree "ellipse" is smaller than a 60 degree one. Verified against
 #: the C source and numerically (the boundary matches the tangent-plane conic to 3e-10
 #: degrees across 1120 configurations); see test_ellipse_geometry.py.
-ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS = 90.0
+#:
+#: Read from the C extension rather than repeated here: the same limit is enforced on
+#: both exported ellipse functions in ``qlsc_c_module.c``, and two copies of a number
+#: are two chances to disagree.
+ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS = q3c.ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS
 
 def _validate_ellipse(semi_major_axis:float, axis_ratio:float):
 	'''
@@ -1759,13 +1763,21 @@ class QLSCIndex:
 		'''
 		query_hprm = self._query_scheme()._hprm
 
+		# An ellipse is not grown all the way to 180 degrees the way a cone is: the C
+		# wrapper refuses an elliptical region of ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS or more
+		# (the tangent plane it is defined in reaches no further), and there is nothing to
+		# gain by trying - from Q3C_MAXRAD upwards q3c stops doing geometry and returns
+		# the whole sphere, so no larger search can widen the coverage. The ceiling is
+		# raised to the requested size if that is already the larger of the two, so
+		# widening can never shrink the search below what was asked for.
 		return self._widened_candidate_ranges(
 			lambda size: q3c.ellipse_query(query_hprm, ra, dec, size, axis_ratio, position_angle),
 			semi_major_axis,
 			f"ellipse query at (ra={ra}, dec={dec}) with semi_major_axis={semi_major_axis} deg, "
-			f"axis_ratio={axis_ratio}, position_angle={position_angle} deg")
+			f"axis_ratio={axis_ratio}, position_angle={position_angle} deg",
+			maximum=min(q3c.Q3C_MAXRAD, ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS))
 
-	def _widened_candidate_ranges(self, region_query, size:float, description:str):
+	def _widened_candidate_ranges(self, region_query, size:float, description:str, maximum:float=180.0):
 		'''
 		Run a candidate range search, growing the region until it produces usable ranges.
 
@@ -1775,29 +1787,32 @@ class QLSCIndex:
 		queried as ra=0), so the search uses a size of at least 1e-6 degrees. At rare
 		positions a given size can also overflow q3c's internal range capacity; a larger
 		region produces fewer, coarser ranges, so the size is grown and the search retried
-		on either failure mode, raising only if even a whole-sphere search fails.
+		on either failure mode, raising only if even the largest search fails.
 
 		The region searched always contains the region asked for, so the ranges are a
-		superset and the caller's exact filter still gives the right answer.
+		superset and the caller's exact filter still gives the right answer. The ceiling
+		is never below the size actually requested, so widening cannot shrink the search.
 
 		:param region_query: a callable taking a size in degrees and returning the (fulls, partials) arrays
 		:param size: the requested size of the region in degrees (a radius or a semi-major axis)
 		:param description: the query, for the warning message
+		:param maximum: the largest size to grow the search to; growing past ``q3c.Q3C_MAXRAD`` cannot widen the coverage further, since q3c returns the whole sphere from there on
 		:returns: a tuple of the (fulls, partials) depth-30 ipix range arrays
 		'''
 		initial_search_size = max(size, 1e-6)
+		ceiling = max(initial_search_size, maximum)
 		search_size = initial_search_size
 		while True:
 			try:
 				fulls, partials = region_query(search_size)
 			except q3c.RangeOverflowError:
-				if search_size >= 180.0:
-					raise # even a whole-sphere search failed
-				search_size = min(search_size * 10, 180.0)
+				if search_size >= ceiling:
+					raise # even the widest permitted search failed
+				search_size = min(search_size * 10, ceiling)
 				continue
-			if len(fulls) + len(partials) > 0 or search_size >= 180.0:
+			if len(fulls) + len(partials) > 0 or search_size >= ceiling:
 				break
-			search_size = min(search_size * 10, 180.0)
+			search_size = min(search_size * 10, ceiling)
 
 		if search_size > initial_search_size:
 			logger.warning(f"The {description} required widening the candidate search region to {search_size} deg; results are correct, but the query may be slower than usual.")

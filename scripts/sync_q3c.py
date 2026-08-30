@@ -56,6 +56,26 @@ What it does, in order
 
 Anything this script cannot decide it refuses to guess at. After a successful run there
 is still human work to do; it prints the checklist.
+
+Test coverage, and what is NOT covered
+--------------------------------------
+
+source/tests/test_sync_q3c.py exercises the decision-making: patch detection and
+application against the real vendored sources, the C interface diff, the comment and
+string scanner, and the version handling. Two things it does not reach:
+
+  * download_upstream()'s tarball handling, including the member-type and path-escape
+    checks - it needs the network, or a fixture tarball built for the purpose;
+  * sync() and main() as a whole, i.e. the order of the steps, what --dry-run
+    suppresses, and the exit status.
+
+The eventual answer to both is an integration test driven through --upstream-dir and
+--previous-dir, which take unpacked trees and so need no network: build two small
+fixture trees, run sync() against them with --dry-run and without, and assert on the
+files written and the messages printed. Until then those paths are covered only by
+running the script for real, which the sync procedure does anyway
+(``python3 scripts/sync_q3c.py v2.0.5 --dry-run`` against the current release is the
+end-to-end smoke test).
 '''
 
 import argparse

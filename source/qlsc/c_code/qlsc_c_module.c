@@ -10,6 +10,11 @@
 
 #define Q3C_STRUCT_POINTER_BUFFER "Q3C_prm_struct_pointer"
 
+// The largest semi-major axis an elliptical region may have; see the comment in
+// validate_ellipse_parameters for why. Exported to Python as
+// qlsc.q3c.ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS so the two layers cannot drift apart.
+#define ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS 90.0
+
 // ------------------------------------------------------------------
 // Right ascension conventions in the vendored Q3C code
 // ------------------------------------------------------------------
@@ -1545,6 +1550,34 @@ validate_ellipse_parameters(q3c_coord_t dec_cen, q3c_coord_t semi_major_axis,
 		PyErr_SetString(PyExc_ValueError, msg);
 		return -1;
 	}
+	// Q3C's ellipse is a conic in the gnomonic (tangent plane) projection about its
+	// center, with semi-axes tan(semi_major_axis) and tan(semi_major_axis)*axis_ratio.
+	// Only the near hemisphere projects, so the shape is meaningful strictly inside 90
+	// degrees. Past it q3c_in_ellipse answers about a different region: it rejects every
+	// point more than 90 degrees from the center whatever the semi-major axis, and its
+	// sin^2 term stops being monotonic, so a 150 degree "ellipse" is smaller than a 60
+	// degree one.
+	//
+	// This is checked for BOTH exported ellipse functions, the predicate and the
+	// candidate range query, though only the predicate can return a wrong answer today:
+	// an oversized range query is saved by upstream's Q3C_MAXRAD fallback, which returns
+	// the whole sphere and so is a safe superset. But that safety is a fact about
+	// q3cube.c rather than about this wrapper, and an upstream sync that dropped the
+	// fallback would silently start under-covering a region that was not the one asked
+	// for. Refusing here costs nothing - the Python layer answers a circle (axis_ratio
+	// == 1) of any radius with a cone search instead, and never asks for an ellipse this
+	// large. The fallback itself is pinned by source/tests/test_q3c_maxrad_fallback.py so
+	// a sync cannot remove it unnoticed either.
+	if (!(semi_major_axis < ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS)) {
+		char limit_msg[320];
+		snprintf(limit_msg, sizeof limit_msg,
+				 "The 'semi_major_axis' value must be less than %g degrees (was given %.17g): Q3C's ellipse is "
+				 "a conic in the tangent plane at its center, which only reaches the near hemisphere. Use "
+				 "axis_ratio=1 (a circle) or radial_query for a larger region.",
+				 (double)ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS, semi_major_axis);
+		PyErr_SetString(PyExc_ValueError, limit_msg);
+		return -1;
+	}
 	return 0;
 }
 
@@ -1648,25 +1681,6 @@ qlsc_q3c_in_ellipse(PyObject *module, PyObject *args, PyObject *kwargs)
 		PyErr_SetString(PyExc_ValueError, msg);
 		return NULL;
 	}
-	// q3c_in_ellipse evaluates a conic in the gnomonic (tangent plane) projection about
-	// the center, where the region has semi-axes tan(semi_major_axis) and
-	// tan(semi_major_axis)*axis_ratio. Only the near hemisphere projects, so the test
-	// is meaningful strictly inside 90 degrees; at and past it the function silently
-	// answers about a different region (it rejects every point more than 90 degrees
-	// from the center, and its sin^2 term stops being monotonic in the semi-major axis,
-	// so a 150 degree "ellipse" is smaller than a 60 degree one). Refuse rather than
-	// return a wrong answer; QLSC.point_in_ellipse handles the circular case, where the
-	// tangent plane is not needed, without this restriction.
-	if (!(semi_major_axis < 90)) {
-		char msg[256];
-		snprintf(msg, sizeof msg,
-				 "The 'semi_major_axis' value must be less than 90 degrees (was given %.17g): Q3C's ellipse is "
-				 "a conic in the tangent plane at its center, which only reaches the near hemisphere.",
-				 semi_major_axis);
-		PyErr_SetString(PyExc_ValueError, msg);
-		return NULL;
-	}
-
 	// argument order as in q3c.c's pgq3c_in_ellipse: center first, then the point
 	result = q3c_in_ellipse(ra_cen, dec_cen, ra, dec, semi_major_axis,
 							ellipse_eccentricity(axis_ratio), position_angle);
@@ -1736,6 +1750,34 @@ PyInit_q3c(void) // must be named "PyInit_" + name of extension (without package
 		Py_XDECREF(QlscRangeOverflowError);
 		Py_DECREF(module);
 		return NULL;
+	}
+
+	// Two limits the Python layer has to reason about, published rather than
+	// duplicated as literals up there:
+	//
+	//   Q3C_MAXRAD - the size at and above which the vendored query functions stop
+	//     doing geometry and return the whole sphere. Growing a search past it cannot
+	//     widen the coverage any further, so it is the ceiling for the widening loop.
+	//   ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS - the largest elliptical region this wrapper
+	//     will accept; see validate_ellipse_parameters.
+	//
+	// Both are added as floats rather than with PyModule_AddIntConstant: Q3C_MAXRAD is
+	// an integer literal today, but a future upstream release could make it fractional
+	// and an int conversion would silently truncate it.
+	{
+		PyObject *maxrad = PyFloat_FromDouble((double)Q3C_MAXRAD);
+		if (maxrad == NULL || PyModule_AddObject(module, "Q3C_MAXRAD", maxrad) < 0) {
+			Py_XDECREF(maxrad);
+			Py_DECREF(module);
+			return NULL;
+		}
+		PyObject *max_semi_major = PyFloat_FromDouble((double)ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS);
+		if (max_semi_major == NULL ||
+			PyModule_AddObject(module, "ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS", max_semi_major) < 0) {
+			Py_XDECREF(max_semi_major);
+			Py_DECREF(module);
+			return NULL;
+		}
 	}
 
 	return module;

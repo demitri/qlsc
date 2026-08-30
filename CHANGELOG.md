@@ -111,6 +111,17 @@
 
 ### Fixed
 
+* `qlsc.q3c.ellipse_query` accepted a semi-major axis of 90 degrees or more, where the
+  companion predicate `qlsc.q3c.in_ellipse` refused it. Q3C's ellipse is a conic in the
+  tangent plane at its center and means nothing past the near hemisphere, so a direct
+  caller of the C function got coarse ranges for a region that was not the one asked
+  for — safe today only because upstream returns the whole sphere for any region of
+  `Q3C_MAXRAD` (35) degrees or more. Both functions now enforce the same limit. The
+  `Python` layer was never affected: it validates first, and answers a circle of any
+  radius with a cone search. `qlsc.q3c` now also exports `Q3C_MAXRAD` and
+  `ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS`, and the whole-sphere fallback the safety argument
+  rests on is pinned by `test_q3c_maxrad_fallback.py` so an upstream sync cannot remove
+  it unnoticed.
 * `QLSC.ipix2polygon(ipix, duplicate_endpoint=True)` did nothing. The branch built
   the closed five-row polygon and the line after it stripped the extra row back off
   unconditionally, so both forms returned the same four rows and the parameter was
