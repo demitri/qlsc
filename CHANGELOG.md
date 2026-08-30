@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Packaging
+
+* The extension now compiles against an explicit NumPy C API level
+  (`NPY_TARGET_VERSION`) rather than whichever level the NumPy doing the build
+  happens to default to. NumPy's default tracks the headers that build the
+  extension (NumPy 2.5 defaults to the 1.25 API level), and a compiled
+  extension refuses to import under a NumPy older than the level it was built
+  against - so a binary built with a current NumPy would have required
+  numpy>=1.25 at runtime while the package declared `numpy>=1.18`.
+
 ## 1.1.0 (unreleased)
 
 ### Breaking changes
