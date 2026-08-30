@@ -48,7 +48,7 @@
   coordinates of no pixel at all for out-of-range input; it now raises `ValueError`,
   as `ipix2ang` already did. The check is also enforced in the C extension.
 
-## 1.1.0 (unreleased)
+## 1.1.0 (2026-08-30)
 
 ### Breaking changes
 
