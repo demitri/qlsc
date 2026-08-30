@@ -64,17 +64,32 @@ def test_radial_query_radius_inclusive():
 	matches = idx.radial_query(ra=12., dec=34., radius=180.)
 	assert matches.shape == (2, 2)
 
-def test_radial_query_zero_radius():
+# (10,20) and (0,0) are positions where q3c_radial_query produces no candidate
+# ranges at all for tiny radii; (12,34) is a position where it does
+@pytest.mark.parametrize("ra, dec", [(10., 20.), (0., 0.), (12., 34.), (45., 45.), (200., -60.)])
+def test_radial_query_zero_radius(ra, dec):
 	'''
 	Test that a radius of zero returns only exactly coincident points
 	(the radius comparison is inclusive), never an SQL error.
 	'''
 	idx = QLSCIndex(qlsc=QLSC(depth=30))
-	idx.add_point(12., 34.)
-	idx.add_point(13., 34.)
-	matches = idx.radial_query(ra=12., dec=34., radius=0.)
+	idx.add_point(ra, dec)
+	idx.add_point(ra + 1., dec)
+	matches = idx.radial_query(ra=ra, dec=dec, radius=0.)
 	assert matches.shape == (2,) # the single exact match, squeezed to (ra,dec)
-	matches = idx.radial_query(ra=50., dec=50., radius=0.)
+	matches = idx.radial_query(ra=ra + 0.5, dec=dec, radius=0.)
 	assert len(matches) == 0
-	matches = idx.radial_query(ra=50., dec=50., radius=0., return_key=True)
+	matches = idx.radial_query(ra=ra + 0.5, dec=dec, radius=0., return_key=True)
 	assert len(matches) == 0
+
+@pytest.mark.parametrize("ra, dec", [(10., 20.), (0., 0.), (12., 34.)])
+def test_radial_query_tiny_radius(ra, dec):
+	'''
+	Test tiny radii for which q3c_radial_query can produce no candidate ranges;
+	the query must still find indexed points within the radius.
+	'''
+	idx = QLSCIndex(qlsc=QLSC(depth=30))
+	idx.add_point(ra, dec)
+	idx.add_point(ra + 1., dec)
+	matches = idx.radial_query(ra=ra, dec=dec, radius=1e-8)
+	assert matches.shape == (2,) # the coincident point only

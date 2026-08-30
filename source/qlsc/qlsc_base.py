@@ -936,14 +936,20 @@ class QLSCIndex:
 			ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
 
 		if len(ipix_statements) == 0:
-			# no candidate pixels (e.g. radius=0); an empty WHERE clause would be an SQL syntax error
-			if return_key:
-				return np.core.records.fromarrays([[], [], []], names='ra,dec,key')
-			else:
-				return np.squeeze(np.dstack(([],[])))
+			# At some sky positions q3c_radial_query produces no ranges at all for zero or
+			# very small (< ~1e-7 deg) radii, even though matching points may be indexed.
+			if radius == 0:
+				# only exactly coincident points can match, and they share the center's ipix
+				ipix_statements.append(f"(ipix={self.qlsc.ang2ipix(center_ra, center_dec)})")
+			# else: fall through with no WHERE constraint below - scan every row; the
+			# exact sindist filter preserves correctness (such radii span too many
+			# depth-30 pixels for a neighboring-pixel fallback to be complete)
 
-		wheres = "({0})".format(" OR ".join(ipix_statements))
-		query = f"SELECT ra,dec,key FROM {self.database_tablename} WHERE {wheres}"
+		if ipix_statements:
+			wheres = "({0})".format(" OR ".join(ipix_statements))
+			query = f"SELECT ra,dec,key FROM {self.database_tablename} WHERE {wheres}"
+		else:
+			query = f"SELECT ra,dec,key FROM {self.database_tablename}"
 
 		cone_radius = pow(sin(deg2rad(radius)/2.), 2)
 
