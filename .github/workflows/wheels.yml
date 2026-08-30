@@ -1,0 +1,207 @@
+name: Build wheels
+
+# Binary wheels for qlsc, built with cibuildwheel. The installable package lives
+# in source/, not at the repository root, hence "package-dir: source" below; the
+# cibuildwheel options themselves (interpreters, test command) live in
+# source/pyproject.toml under [tool.cibuildwheel].
+#
+# Runs on demand, on version tags, and on pull requests that touch the package
+# or this workflow. It deliberately does not run on every push: a full matrix
+# build is minutes of runner time per commit.
+#
+# The tag run is part of the release procedure in CLAUDE.md: the tag is pushed
+# first, this workflow builds and verifies every artifact, and the release is
+# then uploaded to PyPI by hand from the artifacts of the run.
+#
+# Third-party actions are pinned to commit SHAs (a tag is mutable, and these
+# actions run with access to the build); the human-readable version is in the
+# comment beside each.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "source/**"
+      # setup.py reads the repository-root README for the PyPI long_description,
+      # so it is a build input even though it lives outside source/.
+      - "README.md"
+      - ".github/workflows/wheels.yml"
+      # the release gate's own code: a change to it must be exercised
+      - ".github/scripts/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  wheels:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            os: ubuntu-24.04
+            archs: x86_64
+          - label: linux-aarch64
+            # Native arm64 runner: no QEMU, so the wheels are also test-run on
+            # the architecture they are built for.
+            os: ubuntu-24.04-arm
+            archs: aarch64
+          - label: macos-arm64
+            os: macos-15
+            archs: arm64
+          - label: macos-x86_64
+            # Native Intel runner, so these wheels are tested rather than
+            # cross-compiled-and-hoped-for. macos-15-intel is the x64 label for
+            # the macOS 15 image (the plain macos-15 label is arm64).
+            os: macos-15-intel
+            archs: x86_64
+          - label: windows-x64
+            os: windows-2025
+            archs: AMD64
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
+        with:
+          package-dir: source
+          output-dir: wheelhouse
+        env:
+          # Architecture is a property of the runner, so it is set here rather
+          # than in pyproject.toml; everything else is configured there.
+          CIBW_ARCHS: ${{ matrix.archs }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-${{ matrix.label }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Build the sdist
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build --sdist --outdir dist source
+          twine check --strict dist/*
+
+      - name: Install from the sdist and run the tests
+        # The sdist is the install path for every platform and interpreter the
+        # wheel matrix does not cover, so it gets compiled and tested too.
+        run: |
+          python -m pip install pytest
+          python -m pip install dist/*.tar.gz
+          cd "$(mktemp -d)" && pytest "$GITHUB_WORKSPACE/source/tests"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  script-tests:
+    # The release gate is only worth having if it fails on a broken artifact
+    # set, and nothing else in this workflow would notice if it stopped doing
+    # that: a verifier that waves everything through looks exactly like a
+    # verifier that works. Runs in seconds, and "verify" below depends on it, so
+    # the gate is never used untested.
+    name: verify script tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Test verify_artifacts.py
+        run: |
+          python -m pip install --upgrade pytest packaging pyyaml
+          pytest .github/scripts -q
+
+  verify:
+    # The gate the release procedure waits on: it looks at the whole set of
+    # artifacts at once, which no individual build job can do. A release is cut
+    # by downloading the artifacts of a run whose verify job passed.
+    name: verify artifacts
+    needs: [wheels, sdist, script-tests]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # 3.10 is the oldest interpreter built above, and so the one that can
+          # be paired with the oldest NumPy in the ABI floor check below.
+          python-version: "3.10"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+
+      - name: Collect the artifacts into one directory
+        # -n so that two artifacts holding the same filename cannot quietly
+        # overwrite one another; the collision then shows up as a missing wheel
+        # in the completeness check below.
+        run: |
+          mkdir dist
+          find artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' \) -exec mv -n {} dist/ \;
+          ls -l dist
+
+      - name: Check the metadata of every artifact
+        run: |
+          python -m pip install --upgrade twine
+          twine check --strict dist/*.whl dist/*.tar.gz
+
+      - name: Check the artifact set is complete and consistently versioned
+        run: |
+          python -m pip install --upgrade packaging
+          python .github/scripts/verify_artifacts.py dist
+        env:
+          # Empty on non-tag runs; the script then skips the tag/version
+          # comparison (and says so) rather than inventing an expectation.
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+
+      - name: Check the wheels import under the oldest supported NumPy
+        # The compiled NumPy API level (NPY_TARGET_VERSION, set in setup.py)
+        # decides the oldest NumPy the extension will import under, and getting
+        # it wrong is invisible until a user with an older NumPy installs the
+        # wheel. One wheel of the 35 is enough to check it: NPY_TARGET_VERSION
+        # is a compile-time macro from setup.py, identical in every wheel, so
+        # this tests the CPython 3.10 manylinux x86_64 one as representative.
+        # 1.21.2 is the oldest NumPy that publishes a CPython 3.10 wheel
+        # at all, so it is the oldest pairing that can be tested here; the
+        # declared floor (numpy>=1.18) cannot be exercised for lack of any
+        # NumPy build for these interpreters, not because it is unchecked.
+        run: |
+          python -m pip install pytest "numpy==1.21.2"
+          python -m pip install --no-index --no-deps --find-links dist qlsc
+          python -c "import numpy, qlsc; print('numpy', numpy.__version__, '/ qlsc', qlsc.__file__)"
+          cd "$(mktemp -d)" && pytest "$GITHUB_WORKSPACE/source/tests"
+
+  # A PyPI publish job would slot in here: needs: [verify], gated on
+  # startsWith(github.ref, 'refs/tags/v'), downloading the artifacts with
+  # actions/download-artifact and uploading them with pypa/gh-action-pypi-publish
+  # (trusted publishing, so no API token in the repository).
+  #
+  # It is deliberately NOT wired up: releases are cut by hand with twine, per
+  # the release procedure in CLAUDE.md, which downloads the artifacts of this
+  # workflow's tag run and uploads those exact files.
