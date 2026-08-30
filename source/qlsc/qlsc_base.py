@@ -278,6 +278,7 @@ class QLSC:
 		Non-integer values (including floats that happen to be whole numbers) and
 		values outside [0, nbins) raise ValueError rather than being truncated or
 		clamped: both would silently return the coordinates of a different pixel.
+		Integer arrays of any width are accepted, unsigned ones included.
 
 		:param ipix: an ipix number or an array-like of ipix numbers
 		:returns: an ``int`` for scalar input, an ``np.int64`` array otherwise
@@ -290,6 +291,19 @@ class QLSC:
 
 		if not np.issubdtype(values.dtype, np.integer):
 			raise ValueError(f"The ipix value(s) must be integers; was given a value of type '{values.dtype}'.")
+
+		if values.dtype == np.uint64:
+			# uint64 is the one integer dtype whose range does not fit in int64, so
+			# it is narrowed here rather than in the bounds check below: how NumPy
+			# promotes a uint64 array compared against a Python int is exactly the
+			# corner that changed between NumPy versions (NEP 50), and float64 -
+			# a plausible common type - has a spacing of 1024 at nbins for depth 30.
+			# Every valid ipix fits in int64; reject what does not and compare there.
+			too_large = values[values > np.uint64(np.iinfo(np.int64).max)]
+			if too_large.size > 0:
+				raise ValueError(f"An ipix number is out of bounds for this scheme (depth={self.depth}); "
+								 f"range: [0,{self.nbins-1}], first offending value: {too_large.flat[0]}.")
+			values = values.astype(np.int64)
 
 		# perform a bounds check
 		out_of_range = values[(values < 0) | (values >= self.nbins)]

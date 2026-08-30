@@ -8,7 +8,12 @@
   ipix values (NumPy array, list, or tuple) in addition to a single value, following
   the same scalar/array convention as `ang2ipix`: a scalar (or 0-d array) returns
   scalars, anything with a shape returns arrays of that shape. The loop runs in the
-  C extension. `ipix2polygon` remains scalar-only (see its docstring for why).
+  C extension. Integer values of any width are accepted, unsigned ones included;
+  non-integer input raises rather than being truncated to a different pixel, at the
+  `qlsc.q3c` level as well as through `QLSC` (a bare "give me an int64 array"
+  conversion refuses an existing float array but will happily *build* one from
+  `[1.5, 2.5]`, so the dtype of the input is settled before anything is converted).
+  `ipix2polygon` remains scalar-only (see its docstring for why).
 * `QLSCIndex.radial_query(..., return_distance=True)` returns the angular separation
   of each match from the query center in degrees. The cone filter already computes
   sin²(d/2) for every candidate, so the value costs nothing. With either
@@ -77,8 +82,7 @@
 
 * `QLSC.ipix2ang` rejected NumPy integers (`isinstance(ipix, int)` is `False` for
   `np.int64`), so the ipix values returned by `ang2ipix` for array input could not be
-  fed back to it. Integer values of any width are now accepted; floats and other
-  non-integer types still raise `ValueError` rather than being truncated.
+  fed back to it. Integer values of any width are now accepted.
 * `QLSC.ipix2xy` did not bounds check its ipix value and silently returned the
   coordinates of no pixel at all for out-of-range input; it now raises `ValueError`,
   as `ipix2ang` already did. The check is also enforced in the C extension.

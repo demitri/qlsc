@@ -467,14 +467,37 @@ ipix_from_object(PyObject *obj, q3c_ipix_t *ipix)
 // values, validating every element against the scheme. Returns a new reference
 // on success, NULL with an exception set otherwise.
 //
-// PyArray_FROM_OTF is used rather than the raw buffer handling in ang2ipix
-// above: it deals with strides, non-contiguous input, and integer types other
-// than int64 in one call, and it refuses (rather than truncates) a float input
-// because NPY_ARRAY_FORCECAST is deliberately not requested.
+// The dtype of the input is settled BEFORE anything is converted. Asking NumPy
+// for an int64 array directly is not enough: the "safe cast" rule that refuses
+// an existing float64 array does not apply to a value NumPy is constructing for
+// the first time, so [1.5, 2.5], [True, False] and ["10", "20"] would all be
+// built into an int64 array without a word - 1.5 silently becoming pixel 1.
+// Inferring the dtype first and requiring an integer type rejects all three.
 static PyArrayObject *
 ipix_array_from_object(struct q3c_prm *hprm, PyObject *obj)
 {
-	PyArrayObject *array = (PyArrayObject *)PyArray_FROM_OTF(obj, NPY_INT64, NPY_ARRAY_IN_ARRAY);
+	// dtype NULL: infer it from the object rather than imposing one
+	PyArrayObject *source = (PyArrayObject *)PyArray_FromAny(obj, NULL, 0, 0, 0, NULL);
+	if (source == NULL)
+		return NULL;
+
+	// PyTypeNum_ISINTEGER spans the signed and unsigned integer types and
+	// excludes bool, float, and everything else
+	if (!PyTypeNum_ISINTEGER(PyArray_TYPE(source))) {
+		PyErr_Format(PyExc_TypeError,
+					 "The ipix values must be integers; was given an array of dtype '%S'.",
+					 (PyObject *)PyArray_DESCR(source));
+		Py_DECREF(source);
+		return NULL;
+	}
+
+	// NPY_ARRAY_IN_ARRAY handles strides and non-contiguous input; the source is
+	// known to be an integer array by this point, so the only conversion that is
+	// not value-preserving is uint64 above INT64_MAX, and those values land in
+	// the negative half of int64 where the bounds check below rejects them.
+	PyArrayObject *array = (PyArrayObject *)PyArray_FROM_OTF((PyObject *)source, NPY_INT64,
+															NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+	Py_DECREF(source);
 	if (array == NULL)
 		return NULL;
 
