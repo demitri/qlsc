@@ -1157,7 +1157,14 @@ class QLSC:
 			raise ValueError("A value for 'depth' must be specified.")
 		if not (1 <= depth <= 30):
 			raise ValueError(f"The depth provided {depth} is outside the integer range [1,30].")
-		return ( q3c.ang2ipix(self._hprm, ra, dec) >> (2*depth) << (2*depth) ) + (1 << (2 * (depth-1))) - 1
+		# self.ang2ipix, not q3c.ang2ipix: going straight to the C function skipped this
+		# package's own validation, so a non-finite value reached the undefined
+		# float-to-int conversion of upstream q3c issue #52 and a declination outside
+		# [-90,90] was truncated to the pole rather than normalized - a different answer
+		# from the one ang2ipix gives for the same coordinate. Going through the method
+		# also means a subclass that reads the pair differently (see GeoQLSC) is honored
+		# here as it is everywhere else.
+		return ( self.ang2ipix(ra, dec) >> (2*depth) << (2*depth) ) + (1 << (2 * (depth-1))) - 1
 
 	def ipix2polygon(self, ipix:int=None, duplicate_endpoint=False, return_skycoord:bool=False):
 		'''
@@ -3055,6 +3062,12 @@ def _lonlat_coordinate_pair(ra, dec, lon, lat, ra_name:str="ra", dec_name:str="d
 	make silently. A sky coordinate object or a Quantity is handled exactly as it is for
 	the ra,dec spelling; see :func:`_coordinate_pair`.
 
+	**This is the seam every geographic entry point crosses**, and the latitude is checked
+	here so that it is checked in all of them: see :func:`_validate_geographic_latitude`
+	for why a latitude out of range is refused where a declination is normalized. The
+	check applies to both spellings, because on a geographic object ``dec`` is only
+	another name for ``lat``.
+
 	:param ra: the first angle in the astronomical spelling
 	:param dec: the second angle in the astronomical spelling
 	:param lon: the first angle in the geographic spelling
@@ -3069,20 +3082,82 @@ def _lonlat_coordinate_pair(ra, dec, lon, lat, ra_name:str="ra", dec_name:str="d
 		if ra is not None or dec is not None:
 			raise ValueError(f"'{lon_name}','{lat_name}' and '{ra_name}','{dec_name}' are two spellings of "
 							 f"the same coordinate pair; give one or the other, not both.")
-		return _coordinate_pair(lon, lat, lon_name, lat_name)
+		resolved_ra, resolved_dec = _coordinate_pair(lon, lat, lon_name, lat_name)
+		_validate_geographic_latitude(resolved_dec, lat_name)
+		return resolved_ra, resolved_dec
 
-	return _coordinate_pair(ra, dec, ra_name, dec_name)
+	resolved_ra, resolved_dec = _coordinate_pair(ra, dec, ra_name, dec_name)
+	_validate_geographic_latitude(resolved_dec, dec_name)
+	return resolved_ra, resolved_dec
+
+def _validate_geographic_latitude(latitude, name:str="lat"):
+	'''
+	Refuse a latitude outside [-90,90], scalar or array.
+
+	The astronomical classes *normalize* such a value: :py:func:`QLSC.ang2ipix` reads
+	``dec=100`` as a point ten degrees past the pole and moves the right ascension by 180
+	degrees to reach it, which is a fair reading of an unnormalized celestial coordinate.
+	It is not a fair reading of a latitude. A latitude of 100 is a mistake — there is no
+	such place — and answering for a point on the far side of the Earth would hide it,
+	silently, with no error to warn the caller. Every geographic entry point therefore
+	refuses one, which is what makes the geographic classes stricter than the
+	astronomical ones rather than merely differently spelled.
+
+	A value that is not a number at all is left alone: the coordinate conversion that
+	follows rejects it (``np.asarray(..., dtype=np.double)`` raises), and reporting it
+	here as a range error would misdescribe it.
+
+	:param latitude: a latitude, or an array of them, in degrees; ``None`` is ignored
+	:param name: how to refer to the value in an error message
+	'''
+	if latitude is None:
+		return
+
+	try:
+		values = np.asarray(latitude, dtype=np.double)
+	except (TypeError, ValueError):
+		return # not a number; the conversion downstream reports it properly
+
+	if values.size == 0:
+		return
+
+	# NaN fails both comparisons and is refused here too, as it is everywhere else in
+	# this package: it passes a range check unnoticed and reaches an undefined
+	# float-to-int conversion in the C code (upstream q3c issue #52).
+	if not ((-90 <= values).all() and (values <= 90).all()):
+		raise ValueError(f"The '{name}' value(s) must be in the range [-90,90]; a latitude outside it "
+						 f"is not a point on the far side of a pole, it is an error.")
+
+def _latitude_column(points):
+	'''
+	Return the latitude column of an array of [lon,lat] pairs, or ``None`` if the value is
+	not such an array.
+
+	A value of the wrong shape is left for the method that consumes it to report, with the
+	message it already has for that; this exists only to find the latitudes when they are
+	there to be found.
+
+	:param points: an array-like of [lon,lat] pairs, shape (n,2)
+	:returns: the latitude values, or None
+	'''
+	try:
+		values = np.asarray(points, dtype=np.double)
+	except (TypeError, ValueError):
+		return None
+
+	if values.ndim != 2 or values.shape[1] != 2:
+		return None
+
+	return values[:,1]
 
 def _geographic_position(ra, dec, lat_name:str="lat"):
 	'''
 	Put a geographic coordinate into the storage convention of :py:class:`GeoQLSCIndex`:
 	longitude in [-180,180), latitude in [-90,90].
 
-	A latitude outside [-90,90] is refused. The astronomical classes reinterpret such a
-	declination as a point on the other side of a pole (with the right ascension moved by
-	180 degrees), which is a reasonable reading of an unnormalized celestial coordinate but
-	not of a latitude: a latitude of 100 is a mistake, and silently relocating the point
-	halfway around the Earth would hide it.
+	The latitude is checked again here rather than trusted from
+	:func:`_lonlat_coordinate_pair`: this is the seam where a coordinate is written into
+	the index, and a value that reached it from anywhere else must not be stored.
 
 	:param ra: a longitude, or an array of them, in degrees
 	:param dec: a latitude, or an array of them, in degrees
@@ -3092,15 +3167,7 @@ def _geographic_position(ra, dec, lat_name:str="lat"):
 	if ra is None or dec is None:
 		return ra, dec
 
-	if np.isscalar(dec) or np.ndim(dec) == 0:
-		out_of_range = not (-90 <= float(dec) <= 90)
-	else:
-		latitudes = np.asarray(dec, dtype=np.double)
-		out_of_range = not ((-90 <= latitudes).all() and (latitudes <= 90).all())
-
-	if out_of_range:
-		raise ValueError(f"The '{lat_name}' value(s) must be in the range [-90,90]; a latitude outside it "
-						 f"is not a point on the far side of a pole, it is an error.")
+	_validate_geographic_latitude(dec, lat_name)
 
 	return wrap_longitude(ra), dec
 
@@ -3116,7 +3183,14 @@ class GeoQLSC(QLSC):
 	**The mapping, exactly**
 
 	* **Latitude is declination.** Same range [-90,90], same sign (north positive), same
-	  meaning. There is nothing to convert in either direction.
+	  meaning. There is nothing to convert in either direction — but a latitude *outside*
+	  [-90,90] raises ``ValueError`` here, where :py:class:`QLSC` normalizes it. ``dec=100``
+	  is a perfectly good unnormalized celestial coordinate, ten degrees past the pole and
+	  180 degrees round in right ascension; ``lat=100`` is a mistake, there is no such
+	  place, and answering for a point on the far side of the Earth would hide it. This is
+	  the one way the geographic classes are stricter rather than merely spelled
+	  differently, and it holds at every entry point that takes a latitude, under either
+	  spelling.
 	* **Longitude is right ascension on the way in.** Right ascension is periodic and every
 	  entry point reduces it internally, so a longitude of -74 may be given anywhere an ra
 	  can, unchanged: ``ang2ipix(-74, 40)`` and ``ang2ipix(286, 40)`` are the same pixel.
@@ -3223,6 +3297,10 @@ class GeoQLSC(QLSC):
 		if points is not None and (lon is not None or lat is not None):
 			raise ValueError("The parameter 'points' was given; 'lon' or 'lat' should not also be specified.")
 		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		# 'points' does not cross _lonlat_coordinate_pair, so its latitudes are checked
+		# here; a SkyCoord cannot hold a latitude out of range and needs no check
+		if points is not None and not _is_coordinate_object(points):
+			_validate_geographic_latitude(_latitude_column(points), "points")
 		return super().ang2ipix(ra=ra, dec=dec, points=points)
 
 	def ang2ipix_xy(self, ra=None, dec=None, points=None, lon=None, lat=None) -> dict:

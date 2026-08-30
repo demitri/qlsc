@@ -296,6 +296,21 @@
 
 ### Fixed
 
+* `GeoQLSC.ang2ipix`, `lonlat2ipix`, `point_in_polygon` and `point_in_ellipse` refuse a
+  latitude outside [-90,90] instead of quietly answering for somewhere else.
+  `GeoQLSCIndex`, `face_number` and `ang2ipix_xy` already refused one; these delegated to
+  the astronomical normalization, so `lonlat2ipix(lon=10, lat=100)` returned the pixel of
+  the point at (190, 80) — a real place on the far side of the Earth — with no error. The
+  check now lives at the single seam every geographic entry point crosses, and
+  `test_geo_latitude_gate.py` derives the list of methods to check from their signatures,
+  so a geographic method added later that takes a latitude fails the gate until it is
+  covered. `QLSC` is unchanged: an unnormalized declination is a legitimate celestial
+  coordinate and is still read as the point past the pole.
+* `QLSC.ang2ipix_at_depth` now reads its coordinate the way `ang2ipix` does. It called the
+  C function directly, so a declination past the pole was truncated to the pole — a
+  different pixel from the one `ang2ipix` names for the same coordinate — and a non-finite
+  value reached the undefined float-to-int conversion of upstream q3c issue #52 that every
+  other entry point guards against.
 * Documented a trap that has always been there: **`QLSC.ang2ipix_xy` returns face
   coordinates on `[-0.5,0.5]`, while `ipix2xy`, `xy2ang` and `xy2ipix` use `[-1,1]`** —
   exactly a factor of two. Feeding `ang2ipix_xy`'s `x,y` straight into `xy2ang` returns
