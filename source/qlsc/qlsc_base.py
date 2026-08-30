@@ -39,6 +39,19 @@ sqlite3.register_adapter(np.int64, int)
 
 logger = logging.getLogger("qlsc")
 
+def _as_float_scalar(value, name:str) -> float:
+	'''
+	Coerce a scalar-like value (Python number, NumPy scalar, or size-1 array) to a float.
+
+	NumPy has deprecated (and will remove) the implicit conversion of size-1 arrays
+	to scalars, which the C extension's scalar signatures relied on; .item() extracts
+	the value without that conversion and raises for larger arrays.
+	'''
+	try:
+		return float(np.asarray(value).item())
+	except (ValueError, TypeError) as e:
+		raise TypeError(f"The '{name}' parameter must be a scalar value; was given '{value!r}'.") from e
+
 def _canonical_position(ra:float, dec:float) -> Tuple[float, float]:
 	'''
 	Reduce equivalent spherical coordinate representations of the same point to a single form:
@@ -156,7 +169,7 @@ class QLSC:
 		if not ((-90 <= dec).all() and (dec <= 90).all()):
 			ra, dec = _normalize_ang(ra=ra, dec=dec, copy=True)
 
-		if ra.shape[0] == 1:
+		if ra.ndim > 0 and ra.shape[0] == 1: # the ndim check leaves 0-d arrays to the C scalar path
 			# A length-1 array would match the C extension's scalar signature (via a
 			# __float__ conversion NumPy has deprecated), returning a bare int for
 			# array input; call the scalar path explicitly and wrap the result.
@@ -173,6 +186,9 @@ class QLSC:
 		:param points: an array of ra,dec coordinates (shape: (n,2)) NOT YET SUPPORTED
 		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]
 		'''
+
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
 
 		# The underlying C code forces dec > 90 to 90 and dec < -90 to 90.
 		# Either normalize the angle here or raise an exception.
@@ -358,6 +374,8 @@ class QLSC:
 				raise ValueError(f"The ipix number provided ('{ipix}') is outside the range [0,{self.nbins-1}].")
 		else:
 			# ra,dec provided
+			ra = _as_float_scalar(ra, "ra")
+			dec = _as_float_scalar(dec, "dec")
 			if not -90 <= dec <= 90:
 				raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
 			if not -360 <= ra <= 360:

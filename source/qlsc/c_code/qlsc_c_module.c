@@ -373,7 +373,6 @@ qlsc_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> c
     								 &hprm_capsule, &ra, &dec))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
         return NULL;
 	}
 
@@ -446,7 +445,6 @@ qlsc_q3c_ipix2ang(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
     								 &hprm_capsule, &ipix))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
         return NULL;
 	}
 		
@@ -532,7 +530,6 @@ qlsc_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
     								 &hprm_capsule, &ipix))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
         return NULL;
 	}
 
@@ -573,7 +570,6 @@ qlsc_q3c_pixarea(PyObject *module, PyObject *args, PyObject *kwargs)
     								 &hprm_capsule, &ipix, &depth))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
         return NULL;
 	}
 	
@@ -610,7 +606,6 @@ qlsc_q3c_facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 									  &hprm_capsule, &ra, &dec))
 	 {
 		 // unable to parse inputs -> raise exception
-		 PySys_WriteStdout("unable to parse input, returning NULL\n");
 		 return NULL;
 	 }
 	
@@ -639,7 +634,6 @@ qlsc_q3c_dist(PyObject *module, PyObject *args, PyObject *kwargs)
 									 &ra1, &dec1, &ra2, &dec2))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
 		return NULL;
 	}
 
@@ -695,7 +689,6 @@ qlsc_q3c_xy2ang(PyObject *module, PyObject *args, PyObject *kwargs)
 									 &x, &y, &face_num0))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
 		return NULL;
 	}
 
@@ -808,7 +801,6 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 									 &hprm_capsule, &ra_cen, &dec_cen, &radius))
 	{
 		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
 		return NULL;
 	}
 
@@ -819,8 +811,12 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	ra_cen = UNWRAP_RA(ra_cen);
 	if (q3c_fabs(dec_cen) > 90)
 	{
-		// this should be handled on the Python side
-		PySys_WriteStdout("'dec' value out of range - todo: raise exception'\n");
+		// the Python side validates this too; fail loudly if called directly
+		// (PyErr_Format does not support float conversions, hence snprintf)
+		char msg[128];
+		snprintf(msg, sizeof msg, "The 'dec' value must be in the range [-90,90] (was given %.17g).", dec_cen);
+		PyErr_SetString(PyExc_ValueError, msg);
+		return NULL;
 	}
 
 	// generate the full, partials arrays

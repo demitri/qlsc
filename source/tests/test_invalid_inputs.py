@@ -29,7 +29,9 @@ def test_invalid_hprm_capsule_raises(call, bad_capsule):
 	Test that C-level functions raise an exception (rather than crash the
 	interpreter) when handed something that is not an hprm capsule.
 	'''
-	with pytest.raises(Exception):
+	# PyCapsule_GetPointer raises ValueError for a non-capsule object; TypeError
+	# can come from argument parsing. Anything broader could mask a wrong failure.
+	with pytest.raises((ValueError, TypeError)):
 		call(bad_capsule)
 
 def test_point_in_polygon_non_finite():

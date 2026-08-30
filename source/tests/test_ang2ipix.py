@@ -62,6 +62,27 @@ def test_ang2ipix_array_float32(depth, ra, dec, ipix):
 	q = QLSC(depth=depth)
 	assert np.array_equal(ipix, q.ang2ipix(ra.astype(np.float32), dec.astype(np.float32)))
 
+def test_ang2ipix_0d_array():
+	'''
+	Test that 0-d array inputs work (regression: the length-1-array guard
+	indexed .shape[0] unconditionally, raising IndexError for 0-d arrays).
+	'''
+	q = QLSC(depth=30)
+	assert q.ang2ipix(np.array(10.), np.array(30.)) == q.ang2ipix(10., 30.)
+
+def test_scalar_apis_accept_scalar_like_input():
+	'''
+	Test that the scalar-only APIs accept NumPy scalars and size-1 arrays without
+	relying on NumPy's deprecated size-1-array-to-scalar conversion (the test
+	suite treats DeprecationWarning as an error via these calls failing loudly).
+	'''
+	q = QLSC(depth=30)
+	assert q.ang2ipix_xy(np.array([10.]), np.array([30.])) == q.ang2ipix_xy(10., 30.)
+	assert q.ang2ipix_xy(np.float64(10.), np.float64(30.)) == q.ang2ipix_xy(10., 30.)
+	assert q.face_number(np.array([10.]), np.array([30.])) == q.face_number(10., 30.)
+	with pytest.raises(TypeError):
+		q.ang2ipix_xy(np.array([10., 20.]), np.array([30., 40.])) # not scalar-like
+
 def test_ang2ipix_dec_below_range():
 	'''
 	Test that out of range dec values (< -90) are caught.
