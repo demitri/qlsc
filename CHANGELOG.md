@@ -4,6 +4,26 @@
 
 ### New
 
+* First-class astropy support. Every method that takes an ra,dec pair now also accepts
+  an `astropy.coordinates.SkyCoord` (scalar or array) in place of the pair — passed as
+  the *first* of the two parameters with the second left unset, e.g. `ang2ipix(coord)`,
+  `index.radial_query(coord, radius=1*u.deg)`, `point_in_ellipse(coord, ra_cen=center)`
+  — as well as through `points=` on `ang2ipix`/`add_points` and as the `polygon=`
+  vertices of `point_in_polygon`/`polygon_query`. A bare coordinate frame object works
+  the same way. **The coordinate is transformed to ICRS**, the frame every ra,dec value
+  in this package is taken to be in: a galactic or FK5 coordinate is converted, not
+  reinterpreted. Giving both a SkyCoord and the second angle raises rather than
+  silently discarding one of them. Individual angles may also be given as
+  `astropy.units.Quantity` values, as radii already could.
+* `return_skycoord=True` on `QLSC.ipix2ang`, `ipix2ang_center`, `xy2ang`,
+  `ipix2polygon`, and on `QLSCIndex.radial_query`, `polygon_query`, `ellipse_query`,
+  `find_by_key` returns an ICRS `SkyCoord` instead of degrees (scalar in, scalar out;
+  query matches always come back as an array SkyCoord, never squeezed). Combined with
+  `return_key` or `return_distance` a query returns an `astropy.table.QTable` with a
+  `coord` column holding the SkyCoord plus the requested `key`/`distance` columns,
+  since a SkyCoord cannot be a field of a `numpy.recarray`. No default return value
+  changes, and asking for a SkyCoord without astropy installed raises a clear
+  `ImportError` — astropy remains an optional dependency.
 * `QLSC.ipix2ang`, `QLSC.ipix2ang_center`, and `QLSC.ipix2xy` accept an array-like of
   ipix values (NumPy array, list, or tuple) in addition to a single value, following
   the same scalar/array convention as `ang2ipix`: a scalar (or 0-d array) returns
