@@ -193,6 +193,63 @@
   anything in it then raises an `ImportError` naming the package and chaining the
   original import error.
 
+### Documentation
+
+* The documentation is now a structured site rather than an API dump: a landing
+  page, a "Getting Started" tutorial, a four-part user guide (the scheme, depth and
+  resolution, coordinates and conversions, indexing and searching), and six worked
+  examples with science framing. Every code block in the new pages was run and its
+  real output pasted; the catalogs are seeded so the numbers reproduce.
+* The worked examples cover a transient cone search (with a measured comparison
+  against a brute-force NumPy scan), bright-star avoidance against the Yale Bright
+  Star Catalogue fetched from VizieR, survey-footprint membership with
+  `polygon_query` including concave footprints, elliptical apertures on an inclined
+  galaxy disc, pixel-level region growing with `ipix_neighbors`, and sky density
+  maps built from pixel counts.
+* Documented, with measurements, that the pixels are **not** equal-area: Q3C uses the
+  tangent-plane cube rather than the area-preserving Chan & O'Neill transform, so a
+  pixel's solid angle is `dx dy (1 + x² + y²)^(-3/2)` and varies by up to a factor of
+  3^(3/2) ≈ 5.196 between the centre of a cube face and a cube vertex. Region queries
+  are unaffected — they filter candidates exactly — but converting pixel counts to
+  surface densities is not: use `QLSC.ipix_area` for a pixel's own area and
+  `4*pi/nbins` only where the mean is genuinely what is wanted. (The measurements
+  that established this are what prompted the `ipix_area` fix and the README
+  correction listed above; the documentation and the README now quote the same
+  numbers and cross-reference rather than duplicate.)
+* Documented that `QLSC.ang2ipix_xy` returns face coordinates on **half** the scale
+  used by `ipix2xy`, `xy2ang` and `xy2ipix` (−0.5 to +0.5 across a face rather than
+  −1 to +1), and that `qlsc.sindist` returns the haversine sin²(d/2), not the sine
+  of the separation — the finding that prompted the docstring correction listed
+  above.
+* `docs/generate_figures.py` generates every figure in `docs/_static/figures` from
+  seeded synthetic catalogs; none are hand-made. It needs matplotlib and astropy,
+  neither of which is required to build the documentation.
+* `docs/check_example_outputs.py` re-runs the documentation's example code and diffs
+  it against the output the pages show, so the claim that every output block was
+  really produced by the code above it is enforced rather than merely asserted. It
+  covers 77 code/output pairs across twelve pages. Blocks that cannot run
+  hermetically are marked in the page source with the reason (`run-only` for
+  wall-clock timings, `setup` for a block whose output is not shown, and the
+  page-level `needs-network` for the VizieR fetch, which runs only under
+  `--network`). Its docstring states its blind spots — unpaired code blocks, numbers
+  quoted in prose, and the figures, all of which stay a manual duty. Running it for
+  the first time found seventeen output blocks whose leading whitespace had been
+  lost in transcription; those are now the real output. `docs/README.md` documents
+  how to build, check, and regenerate the documentation.
+* The API reference covers this release's additions: `crossmatch`, `QLSC.coverage`
+  and `QLSCIndex.coverage`, the batch form of `radial_query` (`target_index`,
+  `return_counts`), `find_by_key`, `return_skycoord` and SkyCoord acceptance,
+  `GeoQLSC`/`GeoQLSCIndex`/`wrap_longitude`, `qlsc.cornish_interop` (with a note
+  that it needs the optional `cornish` package), and
+  `qlsc.q3c.ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS`. The user guide covers batch queries,
+  key lookup, astropy interoperability and the sky-coverage export with checked
+  examples; dedicated worked-example pages for cross-matching, coverage and the
+  geographic classes are still to come and are flagged as such in the examples index.
+* Added `.readthedocs.yaml`, which Read the Docs now requires; without it the build
+  has no configuration file to read.
+* Fixed a malformed inline literal in the `QLSCIndex` docstring (``` ``file://` ```)
+  that produced a docutils warning on every documentation build.
+
 ### Development
 
 * `scripts/sync_q3c.py` mechanizes the vendored-Q3C upstream sync documented in

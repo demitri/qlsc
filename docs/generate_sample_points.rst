@@ -36,3 +36,10 @@ which produces:
 
 .. image:: _static/sunflower_n_1000.png
     :align: center
+
+The points are deterministic — the same ``n`` always gives the same points — which
+makes them useful for reproducible examples and tests. They are *evenly spaced*
+rather than *random*, so they are the wrong thing to use when you want a sample
+with realistic clustering or Poisson statistics; for those, draw right ascension
+uniformly and declination as ``arcsin`` of a uniform variate, as the
+:doc:`worked examples <examples/index>` do.

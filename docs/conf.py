@@ -72,13 +72,25 @@ intersphinx_mapping = {
 
 todo_include_todos = True
 
+# "qlsc.cornish_interop" annotates its return types as ASTPolygon, ASTMoc and
+# ASTRegion, which live in "cornish" - an optional dependency that is deliberately
+# NOT installed for the documentation build (it needs Starlink AST). The module
+# imports cornish lazily, so those names are string annotations that autodoc cannot
+# resolve here, and it says so once per function. The types are named in the prose
+# and linked to the cornish project, so the only thing lost is a hyperlink that
+# could not be made anyway. Nothing else is suppressed.
+suppress_warnings = ['sphinx_autodoc_typehints.forward_reference']
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+# The scripts and the README are kept beside the pages they serve, but they are
+# tooling, not documents; excluding them keeps Sphinx from reporting them.
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store',
+					'generate_figures.py', 'check_example_outputs.py', 'README.md']
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -87,6 +99,20 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # a list of builtin themes.
 #
 html_theme = 'alabaster'
+
+# The sidebar carries the whole table of contents rather than only the current
+# page's section list, so every part of the documentation is one click away.
+html_theme_options = {
+	'description'     : 'The quadrilateralized spherical cube for Python: sphere segmentation and catalog cone searches.',
+	'github_user'     : 'demitri',
+	'github_repo'     : 'qlsc',
+	'github_button'   : True,
+	'github_type'     : 'star',
+	'fixed_sidebar'   : True,
+	'sidebar_collapse': False,
+	'page_width'      : '1080px',
+	'sidebar_width'   : '250px',
+}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
