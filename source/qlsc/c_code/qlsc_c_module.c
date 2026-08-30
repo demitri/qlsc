@@ -29,10 +29,11 @@ void *get_item_pointer(int ndim, void *buf, Py_ssize_t *strides,
 // TODO: submit this as a pull request to include in q3cube.c ?
 void free_q3c1(struct q3c_prm *hprm)
 {
-	free(hprm->xbits);
-	free(hprm->ybits);
-	free(hprm->xbits1);
-	free(hprm->ybits1);
+	// the struct members are declared const in q3c v2.0.1+; they were malloc'd via init_q3c1
+	free((void *)hprm->xbits);
+	free((void *)hprm->ybits);
+	free((void *)hprm->xbits1);
+	free((void *)hprm->ybits1);
 	free(hprm);
 }
 
@@ -50,7 +51,9 @@ qlsc_init_q3c1(PyObject *self, PyObject *args, PyObject *kwargs)
 	PyObject *returnValue = NULL;
 	
 	// dynamically allocate memory for this as it will be kept around
-	struct q3c_prm *hprm = malloc(sizeof (struct q3c_prm));
+	// (q3c v2.0.1+ initializes into a q3c_prm_write, which has the same
+	// layout as q3c_prm without the const qualifiers)
+	struct q3c_prm_write *hprm = malloc(sizeof (struct q3c_prm_write));
 	q3c_ipix_t nside = 0; // no default value
 	
 	// keyword list
@@ -782,7 +785,12 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 
 	// generate the full, partials arrays
-	q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls_padded, partials_padded);
+	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
+	if (q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls_padded, partials_padded))
+	{
+		PyErr_SetString(PyExc_RuntimeError, "q3c_radial_query: too many ipix ranges. This is an internal error in the embedded Q3C code; please report it (with the ra/dec/radius values used) at https://github.com/segasai/q3c/issues .");
+		return NULL;
+	}
 
 	// q3c_radial_query() calls array_filler() which adds (-1,1)
 	// pairs to fill out the arrays. We don't need them here, so we'll
@@ -882,8 +890,13 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 	
 	//PySys_WriteStdout("q3c_radial_query called\n");
-	q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls, partials);
-	
+	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
+	if (q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls, partials))
+	{
+		PyErr_SetString(PyExc_RuntimeError, "q3c_radial_query: too many ipix ranges. This is an internal error in the embedded Q3C code; please report it (with the ra/dec/radius values used) at https://github.com/segasai/q3c/issues .");
+		return NULL;
+	}
+
 	// cache values
 	ra_cen_buf = ra_cen;
 	dec_cen_buf = dec_cen;

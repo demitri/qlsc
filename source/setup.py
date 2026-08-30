@@ -41,7 +41,8 @@ data_files = []
 include_dirs = ['q3c', np.get_include()]		# -I directories
 library_dirs = []			# -L directories
 libraries = []		# libraries to include
-define_macros = [('Q3C_VERSION', '"2.0.0"'), # equivalent of a bare #define in C source
+define_macros = [('Q3C_VERSION', '"2.0.5"'), # equivalent of a bare #define in C source
+				 ('Q3C_STANDALONE', None), # compile the embedded Q3C code without PostgreSQL
 				 ('NPY_NO_DEPRECATED_API', 'NPY_1_18_API_VERSION')] # warn if using a deprecated NumPy API, defined in numpy/numpyconfig.h
 extra_link_args = [] # e.g. ['-framework', 'OpenGL', '-framework', 'GLUT'])
 

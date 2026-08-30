@@ -169,7 +169,9 @@ class QLSC:
 
 		See the method :py:func:`ipix2ang_center` to return the center of the pixel.
 
-		This method matches that of the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
+		Note: the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_ originally returned
+		the corner of the pixel, but as of Q3C v2.0.1 it returns the center; this method
+		preserves the corner behavior.
 
 		:param ipix: ipix number
 		:returns: ra,dec in degrees as a tuple of the lower left corner of the pixel
@@ -181,14 +183,18 @@ class QLSC:
 		if not (0 <= ipix < self.nbins):
 			raise ValueError(f"The ipix number is out of bounds for this scheme; range: [0,{self.nbins-1}].")
 
-		return q3c.ipix2ang(self._hprm, ipix)
+		# The C-level q3c.ipix2ang returns the pixel center as of Q3C v2.0.1,
+		# so compute the corner from the face coordinates instead.
+		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
+		return self.xy2ang(facenum=facenum, x=x, y=y)
 
 	def ipix2ang_center(self, ipix:int) -> Tuple[float, float]:
 		'''
 		Convert an ipix number to the ra,dec coordinate of the center of the pixel, in degrees.
 
-		See the method :py:func:`ipix2ang` to return the "lower left" corner of the pixel
-		which matches what is returned by the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
+		See the method :py:func:`ipix2ang` to return the "lower left" corner of the pixel.
+		(As of Q3C v2.0.1, the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_
+		returns the pixel center, matching this method.)
 
 		The pixel "center" here is defined in the x,y coordinates;
 		the point projected on the sphere is the one returned.
