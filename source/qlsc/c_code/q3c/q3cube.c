@@ -2462,14 +2462,17 @@ int q3c_radial_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3
         /* For this case the maximal increase of resolution of 2^res_depth
          * for each axis
          */
-        /* Local qlsc patch (upstream q3c issue #51): the intended value is the
-         * number of available doublings, log2(nside / n0), not the ratio itself.
-         * For tiny query regions the ratio exceeds the true remaining depth and
-         * the subdivision below overflows (2 * 2^30 in a signed int), producing
-         * garbage coordinates. Behavior is unchanged whenever the ratio >= 16,
-         * since both values are then capped to Q3C_MAX_DEPTH.
+        /* Local qlsc patch (upstream q3c issue #51): res_depth counts
+         * classification passes, of which only the first res_depth - 1 subdivide,
+         * so the safe value is log2(nside / n0) + 1, not the raw ratio. For tiny
+         * query regions the ratio exceeds the true remaining depth and the
+         * subdivision below overflows (2 * 2^30 in a signed int), producing
+         * garbage coordinates; and at least one classification pass must always
+         * run, or the squares' status fields are read uninitialized. Behavior is
+         * unchanged whenever the ratio >= 8, since both values are then capped
+         * to Q3C_MAX_DEPTH.
          */
-        res_depth = 0;
+        res_depth = 1;
         for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
         {
             res_depth++;
@@ -2643,14 +2646,17 @@ int q3c_poly_query(struct q3c_prm *hprm, q3c_poly *qp, q3c_ipix_t *out_ipix_arr_
          * for each axis
          */
 
-        /* Local qlsc patch (upstream q3c issue #51): the intended value is the
-         * number of available doublings, log2(nside / n0), not the ratio itself.
-         * For tiny query regions the ratio exceeds the true remaining depth and
-         * the subdivision below overflows (2 * 2^30 in a signed int), producing
-         * garbage coordinates. Behavior is unchanged whenever the ratio >= 16,
-         * since both values are then capped to Q3C_MAX_DEPTH.
+        /* Local qlsc patch (upstream q3c issue #51): res_depth counts
+         * classification passes, of which only the first res_depth - 1 subdivide,
+         * so the safe value is log2(nside / n0) + 1, not the raw ratio. For tiny
+         * query regions the ratio exceeds the true remaining depth and the
+         * subdivision below overflows (2 * 2^30 in a signed int), producing
+         * garbage coordinates; and at least one classification pass must always
+         * run, or the squares' status fields are read uninitialized. Behavior is
+         * unchanged whenever the ratio >= 8, since both values are then capped
+         * to Q3C_MAX_DEPTH.
          */
-        res_depth = 0;
+        res_depth = 1;
         for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
         {
             res_depth++;
@@ -2877,14 +2883,17 @@ int q3c_ellipse_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q
          * for each axis
          */
 
-        /* Local qlsc patch (upstream q3c issue #51): the intended value is the
-         * number of available doublings, log2(nside / n0), not the ratio itself.
-         * For tiny query regions the ratio exceeds the true remaining depth and
-         * the subdivision below overflows (2 * 2^30 in a signed int), producing
-         * garbage coordinates. Behavior is unchanged whenever the ratio >= 16,
-         * since both values are then capped to Q3C_MAX_DEPTH.
+        /* Local qlsc patch (upstream q3c issue #51): res_depth counts
+         * classification passes, of which only the first res_depth - 1 subdivide,
+         * so the safe value is log2(nside / n0) + 1, not the raw ratio. For tiny
+         * query regions the ratio exceeds the true remaining depth and the
+         * subdivision below overflows (2 * 2^30 in a signed int), producing
+         * garbage coordinates; and at least one classification pass must always
+         * run, or the squares' status fields are read uninitialized. Behavior is
+         * unchanged whenever the ratio >= 8, since both values are then capped
+         * to Q3C_MAX_DEPTH.
          */
-        res_depth = 0;
+        res_depth = 1;
         for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
         {
             res_depth++;

@@ -272,18 +272,28 @@ qlsc_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
 			for (int i=0; i < n; i++) {
 				ra = *(double*)((char*)ra_buffer + i * ra_stride);
 				dec = *(double*)((char*)dec_buffer + i * dec_stride);
-				//PySys_WriteStdout("ra,dec = (%f,%f)\n", ra, dec);
+				// non-finite values reach an undefined float->int conversion (upstream q3c issue #52)
+				if (!isfinite(ra) || !isfinite(dec)) {
+					PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' arrays must contain only finite values.");
+					free(ipix_array);
+					goto ang2ipix_array_early_exit;
+				}
 				q3c_ang2ipix(hprm, ra, dec, &ipix_array[i]);
 			}
-			
+
 		} else {
 			// standard C array, contiguous data
-			
+
 			ipix_array = malloc(n * sizeof(q3c_ipix_t)); // allocate the ipix values array
-			
+
 			for (int i=0; i < n; i++) {
+				// non-finite values reach an undefined float->int conversion (upstream q3c issue #52)
+				if (!isfinite(ra_buffer[i]) || !isfinite(dec_buffer[i])) {
+					PyErr_SetString(PyExc_ValueError, "The 'ra' and 'dec' arrays must contain only finite values.");
+					free(ipix_array);
+					goto ang2ipix_array_early_exit;
+				}
 				q3c_ang2ipix(hprm, ra_buffer[i], dec_buffer[i], &ipix_array[i]);
-				//PySys_WriteStdout("C ra,dec = (%f,%f) -> %lld\n", ra_buffer[i], dec_buffer[i], ipix_array[i]);
 			}
 		}
 
