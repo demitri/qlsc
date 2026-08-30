@@ -39,6 +39,15 @@ sqlite3.register_adapter(np.int64, int)
 
 logger = logging.getLogger("qlsc")
 
+def _canonical_position(ra:float, dec:float) -> Tuple[float, float]:
+	'''
+	Reduce equivalent spherical coordinate representations of the same point to a single form:
+	ra is periodic in 360 degrees, and at the poles the ra value is irrelevant.
+	'''
+	if abs(dec) == 90:
+		return (0.0, dec)
+	return (ra % 360.0, dec)
+
 class QLSC:
 	'''
 	A class that describes a quadrilaterized spherical cube (QLSC).
@@ -917,10 +926,23 @@ class QLSCIndex:
 		# some queries at small nside values - upstream Q3C is only ever exercised at
 		# depth 30. Always query at depth 30 and, if the index is at a lower depth,
 		# shift the ranges down to the index's resolution. The resulting over-coverage
-		# is removed by the exact sindist filter applied to every candidate row below.
+		# is removed by the exact filter applied to every candidate row below.
 		if self._query_qlsc is None:
 			self._query_qlsc = self.qlsc if self.qlsc.depth == 30 else QLSC(depth=30)
 		fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, radius)
+
+		# For zero and very small (< ~1e-7 deg) radii, q3c produces no ranges at all at
+		# some sky positions, and at seam/pole positions its ranges can omit the pixels
+		# holding equivalent coordinate representations (e.g. a point stored as ra=360
+		# queried as ra=0). Search with at least a small positive radius, growing it if
+		# q3c still returns nothing. The exact filter below still applies the radius
+		# actually requested, so the wider search only costs a few extra candidate rows.
+		search_radius = max(radius, 1e-6)
+		if search_radius != radius:
+			fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, search_radius)
+		while len(fulls) + len(partials) == 0 and search_radius < 1.0:
+			search_radius = max(search_radius * 10, 1e-6)
+			fulls, partials = q3c.radial_query(self._query_qlsc._hprm, center_ra, center_dec, search_radius)
 
 		# number of ipix bits to shift from depth 30 down to the index depth
 		k = 2 * (30 - self.qlsc.depth)
@@ -935,16 +957,9 @@ class QLSCIndex:
 				max_ipix = (max_ipix + (1 << k) - 1) >> k # round up so partially covered pixels are kept
 			ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
 
-		if len(ipix_statements) == 0:
-			# At some sky positions q3c_radial_query produces no ranges at all for zero or
-			# very small (< ~1e-7 deg) radii, even though matching points may be indexed.
-			if radius == 0:
-				# only exactly coincident points can match, and they share the center's ipix
-				ipix_statements.append(f"(ipix={self.qlsc.ang2ipix(center_ra, center_dec)})")
-			# else: fall through with no WHERE constraint below - scan every row; the
-			# exact sindist filter preserves correctness (such radii span too many
-			# depth-30 pixels for a neighboring-pixel fallback to be complete)
-
+		# If the retries above produced no ranges (which should not happen), fall
+		# through with no WHERE constraint below and scan every row rather than
+		# silently missing points; the exact filter preserves correctness.
 		if ipix_statements:
 			wheres = "({0})".format(" OR ".join(ipix_statements))
 			query = f"SELECT ra,dec,key FROM {self.database_tablename} WHERE {wheres}"
@@ -952,14 +967,22 @@ class QLSCIndex:
 			query = f"SELECT ra,dec,key FROM {self.database_tablename}"
 
 		cone_radius = pow(sin(deg2rad(radius)/2.), 2)
+		center_canonical = _canonical_position(center_ra, center_dec)
 
 		connection = self._new_db_connection()
 
 		with contextlib.closing(connection.cursor()) as cursor:
 			try:
 				for ra,dec,key in cursor.execute(query):
-					# filter out points outside radius (inclusive, so e.g. radius=180 includes an antipodal point)
-					if sindist(ra, dec, center_ra, center_dec) <= cone_radius:
+					# Filter out points outside radius (inclusive, so e.g. radius=180 includes
+					# an antipodal point). For radius=0 compare canonical representations:
+					# equivalent coordinates of the same point (e.g. ra=360 vs ra=0, or any
+					# ra at a pole) leave tiny nonzero floating point residuals in sindist.
+					if radius == 0:
+						is_match = _canonical_position(ra, dec) == center_canonical
+					else:
+						is_match = sindist(ra, dec, center_ra, center_dec) <= cone_radius
+					if is_match:
 						if return_key:
 							match_ra.append(ra)
 							match_dec.append(dec)

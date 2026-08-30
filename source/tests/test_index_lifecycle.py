@@ -82,6 +82,23 @@ def test_radial_query_zero_radius(ra, dec):
 	matches = idx.radial_query(ra=ra + 0.5, dec=dec, radius=0., return_key=True)
 	assert len(matches) == 0
 
+# stored representation vs equivalent query representation of the same point
+@pytest.mark.parametrize("stored, query", [
+	((360., 0.), (0., 0.)),     # ra seam
+	((-360., 20.), (0., 20.)),  # ra seam, negative
+	((180., 90.), (0., 90.)),   # north pole: ra is irrelevant
+	((0., -90.), (37., -90.))   # south pole
+])
+def test_radial_query_zero_radius_equivalent_coordinates(stored, query):
+	'''
+	Test that a zero-radius query matches a stored point given in an
+	equivalent coordinate representation (ra periodicity, poles).
+	'''
+	idx = QLSCIndex(qlsc=QLSC(depth=30))
+	idx.add_point(*stored)
+	matches = idx.radial_query(ra=query[0], dec=query[1], radius=0.)
+	assert matches.shape == (2,), f"stored {stored} not found by zero-radius query at {query}"
+
 @pytest.mark.parametrize("ra, dec", [(10., 20.), (0., 0.), (12., 34.)])
 def test_radial_query_tiny_radius(ra, dec):
 	'''
