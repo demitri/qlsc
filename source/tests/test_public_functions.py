@@ -47,3 +47,26 @@ def test_xy2facenum(x, y, facenum, expected):
 	Test the qlsc.xy2facenum wrapper.
 	'''
 	assert expected == xy2facenum(x, y, facenum)
+
+@pytest.mark.parametrize("facenum", [-1, 6, 99])
+def test_xy2facenum_invalid_face(facenum):
+	'''
+	Test that out-of-range face numbers raise a ValueError.
+	'''
+	with pytest.raises(ValueError):
+		xy2facenum(0., 0., facenum)
+
+def test_embedded_q3c_version():
+	'''
+	Test that the embedded Q3C version is observable and pinned; a mismatch here
+	means a Q3C sync forgot to update Q3C_VERSION in setup.py (or vice versa).
+	'''
+	from qlsc import q3c
+	assert q3c.version() == "2.0.5"
+
+def test_range_overflow_error_type():
+	'''
+	Test that the dedicated overflow exception type exists and subclasses RuntimeError.
+	'''
+	from qlsc import q3c
+	assert issubclass(q3c.RangeOverflowError, RuntimeError)

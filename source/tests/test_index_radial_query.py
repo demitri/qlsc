@@ -20,7 +20,10 @@ def test_radial_query():
 	idx.add_points(points=sample_points)
 	
 	matches = idx.radial_query(ra=12, dec=-33, radius=2000/3600)
-	
+
+	# the order in which matches are returned is not part of the contract
+	matches = matches[np.lexsort((matches[:,1], matches[:,0]))]
+
 	expected_matches = np.array([[ 11.9470522717, -32.8642186861],
                                  [ 12.0478643726, -33.301040754 ],
                                  [ 12.2109817407, -33.0308141307],
@@ -34,6 +37,7 @@ def test_radial_query():
                                  [ 12.3117938416, -33.4684691438],
                                  [ 12.3740991356, -32.7614136187]])
 
-	
+	expected_matches = expected_matches[np.lexsort((expected_matches[:,1], expected_matches[:,0]))]
+
 	assert_allclose(matches, expected_matches, err_msg="expected matches not found")
 

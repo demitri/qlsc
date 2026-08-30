@@ -37,4 +37,6 @@ def xy2facenum(x:float, y:float, facenum:int) -> int:
 	:param facenum: the face number that is the reference for the provided (x,y)
 	:returns: the face number for the given (x,y) coordinates
 	'''
+	if facenum not in (0, 1, 2, 3, 4, 5):
+		raise ValueError(f"The face number must be an integer in [0,5]; was given '{facenum}'.")
 	return q3c.xy2facenum(x, y, facenum)

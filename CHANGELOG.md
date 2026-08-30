@@ -1,0 +1,60 @@
+# Changelog
+
+## 1.1.0 (unreleased)
+
+### Breaking changes
+
+* **`QLSC.ipix2ang` now returns the *center* of the pixel** rather than the "lower left"
+  corner, matching the contract change made in the Q3C PostgreSQL plugin v2.0.1.
+  `ipix2ang_center` is now a synonym; pixel corners remain available via `ipix2xy`
+  and `ipix2polygon`. No error is raised — the returned values are simply different —
+  so code depending on corner semantics must switch to `ipix2xy`/`xy2ang`.
+* `QLSCIndex.radial_query` now validates its radius to the range [0,180] degrees
+  (`ValueError` otherwise), and the radius comparison is inclusive: a radius of 180°
+  includes an exactly antipodal point, and a radius of 0 returns exactly coincident
+  points (including equivalent coordinate representations, e.g. ra=360 vs ra=0).
+* Operations on a closed `QLSCIndex` raise `RuntimeError` instead of silently
+  operating on a fresh, empty database.
+
+### New
+
+* `QLSC.point_in_polygon(ra, dec, polygon)`: spherical point-in-polygon tests
+  (polygons up to 100 vertices, must fit within a single face projection).
+* `QLSCIndex.close()` and context-manager support (`with QLSCIndex(...) as index:`).
+* `qlsc.q3c.version()` returns the version of the embedded Q3C code.
+* `qlsc.q3c.RangeOverflowError` (a `RuntimeError` subclass) is raised on internal
+  Q3C range-capacity overflows instead of a plain `RuntimeError`.
+
+### Fixed
+
+* Embedded Q3C code updated from v2.0.0 to v2.0.5, picking up the upstream fix for
+  cone searches with radii just below 35° that silently missed matches in some areas
+  of the sky (and could crash), plus input-hardening fixes. The embedded copy now
+  compiles via upstream's `Q3C_STANDALONE` (one local patch: an undersized buffer in
+  `q3c_poly.c` reachable through `point_in_polygon`; see CLAUDE.md).
+* The module-level `qlsc.distance`, `qlsc.sindist`, and `qlsc.xy2facenum` wrappers
+  raised `NameError` when called; `xy2facenum` was additionally never exported by the
+  C module. All three now work, and `xy2facenum` validates its face number.
+* Radial queries on indices below depth 30 could silently return zero matches
+  (degenerate Q3C ranges at small nside); queries now always search at depth 30 and
+  map ranges down to the index depth.
+* Radial queries with zero or very small radii could silently miss indexed points at
+  some sky positions; the candidate search now widens its radius as needed.
+* `QLSC.ang2ipix` now converts non-double input arrays as documented instead of
+  raising `TypeError`.
+* `QLSCIndex.add_points` stored un-normalized coordinates when any `dec` was outside
+  [-90,90] (the normalized values were computed and discarded), and the `ra=`/`dec=`
+  argument form raised a spurious `ValueError` in that case.
+* Opening an existing index file created at a different depth than the provided
+  `QLSC` raised `NameError`; opening a corrupt or locked index file now raises a
+  clear error instead of being misreported as "not a QLSC index".
+* `QLSCIndex.number_of_points` now uses `COUNT(*)` (previously `max(rowid)`, which
+  returned `None` for an empty index).
+* A per-call memory leak in the C radial-query wrapper (two leaked array references
+  per call) and several connection leaks on error paths.
+* `ipix2xy` computed the face number in floating point, placing ipix values near
+  face boundaries on the wrong face at depths ≥ 26.
+
+## 1.0.6
+
+Baseline release ([PyPI](https://pypi.org/project/qlsc/)).

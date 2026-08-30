@@ -13,6 +13,35 @@ def test_context_manager():
 		matches = idx.radial_query(ra=12., dec=34., radius=0.1)
 		assert len(matches) == 2 # single match returned as squeezed (ra,dec)
 
+def test_number_of_points_empty_index():
+	'''
+	Test that number_of_points is 0 for an empty index (not None).
+	'''
+	idx = QLSCIndex(qlsc=QLSC(depth=30))
+	assert idx.number_of_points == 0
+	idx.add_point(12., 34.)
+	assert idx.number_of_points == 1
+
+def test_add_points_normalizes_stored_coordinates():
+	'''
+	Test that add_points normalizes out-of-range coordinates both for the ipix
+	calculation and for the STORED ra,dec values.
+
+	Regression test: the normalized values were previously computed and discarded,
+	storing e.g. dec=100 verbatim; and the ra=/dec= argument form raised a spurious
+	ValueError for out-of-range input.
+	'''
+	for kwargs in ({"points": np.array([[10., 100.], [20., 30.]])},
+	               {"ra": np.array([10., 20.]), "dec": np.array([100., 30.])}):
+		idx = QLSCIndex(qlsc=QLSC(depth=30))
+		idx.add_points(**kwargs)
+		# (10,100) normalizes to (190,80)
+		matches = idx.radial_query(ra=190., dec=80., radius=0.5)
+		assert matches.shape == (2,)
+		ra, dec = matches
+		assert -90 <= dec <= 90, f"stored dec value {dec} was not normalized"
+		assert (ra, dec) == (190., 80.)
+
 def test_close_is_idempotent():
 	'''
 	Test that close() can be called more than once.

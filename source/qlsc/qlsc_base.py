@@ -30,7 +30,7 @@ except ImportError:
 
 # functions defined in "qlsc_c_module.c" as named in the array "qlsc_methods" are in the qlsc.q3c namespace
 from . import q3c
-from .q3c import radial_query_it, sindist
+from .q3c import sindist
 
 from .utilities import _normalize_ang
 
@@ -637,6 +637,8 @@ class QLSCIndex:
 		try:
 			with contextlib.closing(connection.cursor()) as cursor:
 				metadata = cursor.execute("SELECT depth, index_name, index_description FROM qlsc_metadata").fetchone()
+				if metadata is None:
+					raise RuntimeError(f"The file at '{self.db_filepath}' has a QLSC index metadata table but no metadata row; the file appears to be corrupted.")
 				if self.qlsc.depth != metadata["depth"]:
 					self.qlsc = QLSC(depth=metadata["depth"])
 				self.name = metadata["index_name"]
@@ -645,6 +647,9 @@ class QLSCIndex:
 		except sqlite3.OperationalError as e:
 			if "no such table" in str(e):
 				return False
+			# any other database error (locked, malformed, not a database, ...) is a
+			# real problem, not evidence that this isn't a QLSC index - surface it
+			raise
 
 	def close(self):
 		'''
@@ -781,7 +786,12 @@ class QLSCIndex:
 		# without this check, an operation on a closed in-memory index would
 		# silently open a brand new, empty database
 		self._ensure_open()
-		return self.memory_db_connection or sqlite3.connect(self.db_filepath, timeout=20)
+		if self.memory_db_connection is not None:
+			return self.memory_db_connection
+		connection = sqlite3.connect(self.db_filepath, timeout=20)
+		# match the in-memory connection settings (row factory, autocommit)
+		self._configure_db_connection(connection)
+		return connection
 
 	def add_point(self, ra:float=None, dec:float=None, key:str=None):
 		'''
@@ -873,10 +883,14 @@ class QLSCIndex:
 		if points is not None:
 			# break it down
 			ra = points[:,0]
-			dec= points[:,1]
+			dec = points[:,1]
+
+		ra = np.asarray(ra, dtype=np.double)
+		dec = np.asarray(dec, dtype=np.double)
 
 		if not ((-90 <= dec).all() and (dec <= 90).all()):
-			points = _normalize_ang(points=points, copy=True)
+			# normalize BOTH the ipix calculation inputs and the stored coordinates
+			ra, dec = _normalize_ang(ra=ra, dec=dec, copy=True)
 
 		connection = None
 		try:
@@ -898,8 +912,8 @@ class QLSCIndex:
 
 				cursor.execute("COMMIT")
 
-		except sqlite3.IntegrityError:
-			raise NotImplementedError()
+		except sqlite3.IntegrityError as e:
+			raise NotImplementedError(f"Unexpected integrity error while adding points: {e}") from e
 		finally:
 			if connection is not None and not self._is_in_memory_db():
 				connection.close()
@@ -912,7 +926,7 @@ class QLSCIndex:
 
 		try:
 			with contextlib.closing(connection.cursor()) as cursor:
-				cursor.execute(f"SELECT max(rowid) FROM {self.database_tablename}")
+				cursor.execute(f"SELECT count(*) FROM {self.database_tablename}")
 				return cursor.fetchone()[0]
 		finally:
 			if not self._is_in_memory_db():
@@ -943,18 +957,24 @@ class QLSCIndex:
 		if self._query_qlsc is None:
 			self._query_qlsc = self.qlsc if self.qlsc.depth == 30 else QLSC(depth=30)
 
-		search_radius = max(radius, 1e-6)
+		initial_search_radius = max(radius, 1e-6)
+		search_radius = initial_search_radius
 		while True:
 			try:
 				fulls, partials = q3c.radial_query(self._query_qlsc._hprm, ra, dec, search_radius)
-			except RuntimeError:
+			except q3c.RangeOverflowError:
 				if search_radius >= 180.0:
 					raise # even a whole-sphere search failed
 				search_radius = min(search_radius * 10, 180.0)
 				continue
 			if len(fulls) + len(partials) > 0 or search_radius >= 180.0:
-				return fulls, partials
+				break
 			search_radius = min(search_radius * 10, 180.0)
+
+		if search_radius > initial_search_radius:
+			logger.warning(f"The radial query at (ra={ra}, dec={dec}) with radius={radius} deg required widening the candidate search radius to {search_radius} deg; results are correct, but the query may be slower than usual.")
+
+		return fulls, partials
 
 	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False) -> np.recarray:
 		'''
@@ -1000,51 +1020,61 @@ class QLSCIndex:
 		#logger.debug(f"{center_ra=}, {center_dec=}, {radius=}")
 		#logger.debug(f"{fulls=}, {partials=}")
 
-		ipix_statements = list()
+		ranges = list()
 		for min_ipix,max_ipix in np.vstack((fulls, partials)):
 			if k > 0:
 				min_ipix = min_ipix >> k
 				max_ipix = (max_ipix + (1 << k) - 1) >> k # round up so partially covered pixels are kept
-			ipix_statements.append(f"(ipix>={min_ipix} AND ipix<{max_ipix})")
+			if min_ipix < max_ipix: # drop empty [a,a) ranges
+				ranges.append([int(min_ipix), int(max_ipix)])
 
-		# If the retries above produced no ranges (which should not happen), fall
-		# through with no WHERE constraint below and scan every row rather than
-		# silently missing points; the exact filter preserves correctness.
-		if ipix_statements:
-			wheres = "({0})".format(" OR ".join(ipix_statements))
-			query = f"SELECT ra,dec,key FROM {self.database_tablename} WHERE {wheres}"
+		# merge overlapping/adjacent ranges - q3c's output contains duplicates and
+		# overlaps, especially after mapping down to lower depths
+		ranges.sort()
+		merged_ranges = list()
+		for lo,hi in ranges:
+			if merged_ranges and lo <= merged_ranges[-1][1]:
+				merged_ranges[-1][1] = max(merged_ranges[-1][1], hi)
+			else:
+				merged_ranges.append([lo, hi])
+
+		columns = "ra,dec,key" if return_key else "ra,dec"
+		if merged_ranges:
+			wheres = " OR ".join(f"(ipix>={lo} AND ipix<{hi})" for lo,hi in merged_ranges)
+			query = f"SELECT {columns} FROM {self.database_tablename} WHERE ({wheres})"
 		else:
-			query = f"SELECT ra,dec,key FROM {self.database_tablename}"
+			# If the candidate search produced no usable ranges (which should not happen),
+			# scan every row rather than silently missing points; the exact filter
+			# below preserves correctness.
+			logger.warning(f"The radial query at (ra={center_ra}, dec={center_dec}) with radius={radius} deg produced no candidate ipix ranges; falling back to scanning the entire index.")
+			query = f"SELECT {columns} FROM {self.database_tablename}"
 
 		cone_radius = pow(sin(deg2rad(radius)/2.), 2)
 		center_canonical = _canonical_position(center_ra, center_dec)
 
 		connection = self._new_db_connection()
-
-		with contextlib.closing(connection.cursor()) as cursor:
-			try:
-				for ra,dec,key in cursor.execute(query):
-					# Filter out points outside radius (inclusive, so e.g. radius=180 includes
-					# an antipodal point). For radius=0 compare canonical representations:
-					# equivalent coordinates of the same point (e.g. ra=360 vs ra=0, or any
-					# ra at a pole) leave tiny nonzero floating point residuals in sindist.
-					if radius == 0:
-						is_match = _canonical_position(ra, dec) == center_canonical
-					else:
-						is_match = sindist(ra, dec, center_ra, center_dec) <= cone_radius
-					if is_match:
-						if return_key:
-							match_ra.append(ra)
-							match_dec.append(dec)
-							match_key.append(key)
-						else:
-							match_ra.append(ra)
-							match_dec.append(dec)
-			except sqlite3.OperationalError as e:
-				raise Exception(f"Error in accessing database in radial query.\n\nQuery: \"{query}\"\n\nError: {e}")
-
-		if not self.memory_db_connection:
-			connection.close()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				try:
+					for row in cursor.execute(query):
+						row_ra, row_dec = row["ra"], row["dec"]
+						# Filter out points outside radius (inclusive, so e.g. radius=180 includes
+						# an antipodal point). Canonically equal representations of the center
+						# (e.g. ra=360 vs ra=0, or any ra at a pole) always match: sindist between
+						# equivalent representations leaves tiny nonzero floating point residuals,
+						# which would otherwise exclude them for zero or near-zero radii.
+						is_match = (_canonical_position(row_ra, row_dec) == center_canonical) \
+								   or (radius > 0 and sindist(row_ra, row_dec, center_ra, center_dec) <= cone_radius)
+						if is_match:
+							match_ra.append(row_ra)
+							match_dec.append(row_dec)
+							if return_key:
+								match_key.append(row["key"])
+				except sqlite3.OperationalError as e:
+					raise RuntimeError(f"Error in accessing database in radial query.\n\nQuery: \"{query}\"\n\nError: {e}") from e
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
 
 		if return_key:
 			return np.core.records.fromarrays([match_ra, match_dec, match_key], names='ra,dec,key')

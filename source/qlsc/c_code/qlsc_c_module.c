@@ -742,7 +742,10 @@ qlsc_q3c_xy2facenum(PyObject *module, PyObject *args, PyObject *kwargs)
 	return PyLong_FromLong( (long) result );
 }
 
-// Raise a RuntimeError for a q3c_radial_query ipix range overflow,
+// The exception type raised on a q3c internal range-capacity overflow; created in PyInit_q3c.
+static PyObject *QlscRangeOverflowError = NULL;
+
+// Raise a RangeOverflowError for a q3c_radial_query ipix range overflow,
 // reporting the query values as used (i.e. after ra normalization).
 static void raise_radial_query_overflow(q3c_coord_t ra, q3c_coord_t dec, q3c_coord_t radius)
 {
@@ -751,9 +754,10 @@ static void raise_radial_query_overflow(q3c_coord_t ra, q3c_coord_t dec, q3c_coo
 	snprintf(msg, sizeof msg,
 			 "q3c_radial_query: too many ipix ranges for the query ra=%.17g, dec=%.17g, radius=%.17g "
 			 "(degrees; the ra value is normalized to [0,360]). This is an internal error in the embedded "
-			 "Q3C code; please report it with these values at https://github.com/segasai/q3c/issues .",
+			 "Q3C code (version " Q3C_VERSION "); please report it with these values at "
+			 "https://github.com/segasai/q3c/issues .",
 			 ra, dec, radius);
-	PyErr_SetString(PyExc_RuntimeError, msg);
+	PyErr_SetString(QlscRangeOverflowError, msg);
 }
 
 static PyObject *
@@ -821,14 +825,21 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	while (partials_filler_pos < max_idx && !(partials_padded[partials_filler_pos] == 1 && partials_padded[partials_filler_pos+1] == -1))
 		partials_filler_pos += 2;
 	
-	// allocate memory for the arrays
-	fulls    = malloc(fulls_filler_pos * sizeof(q3c_ipix_t));
-	partials = malloc(partials_filler_pos * sizeof(q3c_ipix_t));
+	// Allocate memory for the arrays; allocate at least one byte so that a
+	// zero-range result never hands NumPy a NULL data pointer.
+	fulls    = malloc(fulls_filler_pos    > 0 ? fulls_filler_pos    * sizeof(q3c_ipix_t) : 1);
+	partials = malloc(partials_filler_pos > 0 ? partials_filler_pos * sizeof(q3c_ipix_t) : 1);
+	if (fulls == NULL || partials == NULL) {
+		free(fulls);
+		free(partials);
+		return PyErr_NoMemory();
+	}
 
 	// copy the data since the padded arrays are on the stack and will be the wrong length
-	//void * memcpy ( void * destination, const void * source, size_t num );
-	memcpy(fulls, fulls_padded, fulls_filler_pos * sizeof(q3c_ipix_t));
-	memcpy(partials, partials_padded, partials_filler_pos * sizeof(q3c_ipix_t));
+	if (fulls_filler_pos > 0)
+		memcpy(fulls, fulls_padded, fulls_filler_pos * sizeof(q3c_ipix_t));
+	if (partials_filler_pos > 0)
+		memcpy(partials, partials_padded, partials_filler_pos * sizeof(q3c_ipix_t));
 
 	// Create NumPy arrays and return them.
 	// Since the values being returned are ipix ranges, make it a 2D array.
@@ -840,6 +851,11 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 														  dims, 		// npy_intp* dims (for 1D, could just be an int)
 														  NPY_INT64, 	// int typenum,
 														  fulls); 		// void* data
+	if (np_fulls == NULL) {
+		free(fulls);
+		free(partials);
+		return NULL;
+	}
 	PyArray_ENABLEFLAGS(np_fulls, NPY_ARRAY_OWNDATA); // set ownership of data: free when ndarray is garbage collected
 
 	dims[0] = partials_filler_pos/2;
@@ -847,10 +863,16 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 															 dims, 			// npy_intp* dims (for 1D, could just be an int)
 															 NPY_INT64, 	// int typenum,
 															 partials); 	// void* data
+	if (np_partials == NULL) {
+		Py_DECREF(np_fulls); // frees 'fulls' via OWNDATA
+		free(partials);
+		return NULL;
+	}
 	PyArray_ENABLEFLAGS(np_partials, NPY_ARRAY_OWNDATA);
 
-	// return as tuple
-	return Py_BuildValue("OO", np_fulls, np_partials);
+	// Return as tuple. "N" steals the references; "O" would leak one reference
+	// to each array per call (measured at ~890 bytes/call).
+	return Py_BuildValue("NN", np_fulls, np_partials);
 }
 
 static PyObject *
@@ -922,6 +944,15 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	invocation = 1;
 	
 	return full_flag ? PyLong_FromLongLong(fulls[iteration]) : PyLong_FromLongLong(partials[iteration]);
+}
+
+static PyObject *
+qlsc_q3c_version(PyObject *module, PyObject *noargs)
+{
+	char version[32];
+	q3c_get_version(version, sizeof version);
+	version[sizeof version - 1] = '\0'; // q3c_get_version uses strncpy, which does not guarantee termination
+	return PyUnicode_FromString(version);
 }
 
 static PyObject *
@@ -1023,6 +1054,7 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	// METH_VARARGS | METH_KEYWORDS -> f(self, args, kwargs )
 	{"init_q3c", (PyCFunction)qlsc_init_q3c1, METH_VARARGS|METH_KEYWORDS, "Initialize prm, Q3C's main structure."},
 	{"nside", (PyCFunction)qlsc_q3c_nside, METH_VARARGS, "Return the number of bins along the edge of each cube face."},
+	{"version", (PyCFunction)qlsc_q3c_version, METH_NOARGS, "Return the version of the embedded Q3C code."},
 	{"ang2ipix", (PyCFunction)qlsc_q3c_ang2ipix, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value."},
 	{"ang2ipix_xy", (PyCFunction)qlsc_q3c_ang2ipix_xy, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value, also returning (x,y) and the face number in a dictionary."},
 	{"ipix2ang", (PyCFunction)qlsc_q3c_ipix2ang, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value to ra,dec tuple."},
@@ -1057,7 +1089,20 @@ PyMODINIT_FUNC
 PyInit_q3c(void) // must be named "PyInit_" + name of extension (without package name)
 {
 	import_array(); // initialize NumPy, see: https://numpy.org/doc/stable/reference/c-api/array.html#importing-the-api
-	return PyModule_Create(&qlsc_module_definition);
+	PyObject *module = PyModule_Create(&qlsc_module_definition);
+	if (module == NULL)
+		return NULL;
+
+	// a dedicated exception type for q3c's internal range-capacity overflow, so
+	// callers can catch it without matching on a generic RuntimeError
+	QlscRangeOverflowError = PyErr_NewException("qlsc.q3c.RangeOverflowError", PyExc_RuntimeError, NULL);
+	if (QlscRangeOverflowError == NULL || PyModule_AddObject(module, "RangeOverflowError", QlscRangeOverflowError) < 0) {
+		Py_XDECREF(QlscRangeOverflowError);
+		Py_DECREF(module);
+		return NULL;
+	}
+
+	return module;
 }
 
 
