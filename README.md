@@ -11,7 +11,7 @@ Note that while this package is designed for astronomical use (it focusses on ri
 Author: Demitri Muna
 Copyright © 2020 Demitri Muna, except for the embedded Q3C code which is copyright Sergey Koposov.
 
-> **Note for v1.1:** `QLSC.ipix2ang` now returns the **center** of the pixel rather than the "lower left" corner, matching the Q3C PostgreSQL extension v2.0.1 and later. This is a breaking change that returns different values without raising an error; code depending on the corner should use `ipix2xy`/`xy2ang` or `ipix2polygon`. (`ipix2ang_center` is now a synonym of `ipix2ang`.) See [CHANGELOG.md](CHANGELOG.md) for all changes.
+> **Note for v1.1:** `QLSC.ipix2ang` now returns the **center** of the pixel rather than the "lower left" corner, matching the Q3C PostgreSQL extension v2.0.1 and later. This is a breaking change that returns different values without raising an error; code depending on the corner should use `ipix2xy`/`xy2ang` or `ipix2polygon`. (`ipix2ang_center` is now a synonym of `ipix2ang`.) See the [CHANGELOG](https://github.com/demitri/qlsc/blob/master/CHANGELOG.md) for all changes.
 
 ## Why Use QLSC?
 
@@ -85,7 +85,7 @@ Further examples are provided in the directory "examples" that show how the sche
 
 The quadrilateralized spherical cube was first devised in 1975 in a technical report by F.K. Chan and E.M. O'Neill ([available here](https://ntrl.ntis.gov/NTRL/dashboard/searchResults/titleDetail/ADA010232.xhtml)). It begins with a cube inscribed within a sphere:
 
-![](figures/cube_in_sphere/cube_in_sphere.png)
+![](https://raw.githubusercontent.com/demitri/qlsc/master/figures/cube_in_sphere/cube_in_sphere.png)
 
 The six cube faces are then projected onto the sphere via transforms defined in the paper. This is the lowest resolution. Higher resolutions are achieved in steps: each step divides the bin, or pixel, into four. The first step will have four bins per face, the next will have 16, etc. The code refers to the level of subdivision as "depth" (number of times the bin has been subdivided), where the diagram above is `depth=0`. The Q3C PostgreSQL extension uses a depth of 30, which is 1,152,921,504,606,846,976 bins per cube face (six times that over the full sphere) corresponding to ~0.08 μ" square per pixel. The QLSC package supports any depth from 0 to 30.
 
@@ -100,11 +100,11 @@ The six cube faces are then projected onto the sphere via transforms defined in 
 
 The diagram below shows the pixel numbering scheme over the entire sphere for `depth=2`. Note the path of the numbering scheme: this is called *[z-order](https://en.wikipedia.org/wiki/Z-order_curve)* which has the benefit that ipix numbers that are close to one another are also close spatially.
 
-![](figures/ipix_grid/ipix_grid.png)
+![](https://raw.githubusercontent.com/demitri/qlsc/master/figures/ipix_grid/ipix_grid.png)
 
 The diagram below shows face 1 divided at `depth=2` and the projection of each pixel onto the sphere. Other faces have been hidden for clarity.
 
-![](figures/cube_subdivisions/cube_subdivisions.png)
+![](https://raw.githubusercontent.com/demitri/qlsc/master/figures/cube_subdivisions/cube_subdivisions.png)
 
 The scheme is advantageous in that there are no discontinuities at the poles, and the indexing scheme is optimized for fast database queries. While not all pixels cover the same area, they are equal to within a few percent.
 

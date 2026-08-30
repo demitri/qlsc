@@ -2,6 +2,7 @@
 #from setuptools import setup, Extension, find_packages
 #from setuptools.command.build_ext import build_ext
 
+import os
 import re
 import setuptools
 # distutils was removed from the standard library in Python 3.12
@@ -62,6 +63,18 @@ description = ("A Python implementation of the quadrilateralized spherical cube 
 long_description = '''The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. QLSC is an implementation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s Q3C, a PostgreSQL extension that implements QLSC indexing. In addition to sphere segmentation, this package provides the catalog indexing functionality of Q3C without the need to install a PostgreSQL database.
 
 This package also enables fast local cone searches on astronomical catalogs without the need to install any other dependencies, supporting essentially unlimited numbers of coordinates (i.e. if you're familiar with Q3C, the same can be performed without PostgreSQL).'''
+long_description_content_type = "text/plain"
+
+# The PyPI project page shows the full README (with its figures, which reference
+# absolute raw.githubusercontent.com URLs so they render on PyPI). The README
+# lives at the repository root and is not shipped in the sdist, so when pip
+# builds from the sdist the paragraph above is used instead; the description
+# shown on PyPI is the one baked in at upload time, built from the repository.
+readme = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "README.md")
+if os.path.exists(readme):
+    with open(readme, encoding="utf-8") as f:
+        long_description = f.read()
+    long_description_content_type = "text/markdown"
 
 # list of classifiers: https://pypi.org/classifiers/
 classifiers = [
@@ -78,7 +91,7 @@ setup(
     #version=get_property('__version__', 'qlsc'),
     description=description,
     long_description=long_description,
-    #long_description_content_type='text/markdown; charset=UTF-8; variant=GFM',
+    long_description_content_type=long_description_content_type,
     #license="GPL",
     #classifiers=classifiers,
     url="https://github.com/demitri/qlsc",
