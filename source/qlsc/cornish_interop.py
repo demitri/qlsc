@@ -192,6 +192,10 @@ def ipix2moc(qlsc:QLSC, ipix:Iterable[int], max_order:int=None, frame=None) -> "
 	  some of them (particularly those containing a pole) onto HEALPix at all; it
 	  raises ``Ast.NODEF``, which is left to propagate.
 
+	The ipix values are validated as :py:func:`QLSC.ipix2ang` validates them: integers of
+	any width, in range for the scheme, with a non-integral or out-of-range value raising
+	``ValueError`` rather than being rounded to the pixel next door.
+
 	:param qlsc: the :class:`~qlsc.QLSC` scheme the ipix values belong to
 	:param ipix: an iterable of ipix numbers
 	:param max_order: the HEALPix order of the finest cells in the MOC, 1..27
@@ -212,9 +216,19 @@ def ipix2moc(qlsc:QLSC, ipix:Iterable[int], max_order:int=None, frame=None) -> "
 	if frame is None:
 		frame = ASTICRSFrame()
 
+	# The scheme's own validator, not int(): int() TRUNCATES, so an ipix value of 1.9
+	# quietly became pixel 1, True became pixel 1, and the string "3" became pixel 3 -
+	# a MOC covering somewhere the caller did not ask about, built without a word. Every
+	# other entry point in qlsc refuses a non-integral or out-of-range pixel number
+	# rather than rounding it to a neighbour, and this one now refuses it with the same
+	# check and the same message. The whole iterable is validated before any region is
+	# built, so a bad value halfway down a list is not found after an arbitrary amount
+	# of work.
+	pixels = qlsc._validated_ipix(list(ipix))
+
 	moc = ASTMoc(max_order=max_order)
 	centers = list()
-	for value in ipix:
+	for value in np.atleast_1d(pixels):
 		value = int(value)
 		# the center comes back from the conversion, which needed it for its winding check
 		region, center = _ipix2region_with_center(qlsc, value, frame=frame)

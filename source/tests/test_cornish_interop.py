@@ -187,6 +187,66 @@ def test_ipix2moc_rejects_an_empty_set():
 	with pytest.raises(ValueError):
 		cornish_interop.ipix2moc(q, [])
 
+@requires_cornish
+@pytest.mark.parametrize("bad", [1.9, 1.0, True, "3", np.float64(2.5)])
+def test_ipix2moc_refuses_a_pixel_number_that_is_not_an_integer(bad):
+	'''
+	A value that is not an integral pixel number must raise, not be truncated to the
+	pixel next door.
+
+	int() used to do the truncating here, so ipix2moc(q, [1.9]) built a MOC covering
+	pixel 1 and said nothing — a map of somewhere the caller did not ask about. Every
+	other entry point in qlsc refuses these, and the bar is the same one ipix2ang sets.
+	'''
+	q = QLSC(depth=4)
+
+	with pytest.raises(ValueError):
+		cornish_interop.ipix2moc(q, [bad])
+
+	# the same bar the core API applies
+	with pytest.raises(ValueError):
+		q.ipix2ang(bad)
+
+@requires_cornish
+@pytest.mark.parametrize("bad", [-1, 6144])
+def test_ipix2moc_refuses_a_pixel_number_out_of_range(bad):
+	'''
+	A pixel number outside the scheme raises, and it raises before any region is built:
+	a bad value at the end of a list must not be found only after the work is done.
+	'''
+	q = QLSC(depth=5) # 6144 pixels, so 6144 is one past the end
+
+	with pytest.raises(ValueError):
+		cornish_interop.ipix2moc(q, [bad])
+	with pytest.raises(ValueError):
+		cornish_interop.ipix2moc(q, [0, 1, bad])
+
+@requires_cornish
+def test_ipix2region_refuses_the_same_values():
+	'''
+	The single-pixel conversion refuses what the MOC conversion refuses; it reaches the
+	same validator through ipix2polygon, and this pins that it keeps doing so.
+	'''
+	q = QLSC(depth=4)
+	for bad in (1.9, True, -1, q.nbins):
+		with pytest.raises(ValueError):
+			cornish_interop.ipix2region(q, bad)
+
+@requires_cornish
+def test_ipix2moc_accepts_integer_types():
+	'''
+	Integers of any width are accepted, as they are everywhere else in qlsc; only the
+	non-integral values are refused.
+	'''
+	q = QLSC(depth=4)
+	for good in (3, np.int32(3), np.int64(3), np.uint16(3)):
+		moc = cornish_interop.ipix2moc(q, [good])
+		assert moc.pointInRegion(list(q.ipix2ang_center(3)))
+
+	# and a NumPy array of pixel numbers, the natural output of a coverage query
+	moc = cornish_interop.ipix2moc(q, np.array([3, 4], dtype=np.int64))
+	assert moc.pointInRegion(list(q.ipix2ang_center(4)))
+
 # ---------------------------------------------------------------------------
 # region_query
 # ---------------------------------------------------------------------------

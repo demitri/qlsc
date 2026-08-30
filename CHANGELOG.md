@@ -306,6 +306,11 @@
   so a geographic method added later that takes a latitude fails the gate until it is
   covered. `QLSC` is unchanged: an unnormalized declination is a legitimate celestial
   coordinate and is still read as the point past the pole.
+* `qlsc.cornish_interop.ipix2moc` validates its pixel numbers instead of truncating them.
+  It called `int()` on each value, so `ipix2moc(q, [1.9])` built a MOC covering pixel 1,
+  `True` covered pixel 1, and the string `"3"` covered pixel 3 — a map of somewhere the
+  caller never asked about, produced without a word. It now applies the same check every
+  other entry point applies, over the whole iterable before any region is built.
 * `QLSC.ang2ipix_at_depth` now reads its coordinate the way `ang2ipix` does. It called the
   C function directly, so a declination past the pole was truncated to the pole — a
   different pixel from the one `ang2ipix` names for the same coordinate — and a non-finite
