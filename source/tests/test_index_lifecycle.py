@@ -22,6 +22,32 @@ def test_number_of_points_empty_index():
 	idx.add_point(12., 34.)
 	assert idx.number_of_points == 1
 
+def test_add_points_single_point():
+	'''
+	Test add_points with a single point in all three argument forms.
+
+	Regression test: ang2ipix collapsed a length-1 array input to a bare int
+	(a size-1 array satisfies the C extension's scalar signature), so
+	add_points raised TypeError when given exactly one point.
+	'''
+	for kwargs in ({"points": np.array([[10., 30.]])},
+	               {"ra": np.array([10.]), "dec": np.array([30.])},
+	               {"points": np.array([[10., 100.]])}): # out-of-range dec, n=1
+		idx = QLSCIndex(qlsc=QLSC(depth=30))
+		idx.add_points(**kwargs)
+		assert idx.number_of_points == 1
+
+def test_ang2ipix_length_1_array():
+	'''
+	Test that ang2ipix returns an array for array input, even length-1
+	(per its documented contract).
+	'''
+	q = QLSC(depth=30)
+	result = q.ang2ipix(ra=np.array([10.]), dec=np.array([30.]))
+	assert isinstance(result, np.ndarray)
+	assert result.shape == (1,)
+	assert result[0] == q.ang2ipix(10., 30.)
+
 def test_add_points_normalizes_stored_coordinates():
 	'''
 	Test that add_points normalizes out-of-range coordinates both for the ipix

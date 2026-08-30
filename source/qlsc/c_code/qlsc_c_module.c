@@ -42,6 +42,11 @@ static void del_prm(PyObject *obj)
 {
 	// get C pointer out of object
 	struct q3c_prm *hprm = PyCapsule_GetPointer(obj, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL) {
+		// cannot raise from a destructor; report the unraisable error instead
+		PyErr_WriteUnraisable(obj);
+		return;
+	}
 	free_q3c1(hprm);
 }
 
@@ -93,9 +98,12 @@ qlsc_q3c_nside(PyObject *self, PyObject *arg)
 	//hprm = (struct q3c_prm*)PyCapsule_GetPointer(arg, Q3C_STRUCT_POINTER_BUFFER);
 	
 	PyObject *capsule;
-	PyArg_ParseTuple(arg, "O", &capsule);
+	if (!PyArg_ParseTuple(arg, "O", &capsule))
+		return NULL;
 	hprm = PyCapsule_GetPointer(capsule, Q3C_STRUCT_POINTER_BUFFER);
-	
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
 	return_value = PyLong_FromLongLong(hprm->nside);
 	
 //	goto finally;
@@ -169,6 +177,8 @@ qlsc_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
 	//PySys_WriteStdout("has attr: %d\n", PyObject_HasAttr(self, hprm_attr_name));
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
 	if (array_form) {
 		
@@ -295,8 +305,8 @@ qlsc_q3c_ang2ipix(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
 		// if there is an error at this point, print it
 		//PyErr_Print();
 		
-		// return numpy array
-		return Py_BuildValue("O", np_ipix);
+		// return numpy array ("N" steals the reference; "O" would leak one per call)
+		return Py_BuildValue("N", np_ipix);
 
 ang2ipix_array_early_exit:
 		// release references, bail
@@ -368,6 +378,8 @@ qlsc_q3c_ang2ipix_xy(PyObject *module, PyObject *args, PyObject *kwargs) // -> c
 	}
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
 	if (invocation==0)
 	{
@@ -442,6 +454,8 @@ qlsc_q3c_ipix2ang(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
 	//PySys_WriteStdout("has attr: %d\n", PyObject_HasAttr(self, hprm_attr_name));
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
 	q3c_ipix2ang(hprm, ipix, &ra, &dec);
 	
@@ -523,6 +537,8 @@ qlsc_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 	// integer arithmetic - going through doubles (e.g. pow()) rounds ipix values
 	// near face boundaries onto the wrong face at depths ≳26
 	face_num = (int)(ipix / (hprm->nside * hprm->nside));
@@ -562,6 +578,8 @@ qlsc_q3c_pixarea(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 	
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 	
 	area = q3c_pixarea(hprm, ipix, depth);
 
@@ -795,6 +813,8 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
 	ra_cen = UNWRAP_RA(ra_cen);
 	if (q3c_fabs(dec_cen) > 90)
@@ -876,77 +896,6 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 }
 
 static PyObject *
-qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
-{
-	// external parameters
-	PyObject *hprm_capsule;
-	q3c_coord_t ra_cen, dec_cen, radius;
-	int iteration;
-	int full_flag; //  1 = full, 0 = partial
-	
-	// internal variables
-	struct q3c_prm *hprm;
-	static int invocation = 0;
-
-	static q3c_coord_t ra_cen_buf, dec_cen_buf, radius_buf;
-	static q3c_ipix_t nside_buf = 0; // without this in the cache key, changing depth returns stale results
-
-	static q3c_ipix_t partials[2 * Q3C_NPARTIALS];
-	static q3c_ipix_t fulls[2 * Q3C_NFULLS];
-
-	static char *kwlist[] = {"hprm", "ra", "dec", "radius", "iteration", "full_flag", NULL};
-	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-									 "Odddii", // object + 2 doubles + 2 ints
-									 kwlist,
-									 &hprm_capsule, &ra_cen, &dec_cen, &radius, &iteration, &full_flag))
-	{
-		// unable to parse inputs -> raise exception
-		PySys_WriteStdout("unable to parse input, returning NULL\n");
-		return NULL;
-	}
-
-	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
-
-	ra_cen = UNWRAP_RA(ra_cen);
-	if (q3c_fabs(dec_cen) > 90)
-	{
-		// this should be caught on the Python side, not here
-		PySys_WriteStdout("'dec' value out of range - todo: raise exception'\n");
-	}
-	
-	if (invocation == 0) {
-		; //PySys_WriteStdout("qlsc_q3c_radial_query_it called, invocation = 0\n");
-	} else {
-		//PySys_WriteStdout("qlsc_q3c_radial_query_it called, invocation = 1, full=%d\n", full_flag);
-		if ((ra_cen == ra_cen_buf) && (dec_cen == dec_cen_buf) &&
-			radius == radius_buf && hprm->nside == nside_buf)
-		{
-			if (full_flag)
-				return PyLong_FromLongLong(fulls[iteration]);
-			else
-				return PyLong_FromLongLong(partials[iteration]);
-		}
-	}
-	
-	//PySys_WriteStdout("q3c_radial_query called\n");
-	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
-	if (q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls, partials))
-	{
-		raise_radial_query_overflow(ra_cen, dec_cen, radius);
-		return NULL;
-	}
-
-	// cache values
-	ra_cen_buf = ra_cen;
-	dec_cen_buf = dec_cen;
-	radius_buf = radius;
-	nside_buf = hprm->nside;
-	invocation = 1;
-	
-	return full_flag ? PyLong_FromLongLong(fulls[iteration]) : PyLong_FromLongLong(partials[iteration]);
-}
-
-static PyObject *
 qlsc_q3c_version(PyObject *module, PyObject *noargs)
 {
 	char version[32];
@@ -967,8 +916,8 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	struct q3c_prm *hprm;
 	// per-face projection buffers: the main face plus up to four secondary faces.
 	// NOTE: q3c proper (q3c.c) sizes these [3][...], which overflows for polygons
-	// whose bounding box crosses onto four faces; see the q3c_poly.c points[8] note
-	// in CLAUDE.md.
+	// whose bounding box crosses onto three or four extra faces (multi_flag >= 3);
+	// see the q3c_poly.c points[8] note in CLAUDE.md.
 	q3c_coord_t xpj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ypj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t axpj[5][Q3C_MAX_N_POLY_VERTEX];
@@ -991,6 +940,8 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	}
 
 	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
 
 	if (PyObject_GetBuffer(np_poly_ra, &ra_view, PyBUF_FULL_RO) == -1)
 		return NULL;
@@ -1066,7 +1017,6 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"xy2ang", (PyCFunction)qlsc_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
 	{"xy2facenum", (PyCFunction)qlsc_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
 	{"check_sphere_point_in_poly", (PyCFunction)qlsc_q3c_check_sphere_point_in_poly, METH_VARARGS|METH_KEYWORDS, "Test whether an ra,dec point lies inside a spherical polygon."},
-	{"radial_query_it", (PyCFunction)qlsc_q3c_radial_query_it, METH_VARARGS|METH_KEYWORDS, ""},
 	{"radial_query", (PyCFunction)qlsc_q3c_radial_query, METH_VARARGS|METH_KEYWORDS, ""},
 	{NULL, NULL, 0, NULL}	// sentinel
 };

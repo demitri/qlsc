@@ -156,6 +156,12 @@ class QLSC:
 		if not ((-90 <= dec).all() and (dec <= 90).all()):
 			ra, dec = _normalize_ang(ra=ra, dec=dec, copy=True)
 
+		if ra.shape[0] == 1:
+			# A length-1 array would match the C extension's scalar signature (via a
+			# __float__ conversion NumPy has deprecated), returning a bare int for
+			# array input; call the scalar path explicitly and wrap the result.
+			return np.array([q3c.ang2ipix(self._hprm, float(ra[0]), float(dec[0]))], dtype=np.int64)
+
 		return q3c.ang2ipix(self._hprm, ra, dec)
 
 	def ang2ipix_xy(self, ra:float=None, dec:float=None, points=None) -> dict:
@@ -480,8 +486,11 @@ class QLSC:
 
 		The polygon is an array of [ra,dec] vertices with shape (n,2), where 3 <= n <= 100,
 		e.g. the output of :py:func:`ipix2polygon`; the edges between vertices follow
-		great circles. The polygon must be small enough to fit within the projection of
-		a single cube face (roughly, ~23 degrees across); a ValueError is raised otherwise.
+		great circles, and the winding order does not matter. The polygon must be small
+		enough to fit within the projection of a single cube face; the exact limit depends
+		on where the polygon sits relative to the face centers (up to ~76 degrees across
+		for a face-centered polygon, and anything up to ~40 degrees across is safe
+		anywhere on the sky). A ValueError is raised when the limit is exceeded.
 		The result does not depend on this object's depth.
 
 		:param ra: right ascension of the point to test (degrees)
@@ -492,12 +501,17 @@ class QLSC:
 		if any([x is None for x in [ra, dec, polygon]]):
 			raise ValueError("Values for 'ra', 'dec', and 'polygon' must all be specified.")
 
+		if not (math.isfinite(ra) and math.isfinite(dec)):
+			raise ValueError(f"The 'ra' and 'dec' values must be finite; was given ra={ra}, dec={dec}.")
+
 		if not (-90 <= dec <= 90):
 			ra, dec = _normalize_ang(ra, dec)
 
 		poly = np.asarray(polygon, dtype=np.double)
 		if poly.ndim != 2 or poly.shape[1] != 2:
 			raise ValueError(f"The polygon must be an array of [ra,dec] pairs with shape (n,2); was given shape {poly.shape}.")
+		if not np.isfinite(poly).all():
+			raise ValueError("The polygon vertex values must all be finite.")
 		if not ((-90 <= poly[:,1]).all() and (poly[:,1] <= 90).all()):
 			raise ValueError("The polygon vertex dec values must be in the range [-90,90].")
 

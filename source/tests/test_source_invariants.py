@@ -1,0 +1,40 @@
+
+import pathlib
+import re
+
+# Mechanical guards over the C source itself, for invariants that the runtime
+# tests cannot see failing (a reintroduced stack overflow is a silent 32-byte
+# scribble, not a crash).
+
+C_CODE_DIR = pathlib.Path(__file__).parent.parent / "qlsc" / "c_code"
+
+def test_q3c_poly_points_buffer_patch():
+	'''
+	Test that the local points[8] patch to the vendored q3c_poly.c is present.
+
+	Upstream q3c v2.0.5 declares points[4] in q3c_check_sphere_point_in_poly, an
+	ASan-confirmed stack buffer overflow reachable through QLSC.point_in_polygon
+	(q3c_multi_face_check writes up to four coordinate pairs). A future upstream
+	sync that copies the file verbatim would silently reintroduce it; this test
+	fails loudly instead. See CLAUDE.md. Remove this test only when upstream
+	ships the fix and the sync drops the local patch.
+	'''
+	source = (C_CODE_DIR / "q3c" / "q3c_poly.c").read_text()
+	assert "q3c_coord_t points[8];" in source, "the local points[8] patch to q3c_poly.c has been lost (probably by an upstream sync)"
+	assert "q3c_coord_t points[4];" not in source, "upstream's undersized points[4] buffer has been reintroduced into q3c_poly.c"
+
+def test_capsule_pointer_null_checks():
+	'''
+	Test that every PyCapsule_GetPointer call in the wrapper is followed by a
+	NULL check; an unchecked one segfaults the interpreter when handed an
+	invalid capsule.
+	'''
+	source = (C_CODE_DIR / "qlsc_c_module.c").read_text()
+	# strip line comments so commented-out code is not counted
+	source = re.sub(r"//[^\n]*", "", source)
+	calls = source.count("PyCapsule_GetPointer")
+	guards = source.count("if (hprm == NULL)")
+	assert calls > 0
+	# the capsule destructor guards with PyErr_WriteUnraisable instead of a return
+	guards += source.count("PyErr_WriteUnraisable")
+	assert guards >= calls, f"{calls} PyCapsule_GetPointer call(s) but only {guards} NULL guard(s) in qlsc_c_module.c"

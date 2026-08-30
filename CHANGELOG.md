@@ -15,6 +15,9 @@
   points (including equivalent coordinate representations, e.g. ra=360 vs ra=0).
 * Operations on a closed `QLSCIndex` raise `RuntimeError` instead of silently
   operating on a fresh, empty database.
+* The unused `qlsc.q3c.radial_query_it` function (never reachable through the
+  Python API, and not thread-safe due to internal static caches) was removed
+  from the C module.
 
 ### New
 
@@ -51,7 +54,13 @@
 * `QLSCIndex.number_of_points` now uses `COUNT(*)` (previously `max(rowid)`, which
   returned `None` for an empty index).
 * A per-call memory leak in the C radial-query wrapper (two leaked array references
-  per call) and several connection leaks on error paths.
+  per call), a matching leak in array-form `ang2ipix`, and several connection leaks
+  on error paths.
+* `QLSC.ang2ipix` returned a bare `int` for length-1 array input (breaking
+  `add_points` with a single point); array input now always returns an array.
+* C-level functions now raise an exception instead of crashing the interpreter
+  when handed an invalid `hprm` capsule, and `point_in_polygon` rejects non-finite
+  coordinates instead of returning `False`.
 * `ipix2xy` computed the face number in floating point, placing ipix values near
   face boundaries on the wrong face at depths ≥ 26.
 
