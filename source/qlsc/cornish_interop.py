@@ -55,7 +55,7 @@ except ImportError as e:
 	# and reporting the first when it is really the second sends the user the wrong way.
 	cornish_import_error = e
 
-from .qlsc_base import QLSC, QLSCIndex, _match_result
+from .qlsc_base import QLSC, QLSCIndex, MatchArrayShape, _match_result
 from .utilities import _as_float_scalar
 
 # The frame the index coordinates are assumed to be in when the caller does not say.
@@ -236,8 +236,8 @@ def ipix2moc(qlsc:QLSC, ipix:Iterable[int], max_order:int=None, frame=None) -> "
 	return moc
 
 def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
-				 all_sky:bool=False, frame:Union[str,None]=None,
-				 skip_frame_check:bool=False) -> np.ndarray:
+				 return_skycoord:bool=False, all_sky:bool=False,
+				 frame:Union[str,None]=None, skip_frame_check:bool=False) -> np.ndarray:
 	'''
 	Return the points of a :class:`~qlsc.QLSCIndex` that fall inside a cornish region.
 
@@ -267,20 +267,19 @@ def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
 	the coarse step with a scan of the whole index (a cone of radius 180 degrees). That is
 	correct for any region at all, at the cost of testing every indexed point.
 
-	The return value has the same shape as the other region queries', including their
-	one wart: with ``return_key`` unset a single match comes back squeezed to shape
-	``(2,)`` rather than ``(1,2)``. That is deliberate consistency, not a copy — the
-	value is assembled by the same ``_match_result`` helper :py:func:`radial_query`,
-	:py:func:`polygon_query` and :py:func:`ellipse_query` use, so whenever that shape
-	is settled this follows.
+	The result is assembled by the same helper the built-in region queries use, and like
+	every query added since :py:func:`radial_query` it is ``MatchArrayShape.STABLE``: the
+	plain array is always ``(n,2)``, including for a single match. ``radial_query``'s
+	historical squeeze to ``(2,)`` is not inherited, even though it supplies the candidates.
 
 	:param index: the :class:`~qlsc.QLSCIndex` to search
 	:param region: a cornish :class:`~cornish.ASTRegion` defined in a sky frame
 	:param return_key: if set to True, include the key value as provided when added to the index
+	:param return_skycoord: if set to True, return the coordinates as an :class:`~astropy.coordinates.SkyCoord`
 	:param all_sky: if set to True, consider every point in the index instead of using the region's bounding circle
 	:param frame: name of the frame the index coordinates are in, compared against the region's frame; None means the default (ICRS)
 	:param skip_frame_check: if set to True, waive that comparison and take responsibility for the frames matching
-	:returns: an array of matches with shape (n,2), or a :class:`numpy.recarray` with the fields ``ra,dec,key``
+	:returns: an array of matches with shape (n,2), a :class:`numpy.recarray` with the fields ``ra,dec,key``, a :class:`~astropy.coordinates.SkyCoord`, or an :class:`~astropy.table.QTable`
 	'''
 	_require_cornish()
 
@@ -315,6 +314,8 @@ def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
 				"antipodal to that center. Using it as the coarse step would silently lose matches. "
 				"Pass all_sky=True to test every point in the index instead.")
 
+	# the coarse step is always asked for as plain values: its rows are candidates to be
+	# filtered here, not the result, and return_skycoord is applied to the matches below
 	candidates = index.radial_query(center_ra, center_dec, radius, return_key=return_key)
 
 	match_ra = list()
@@ -336,4 +337,5 @@ def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
 			if return_key:
 				match_key.append(row_key)
 
-	return _match_result(match_ra, match_dec, match_key, None, return_key, False)
+	return _match_result(match_ra, match_dec, match_key, None, return_key, False,
+						 MatchArrayShape.STABLE, return_skycoord=return_skycoord)

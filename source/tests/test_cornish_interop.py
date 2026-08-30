@@ -396,10 +396,11 @@ def test_region_query_return_key():
 	assert set(matches.dtype.names) == {"ra", "dec", "key"}
 
 @requires_cornish
-def test_region_query_single_match_shape_matches_the_other_queries():
+def test_region_query_single_match_is_not_squeezed():
 	'''
-	One match is squeezed to shape (2,), exactly as radial_query and polygon_query do —
-	the shared _match_result helper decides this, so the three stay consistent.
+	region_query is MatchArrayShape.STABLE, like every query added since radial_query:
+	a single match is (1,2). radial_query supplies the candidates but its historical
+	squeeze to (2,) must not leak through.
 	'''
 	q = QLSC(depth=5)
 	index = QLSCIndex(qlsc=q)
@@ -407,10 +408,39 @@ def test_region_query_single_match_shape_matches_the_other_queries():
 
 	circle = ASTCircle(frame=ASTICRSFrame(), center=[12.0, 5.0], radius=0.5)
 	matches = cornish_interop.region_query(index, circle)
-	from_cone = index.radial_query(12.0, 5.0, 0.5)
 
-	assert matches.shape == from_cone.shape == (2,)
-	assert matches[0] == pytest.approx(12.0)
+	assert matches.shape == (1, 2)
+	assert matches[0][0] == pytest.approx(12.0)
+	assert matches[:, 0].shape == (1,) # the subscript that fails on a squeezed result
+
+	# ... and the coarse step really is the squeezed one, so this is not a coincidence
+	assert index.radial_query(12.0, 5.0, 0.5).shape == (2,)
+
+@requires_cornish
+def test_region_query_return_skycoord():
+	'''
+	Parity with the other queries after first-class astropy support landed.
+	'''
+	# astropy is a soft dependency of qlsc (cornish requires it, but this file's
+	# always-run tests must not), so it is skipped for here rather than imported above
+	SkyCoord = pytest.importorskip("astropy.coordinates").SkyCoord
+	QTable = pytest.importorskip("astropy.table").QTable
+
+	q = QLSC(depth=5)
+	index = QLSCIndex(qlsc=q)
+	index.add_points(ra=[12.0, 12.1, 200.0], dec=[5.0, 5.1, -40.0], keys=["a", "b", "c"])
+	circle = ASTCircle(frame=ASTICRSFrame(), center=[12.0, 5.0], radius=1.0)
+
+	coords = cornish_interop.region_query(index, circle, return_skycoord=True)
+	assert isinstance(coords, SkyCoord)
+	assert len(coords) == 2
+	assert sorted(coords.ra.deg) == pytest.approx([12.0, 12.1])
+
+	# with a flag as well, the coordinates come back in a QTable alongside it
+	table = cornish_interop.region_query(index, circle, return_key=True, return_skycoord=True)
+	assert isinstance(table, QTable)
+	assert sorted(table["key"].tolist()) == ["a", "b"]
+	assert isinstance(table["coord"], SkyCoord)
 
 @requires_cornish
 def test_region_query_with_no_matches():
