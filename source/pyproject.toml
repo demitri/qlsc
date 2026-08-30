@@ -1,0 +1,6 @@
+# Build requirements: without this file, pip's isolated build environment
+# contains no NumPy and "pip install qlsc" fails on the "import numpy" in
+# setup.py, which needs NumPy's C headers to compile the extension.
+[build-system]
+requires = ["setuptools", "numpy"]
+build-backend = "setuptools.build_meta"

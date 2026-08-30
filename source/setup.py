@@ -4,8 +4,8 @@
 
 import re
 import setuptools
-from distutils.core import setup, Extension
-#from setuptools import setup, Extension
+# distutils was removed from the standard library in Python 3.12
+from setuptools import setup, Extension
 #from setuptools import find_packages
 
 import numpy as np
@@ -94,7 +94,7 @@ setup(
     author="Demitri Muna",
     author_email="demitri@trillianverse.org",
     #setup_requires=['wheel'], # needed to package for distribution
-    #install_requires=[],
+    install_requires=["numpy>=1.18"],
     #packages=find_packages(),
     data_files=data_files,
     ext_package="qlsc", # will compile the methods from the extension to the namespace "qlsc"
