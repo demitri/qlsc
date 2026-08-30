@@ -474,6 +474,38 @@ class QLSC:
 
 		return self.xy2ang(facenum=facenum, points=polygon)
 
+	def point_in_polygon(self, ra:float=None, dec:float=None, polygon:Iterable=None) -> bool:
+		'''
+		Test whether an ra,dec point lies inside a polygon on the sphere.
+
+		The polygon is an array of [ra,dec] vertices with shape (n,2), where 3 <= n <= 100,
+		e.g. the output of :py:func:`ipix2polygon`; the edges between vertices follow
+		great circles. The polygon must be small enough to fit within the projection of
+		a single cube face (roughly, ~23 degrees across); a ValueError is raised otherwise.
+		The result does not depend on this object's depth.
+
+		:param ra: right ascension of the point to test (degrees)
+		:param dec: declination of the point to test (degrees)
+		:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2)
+		:returns: True if the point is inside the polygon
+		'''
+		if any([x is None for x in [ra, dec, polygon]]):
+			raise ValueError("Values for 'ra', 'dec', and 'polygon' must all be specified.")
+
+		if not (-90 <= dec <= 90):
+			ra, dec = _normalize_ang(ra, dec)
+
+		poly = np.asarray(polygon, dtype=np.double)
+		if poly.ndim != 2 or poly.shape[1] != 2:
+			raise ValueError(f"The polygon must be an array of [ra,dec] pairs with shape (n,2); was given shape {poly.shape}.")
+		if not ((-90 <= poly[:,1]).all() and (poly[:,1] <= 90).all()):
+			raise ValueError("The polygon vertex dec values must be in the range [-90,90].")
+
+		poly_ra = np.ascontiguousarray(poly[:,0])
+		poly_dec = np.ascontiguousarray(poly[:,1])
+
+		return q3c.check_sphere_point_in_poly(self._hprm, ra, dec, poly_ra, poly_dec)
+
 
 class QLSCIndex:
 	'''

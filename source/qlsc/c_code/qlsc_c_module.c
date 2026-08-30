@@ -924,6 +924,92 @@ qlsc_q3c_radial_query_it(PyObject *module, PyObject *args, PyObject *kwargs)
 	return full_flag ? PyLong_FromLongLong(fulls[iteration]) : PyLong_FromLongLong(partials[iteration]);
 }
 
+static PyObject *
+qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	PyObject *hprm_capsule;
+	q3c_coord_t ra0, dec0;
+	PyObject *np_poly_ra, *np_poly_dec;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	// per-face projection buffers: the main face plus up to four secondary faces.
+	// NOTE: q3c proper (q3c.c) sizes these [3][...], which overflows for polygons
+	// whose bounding box crosses onto four faces; see the q3c_poly.c points[8] note
+	// in CLAUDE.md.
+	q3c_coord_t xpj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t ypj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t axpj[5][Q3C_MAX_N_POLY_VERTEX];
+	q3c_coord_t aypj[5][Q3C_MAX_N_POLY_VERTEX];
+	char faces[5];
+	char multi_flag = 0;
+	char too_large = 0;
+	int n, result;
+	Py_buffer ra_view, dec_view;
+
+	static char *kwlist[] = {"hprm", "ra", "dec", "poly_ra", "poly_dec", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "OddOO", // object + 2 doubles + 2 objects
+									 kwlist,
+									 &hprm_capsule, &ra0, &dec0, &np_poly_ra, &np_poly_dec))
+	{
+		// unable to parse inputs -> raise exception
+		return NULL;
+	}
+
+	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+
+	if (PyObject_GetBuffer(np_poly_ra, &ra_view, PyBUF_FULL_RO) == -1)
+		return NULL;
+	if (PyObject_GetBuffer(np_poly_dec, &dec_view, PyBUF_FULL_RO) == -1) {
+		PyBuffer_Release(&ra_view);
+		return NULL;
+	}
+
+	// the checks below jump here on error
+	#define POLY_VIEWS_FAIL() { PyBuffer_Release(&ra_view); PyBuffer_Release(&dec_view); return NULL; }
+
+	if (strcmp(ra_view.format, "d") != 0 || strcmp(dec_view.format, "d") != 0) {
+		PyErr_SetString(PyExc_TypeError, "'poly_ra' and 'poly_dec' arrays must be of type np.double.");
+		POLY_VIEWS_FAIL();
+	}
+	if (!PyBuffer_IsContiguous(&ra_view, 'C') || !PyBuffer_IsContiguous(&dec_view, 'C') ||
+		ra_view.ndim != 1 || dec_view.ndim != 1) {
+		PyErr_SetString(PyExc_TypeError, "'poly_ra' and 'poly_dec' must be contiguous 1D arrays.");
+		POLY_VIEWS_FAIL();
+	}
+	if (ra_view.shape[0] != dec_view.shape[0]) {
+		PyErr_SetString(PyExc_ValueError, "'poly_ra' and 'poly_dec' arrays must be the same length.");
+		POLY_VIEWS_FAIL();
+	}
+	n = (int)ra_view.shape[0];
+	if (n < 3 || n > Q3C_MAX_N_POLY_VERTEX) {
+		PyErr_Format(PyExc_ValueError, "The polygon must have between 3 and %d vertices (was given %d).",
+					 Q3C_MAX_N_POLY_VERTEX, n);
+		POLY_VIEWS_FAIL();
+	}
+
+	#undef POLY_VIEWS_FAIL
+
+	result = q3c_check_sphere_point_in_poly(hprm, n,
+											(q3c_coord_t *)ra_view.buf, (q3c_coord_t *)dec_view.buf,
+											ra0, dec0, &too_large,
+											0, // invocation = 0: always (re)project the polygon
+											xpj, ypj, axpj, aypj, faces, &multi_flag);
+
+	PyBuffer_Release(&ra_view);
+	PyBuffer_Release(&dec_view);
+
+	if (too_large) {
+		PyErr_SetString(PyExc_ValueError, "The polygon is too large for the Q3C face projection; split it into smaller polygons.");
+		return NULL;
+	}
+
+	return PyBool_FromLong(result);
+}
+
 static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_KEYWORDS
 	// Ref: available flags: https://docs.python.org/3/c-api/structures.html#c.PyMethodDef
 	
@@ -947,6 +1033,7 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"sindist", (PyCFunction)qlsc_q3c_sindist, METH_VARARGS|METH_KEYWORDS, "Calculates the sine of the angular distance between two points on a sphere."},
 	{"xy2ang", (PyCFunction)qlsc_q3c_xy2ang, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to (ra,dec)."},
 	{"xy2facenum", (PyCFunction)qlsc_q3c_xy2facenum, METH_VARARGS|METH_KEYWORDS, "Convert an x,y coordinate pair on the given face number to the corresponding cube face number."},
+	{"check_sphere_point_in_poly", (PyCFunction)qlsc_q3c_check_sphere_point_in_poly, METH_VARARGS|METH_KEYWORDS, "Test whether an ra,dec point lies inside a spherical polygon."},
 	{"radial_query_it", (PyCFunction)qlsc_q3c_radial_query_it, METH_VARARGS|METH_KEYWORDS, ""},
 	{"radial_query", (PyCFunction)qlsc_q3c_radial_query, METH_VARARGS|METH_KEYWORDS, ""},
 	{NULL, NULL, 0, NULL}	// sentinel
