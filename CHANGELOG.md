@@ -4,6 +4,50 @@
 
 ### New
 
+* Lat/lon mode, which the README has promised since 2020: `GeoQLSC` and `GeoQLSCIndex`
+  are the scheme and the index in geographic vocabulary. The mapping is small, because
+  most of it is the identity — **latitude is declination** (same range, same sign), and
+  **longitude is right ascension on the way in** (right ascension is periodic and every
+  entry point already reduces it, so `lon=-74` may be given anywhere an ra can). The
+  only real difference is on the way out: these classes report longitude in
+  **[-180,180)** where `QLSC` reports right ascension in [0,360), and they do so from
+  *every* method that returns one, the inherited `ipix2ang`/`xy2ang`/`ipix2polygon`
+  included. Both classes take the pair under either spelling (`lon`,`lat` or `ra`,`dec`,
+  never both at once) and add `lonlat2ipix`/`ipix2lonlat`/`ipix2lonlat_center`.
+  `GeoQLSCIndex` stores longitudes already wrapped, so a point added as `lon=286` and
+  one added as `lon=-74` are the same point, and what a query returns is what was put
+  in; a latitude outside [-90,90] raises rather than being read as a point on the far
+  side of a pole. Nothing about the pixelation, the ipix numbering, or the C code
+  changes. The public `qlsc.wrap_longitude()` performs the [0,360) → [-180,180) mapping
+  on its own. There is one documented exception to the convention: `coverage()` writes
+  its vertices in [0,360), because a sky-coverage document declares the ICRS frame and
+  is read by other software, so its numbers follow that frame rather than the producing
+  object's reporting preference — the document a `GeoQLSC` emits is byte-for-byte the
+  one a `QLSC` emits.
+* First-class astropy support. Every method that takes an ra,dec pair now also accepts
+  an `astropy.coordinates.SkyCoord` (scalar or array) in place of the pair — passed as
+  the *first* of the two parameters with the second left unset, e.g. `ang2ipix(coord)`,
+  `index.radial_query(coord, radius=1*u.deg)`, `point_in_ellipse(coord, ra_cen=center)`
+  — as well as through `points=` on `ang2ipix`/`add_points` and as the `polygon=`
+  vertices of `point_in_polygon`/`polygon_query`. A bare coordinate frame object works
+  the same way. **The coordinate is transformed to ICRS**, the frame every ra,dec value
+  in this package is taken to be in: a galactic or FK5 coordinate is converted, not
+  reinterpreted. Giving both a SkyCoord and the second angle raises rather than
+  silently discarding one of them. Individual angles may also be given as
+  `astropy.units.Quantity` values, as radii already could. A coordinate carrying a
+  distance keeps only its direction; the index is a sphere. An **array** `SkyCoord`
+  given to `radial_query` is a target list, so it selects the batch form exactly as
+  arrays of degrees do.
+* `return_skycoord=True` on `QLSC.ipix2ang`, `ipix2ang_center`, `xy2ang`,
+  `ipix2polygon`, and on `QLSCIndex.radial_query`, `polygon_query`, `ellipse_query`,
+  `find_by_key` returns an ICRS `SkyCoord` instead of degrees (scalar in, scalar out;
+  query matches always come back as an array SkyCoord, never squeezed). Combined with
+  any of `return_key`, `return_distance` or a batch query's `target_index` a query
+  returns an `astropy.table.QTable` with a `coord` column holding the SkyCoord plus the
+  requested columns, since a SkyCoord cannot be a field of a `numpy.recarray`; its
+  columns are in the recarray's order, `target_index` first. No default return value
+  changes, and asking for a SkyCoord without astropy installed raises a clear
+  `ImportError` — astropy remains an optional dependency.
 * `QLSC.ipix2ang`, `QLSC.ipix2ang_center`, and `QLSC.ipix2xy` accept an array-like of
   ipix values (NumPy array, list, or tuple) in addition to a single value, following
   the same scalar/array convention as `ang2ipix`: a scalar (or 0-d array) returns
@@ -146,6 +190,15 @@
 
 ### Breaking changes
 
+* Omitting a required argument of `QLSCIndex.radial_query` or `QLSC.ang2ipix_at_depth`
+  now raises `ValueError` where it used to raise `TypeError`. Their parameters were
+  made formally optional so that a single `SkyCoord` can be given as the one positional
+  coordinate argument (`radial_query(coord, radius=...)`), and Python can no longer
+  report the missing argument itself; both methods check and name it instead. The
+  arguments are exactly as required as they were, and the message is more specific —
+  only the exception type differs, which matters solely to code catching `TypeError`
+  around these two calls. `QLSC.face_number` already took its coordinate as optional
+  and is unchanged.
 * `QLSC.ipix_area`'s `depth` parameter now means something, and is validated. It was
   previously ignored along with `ipix`, so any value was accepted; it is now an
   absolute depth in `[0, qlsc.depth]` naming the ancestor pixel to measure (`depth=0`
