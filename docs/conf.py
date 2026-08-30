@@ -78,7 +78,9 @@ templates_path = ['_templates']
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+# "generate_figures.py" is a script kept beside the pages it draws for, not a
+# document; excluding it keeps Sphinx from reporting it as an unused file.
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'generate_figures.py']
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -87,6 +89,20 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # a list of builtin themes.
 #
 html_theme = 'alabaster'
+
+# The sidebar carries the whole table of contents rather than only the current
+# page's section list, so every part of the documentation is one click away.
+html_theme_options = {
+	'description'     : 'The quadrilateralized spherical cube for Python: equal-area sphere segmentation and catalog cone searches.',
+	'github_user'     : 'demitri',
+	'github_repo'     : 'qlsc',
+	'github_button'   : True,
+	'github_type'     : 'star',
+	'fixed_sidebar'   : True,
+	'sidebar_collapse': False,
+	'page_width'      : '1080px',
+	'sidebar_width'   : '250px',
+}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
