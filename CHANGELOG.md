@@ -111,6 +111,21 @@
 
 ### Fixed
 
+* `QLSC.ipix2face` returned the wrong face for the last pixel of every face at depths
+  above about 26, and a `float` at every depth. It divided the ipix value by
+  `math.pow(nside,2)`, and past 2^53 a double cannot hold the operands exactly: at
+  depth 30 the very last pixel of the scheme was reported as being on **face 6**, which
+  does not exist. The division is now integer arithmetic, and the return value is an
+  `int` as the signature always said. Non-integer and out-of-range pixel numbers now
+  raise `ValueError` instead of being truncated or clamped onto some other face.
+* `QLSC.face_number(ipix=...)` raised `TypeError`. `ra` and `dec` were required
+  positional parameters, so the documented pixel-number form could not be called at
+  all; the only way in was the undocumented `face_number(None, None, ipix=n)`, and
+  even that failed for `ipix=0` because the branch was guarded by `if ipix:`, which is
+  false for the first pixel of face 0. `ra` and `dec` now default to `None`, every
+  test is against `None` rather than truthiness, and the pixel form answers from
+  `ipix2face` — exact integer arithmetic — rather than by converting the pixel to a
+  coordinate and back.
 * `qlsc.q3c.ellipse_query` accepted a semi-major axis of 90 degrees or more, where the
   companion predicate `qlsc.q3c.in_ellipse` refused it. Q3C's ellipse is a conic in the
   tangent plane at its center and means nothing past the near hemisphere, so a direct

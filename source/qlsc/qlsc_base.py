@@ -641,10 +641,23 @@ class QLSC:
 	def ipix2face(self, ipix:int) -> int:
 		'''
 		Return the face number the given ipix value falls on.
+
+		The ipix values of a face are contiguous, so the face is the integer quotient of
+		the ipix value and the number of pixels per face. The arithmetic is done in
+		integers: at depths above about 26 the operands exceed the 53 bits a double can
+		hold exactly, and going through floating point rounded the last pixel of every
+		face onto the next one - at depth 30 the very last pixel of the scheme was
+		reported as being on face 6, which is not a face at all. (The same trap was
+		fixed in the C extension's ipix2xy; see the note there.)
+
+		:param ipix: the pixel identifier number
+		:returns: the cube face number, an integer in [0,5]
 		'''
-		if not (0 <= ipix < self.nbins):
-			raise ValueError(f"ipix value out of range for this depth; should be in [0,{self.nbins}).")
-		return ipix // math.pow(self.nside, 2)
+		# _validated_ipix rejects non-integers and out-of-range values, and returns a
+		# Python int for a single value; int() then refuses an array rather than
+		# quietly returning one from a method documented to take one pixel.
+		ipix = int(self._validated_ipix(ipix))
+		return ipix // (self.nside * self.nside)
 
 	@property
 	def nside(self) -> int:
@@ -660,9 +673,9 @@ class QLSC:
 		'''
 		return int(pow(self.nside,2)) * 6
 
-	def face_number(self, ra:float, dec:float, ipix:int=None) -> int:
+	def face_number(self, ra:float=None, dec:float=None, ipix:int=None) -> int:
 		'''
-		Return the cube face number for the provided coordinate.
+		Return the cube face number for the provided coordinate, or for a pixel.
 
 		Cube faces are numbered as the following:
 
@@ -677,33 +690,40 @@ class QLSC:
 		:py:func:`ang2ipix` accepts it: ``face_number(-350, 20)`` and
 		``face_number(370, 20)`` both answer for ra=10.
 
+		Give it either a coordinate or an ``ipix`` value, not both. For a pixel the
+		answer is :py:func:`ipix2face`, which reads the face straight out of the pixel
+		number; it does not depend on this object's depth in the coordinate form.
+
 		:param ra: right ascension in degrees; any value, reduced to [0,360) internally
 		:param dec: declination in degrees; must be in [-90,90]
-		:param ipix: the pixel identifier number
-		:returns: the cube face number
+		:param ipix: the pixel identifier number, as an alternative to ra,dec
+		:returns: the cube face number, an integer in [0,5]
 		'''
-		# be careful with all() and any() as 0 is a legitimate value
+		# Every test below is against None, never truthiness: ipix=0 and dec=0 are both
+		# perfectly good values. Writing "if ipix:" made face_number(ipix=0) fall through
+		# to the coordinate branch and fail there complaining about a missing ra.
 
-		if ipix and True in [x is not None for x in [ra,dec]]:
-			raise ValueError("Only specify 'ra','dec' OR 'ipix', not all three.")
-		if (ra is not None or dec is not None) and (not all([x is not None for x in [ra,dec]])):
-			raise ValueError(f"Both parameters 'ra' and 'dec' are required when one is provided (ra={ra}, dec={dec}).")
-		if ipix:
-			if not (0 <= ipix < self.nbins):
-				raise ValueError(f"The ipix number provided ('{ipix}') is outside the range [0,{self.nbins-1}].")
-		else:
-			# ra,dec provided
-			ra = _as_float_scalar(ra, "ra")
-			dec = _as_float_scalar(dec, "dec")
-			if not -90 <= dec <= 90:
-				raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
-			# ra needs no range check: it is periodic, and the C wrapper reduces it
-			# to [0,360) before handing it to q3c_get_facenum, which requires that
-			# range and does not enforce it. Rejecting ra outside [-360,360] used to
-			# hide the fact that everything in [-360,0) was answered wrongly.
+		if ipix is not None and (ra is not None or dec is not None):
+			raise ValueError("Specify either 'ra' and 'dec' or 'ipix', not both.")
 
-		if ipix:
-			ra,dec = self.ipix2ang(ipix)
+		if ipix is not None:
+			# the face is an exact property of the pixel number; no need to go through
+			# a coordinate, which for a pixel on a face boundary is a round trip that
+			# only floating point can spoil
+			return self.ipix2face(ipix)
+
+		if ra is None or dec is None:
+			raise ValueError(f"Both 'ra' and 'dec' are required (ra={ra}, dec={dec}); "
+							 f"alternatively pass 'ipix' on its own.")
+
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
+		if not -90 <= dec <= 90:
+			raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
+		# ra needs no range check: it is periodic, and the C wrapper reduces it
+		# to [0,360) before handing it to q3c_get_facenum, which requires that
+		# range and does not enforce it. Rejecting ra outside [-360,360] used to
+		# hide the fact that everything in [-360,0) was answered wrongly.
 
 		return q3c.facenum(self._hprm, ra, dec)
 
