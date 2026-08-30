@@ -1,6 +1,7 @@
 
 import os
 import sys
+import enum
 import math
 import pathlib
 import sqlite3
@@ -19,6 +20,7 @@ try:
 	astropy_available = True
 	from astropy.units import Quantity
 	import astropy.units as u
+	from astropy.coordinates import SkyCoord, BaseCoordinateFrame
 except ImportError:
 	astropy_available = False
 
@@ -33,11 +35,42 @@ from . import q3c
 from .q3c import sindist
 
 from .utilities import _normalize_ang, _as_float_scalar
+from .sky_coverage import _coverage_value, _polygon_entry, _sky_coverage_document
 
 # really important for the ipix values!
 sqlite3.register_adapter(np.int64, int)
 
 logger = logging.getLogger("qlsc")
+
+# The depth QLSCIndex.coverage bins to when the caller does not choose one. A coverage
+# map is a picture, so the useful default is the coarsest depth that still shows
+# structure rather than the depth the index happens to be stored at: depth 5 is 6,144
+# pixels for the whole sky (about 2.8 degrees across each), which a renderer draws
+# comfortably as individual polygons. Depth 30, the index default, would be 6.9e18.
+DEFAULT_COVERAGE_DEPTH = 5
+
+def wrap_longitude(longitude:Union[float, Iterable]) -> Union[float, np.ndarray]:
+	'''
+	Express an angle in the geographic longitude convention, the half-open range [-180,180).
+
+	This is the mapping between right ascension, which this package reports in [0,360),
+	and longitude: ``wrap_longitude(286) == -74``. It is periodic in 360 degrees, so any
+	input is accepted, and it is idempotent. The range is half open at +180: a longitude
+	of exactly 180 comes back as -180, which is the same meridian and the convention
+	astropy's ``Angle.wrap_at(180 * u.deg)`` uses.
+
+	Scalars return a float and array-likes a NumPy array.
+
+	:param longitude: an angle, or an array-like of angles, in degrees
+	:returns: the same angle(s) in [-180,180)
+	'''
+	if np.isscalar(longitude):
+		return float(((float(longitude) + 180.) % 360.) - 180.)
+	values = np.asarray(longitude, dtype=np.double)
+	wrapped = ((values + 180.) % 360.) - 180.
+	if wrapped.ndim == 0:
+		return float(wrapped)
+	return wrapped
 
 def _canonical_position(ra:float, dec:float) -> Tuple[float, float]:
 	'''
@@ -69,9 +102,16 @@ def _polygon_ra_dec(polygon:Iterable) -> Tuple[np.ndarray, np.ndarray]:
 	The vertex count is not checked here: the C layer knows the limit
 	(``Q3C_MAX_N_POLY_VERTEX``) and reports it.
 
-	:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2)
+	The polygon may also be given as an array :class:`~astropy.coordinates.SkyCoord` (or
+	coordinate frame) holding the vertices, which is transformed to ICRS first.
+
+	:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2), or a SkyCoord of the vertices
 	:returns: a tuple of (ra, dec) arrays
 	'''
+	if _is_coordinate_object(polygon):
+		vertex_ra, vertex_dec = _coordinate_object_degrees(polygon, "polygon")
+		polygon = np.column_stack((np.atleast_1d(vertex_ra), np.atleast_1d(vertex_dec)))
+
 	poly = np.asarray(polygon, dtype=np.double)
 	if poly.ndim != 2 or poly.shape[1] != 2:
 		raise ValueError(f"The polygon must be an array of [ra,dec] pairs with shape (n,2); was given shape {poly.shape}.")
@@ -95,8 +135,170 @@ def _degrees(value:Union[float, "Quantity"], name:str) -> float:
 		value = value.to(u.deg).value
 	return _as_float_scalar(value, name)
 
+def _require_astropy(description:str):
+	'''
+	Raise a clear ImportError when an astropy-only feature is asked for without astropy installed.
+
+	astropy is a soft dependency of this package: everything works without it, and the
+	features that need it (:class:`~astropy.coordinates.SkyCoord` input and output,
+	:class:`~astropy.units.Quantity` angles) say so here rather than failing with a
+	``NameError`` on an import that was quietly skipped.
+
+	:param description: what was being attempted, for the error message
+	'''
+	if not astropy_available:
+		raise ImportError(f"{description} requires the 'astropy' package, which is not installed "
+						  f"(install it with e.g. 'pip install astropy'). Coordinates can always be "
+						  f"given and returned as plain degrees instead.")
+
+def _is_coordinate_object(value) -> bool:
+	'''
+	Return whether a value is an astropy sky coordinate (a ``SkyCoord`` or a coordinate frame).
+
+	Always False when astropy is not installed, where no such object can exist.
+
+	:param value: the value to test
+	'''
+	return astropy_available and isinstance(value, (SkyCoord, BaseCoordinateFrame))
+
+def _coordinate_object_degrees(value, name:str) -> Tuple[Union[float,np.ndarray], Union[float,np.ndarray]]:
+	'''
+	Return the ICRS right ascension and declination of an astropy sky coordinate, in degrees.
+
+	**The coordinate is transformed to ICRS**, which is the frame every ra,dec value in this
+	package is taken to be in. A coordinate given in another frame (galactic, FK5, an
+	altaz coordinate with an observing time and location, ...) is therefore converted, not
+	reinterpreted — that conversion is the reason for accepting these objects at all. A
+	coordinate carrying a distance keeps only its direction; the index is a sphere.
+
+	A scalar coordinate returns two floats and an array coordinate two arrays, matching the
+	scalar/array convention of the methods that call this.
+
+	:param value: a :class:`~astropy.coordinates.SkyCoord` or coordinate frame object
+	:param name: the parameter name, for error messages
+	:returns: a tuple of (ra, dec) in degrees
+	'''
+	if isinstance(value, BaseCoordinateFrame):
+		if not value.has_data:
+			raise ValueError(f"The '{name}' coordinate frame holds no coordinate data.")
+		value = SkyCoord(value)
+
+	icrs = value.icrs
+
+	if value.isscalar:
+		return float(icrs.ra.deg), float(icrs.dec.deg)
+
+	return (np.asarray(icrs.ra.deg, dtype=np.double).ravel(),
+			np.asarray(icrs.dec.deg, dtype=np.double).ravel())
+
+def _degrees_or_unchanged(value):
+	'''
+	Convert an astropy :class:`~astropy.units.Quantity` angle to a plain number of degrees,
+	and return anything else untouched for the caller to validate.
+
+	Unlike :py:func:`_degrees` this does not reduce the value to a scalar, so it can be
+	applied to a coordinate that may be a single angle or a whole array of them.
+
+	This exists because ``np.asarray`` on a Quantity yields its numbers with the units
+	silently discarded: an angle given in radians would otherwise be read as degrees, and
+	the query would return the wrong answer rather than an error.
+
+	This is the one place a Quantity angle is unwrapped for the whole API:
+	:func:`_coordinate_pair` routes every ra,dec parameter of every public method through
+	it, and the cone search calls it directly for its radius.
+
+	:param value: an angle, an array of angles, or a Quantity holding either
+	:returns: the value in degrees if it was a Quantity, otherwise the value as given
+	'''
+	if astropy_available and isinstance(value, Quantity):
+		return value.to(u.deg).value
+	return value
+
+def _coordinate_pair(ra, dec, ra_name:str="ra", dec_name:str="dec"):
+	'''
+	Resolve the coordinate pair of a public method, accepting an astropy sky coordinate
+	in place of the pair.
+
+	A :class:`~astropy.coordinates.SkyCoord` (or coordinate frame) is passed as the **first**
+	of the two parameters and the second is left unset, e.g. ``ang2ipix(coord)`` or
+	``ang2ipix(ra=coord)``; it carries both angles, so giving the second as well is an error
+	rather than a value silently ignored. The coordinate is transformed to ICRS — see
+	:func:`_coordinate_object_degrees`.
+
+	Either angle may also be given as an astropy :class:`~astropy.units.Quantity`, which is
+	converted to degrees. Plain numbers and arrays pass through untouched.
+
+	:param ra: the first angle, or a sky coordinate carrying both
+	:param dec: the second angle, unset if a sky coordinate was given
+	:param ra_name: the name of the first parameter, for error messages
+	:param dec_name: the name of the second parameter, for error messages
+	:returns: a tuple of (ra, dec) in degrees
+	'''
+	if _is_coordinate_object(dec):
+		raise ValueError(f"A sky coordinate object replaces both '{ra_name}' and '{dec_name}' and is "
+						 f"passed as '{ra_name}'; it was given as '{dec_name}'.")
+	if _is_coordinate_object(ra):
+		if dec is not None:
+			raise ValueError(f"A sky coordinate object given as '{ra_name}' already carries both angles; "
+							 f"'{dec_name}' must not also be specified.")
+		return _coordinate_object_degrees(ra, ra_name)
+
+	return _degrees_or_unchanged(ra), _degrees_or_unchanged(dec)
+
+def _skycoord_from_degrees(ra, dec, description:str) -> "SkyCoord":
+	'''
+	Build an ICRS :class:`~astropy.coordinates.SkyCoord` from ra,dec values in degrees.
+
+	Scalar input produces a scalar SkyCoord and array input an array one, matching the
+	shape convention of whichever method is returning it.
+
+	:param ra: right ascension value(s) in degrees
+	:param dec: declination value(s) in degrees
+	:param description: what is being returned, for the ImportError message
+	:returns: a :class:`~astropy.coordinates.SkyCoord` in the ICRS frame
+	'''
+	_require_astropy(description)
+	return SkyCoord(ra=np.asarray(ra, dtype=np.double) * u.deg,
+					dec=np.asarray(dec, dtype=np.double) * u.deg,
+					frame="icrs")
+
+def _zip_exact(*sequences):
+	'''
+	Combine sequences elementwise, refusing to silently truncate.
+
+	``zip`` stops at its shortest input, which turns a length mismatch into missing
+	rows rather than an error — this is how ``add_points`` came to store two points
+	when given three coordinates and two keys. Every use here is building rows to
+	insert into the index, where a short sequence is a bug in the caller, not a
+	shorter insert. (``zip(..., strict=True)`` would do the same, but it needs
+	Python 3.10 and this package supports 3.6.)
+
+	:param sequences: the sequences to combine; all must be the same length
+	:returns: an iterator of tuples, as ``zip`` returns
+	'''
+	lengths = [len(sequence) for sequence in sequences]
+	if len(set(lengths)) != 1:
+		raise ValueError(f"Refusing to combine sequences of unequal length ({lengths}); "
+						 f"this would silently drop the values past the shortest one.")
+	return zip(*sequences)
+
+class MatchArrayShape(enum.Enum):
+	'''
+	The shape a region query gives its plain (no flags set) array of matches.
+
+	``SQUEEZED`` is :py:func:`QLSCIndex.radial_query`'s historical shape and only it:
+	the result is passed through :func:`numpy.squeeze`, so a single match comes back
+	with shape (2,) rather than (1,2) and ``matches[:,0]`` fails for exactly that one
+	case. Changing it would break callers, so it is queued for a 2.0 release; every
+	query added since is ``STABLE`` and always returns (n,2).
+	'''
+	STABLE = "stable"
+	SQUEEZED = "squeezed"
+
 def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:list,
-				  return_key:bool, return_distance:bool):
+				  return_key:bool, return_distance:bool, shape:MatchArrayShape,
+				  match_target_index:list=None, return_target_index:bool=False,
+				  return_skycoord:bool=False):
 	'''
 	Assemble the return value shared by the region query methods.
 
@@ -106,12 +308,53 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 	:param match_distance: the angular separations of the matches, if they were collected
 	:param return_key: whether the "key" field was requested
 	:param return_distance: whether the "distance" field was requested
-	:returns: an array of shape (n,2) if neither flag is set, otherwise a :class:`numpy.recarray`
+	:param shape: the :class:`MatchArrayShape` this query promises for its plain array result
+	:param match_target_index: the index of the query target each match belongs to, for a batch query
+	:param return_target_index: whether the "target_index" field was requested
+	:param return_skycoord: whether the coordinates were asked for as a :class:`~astropy.coordinates.SkyCoord`
+	:returns: an array of shape (n,2) if no flag is set, a :class:`numpy.recarray`, a :class:`~astropy.coordinates.SkyCoord`, or an :class:`~astropy.table.QTable`
 	'''
-	if return_key or return_distance:
+	if return_skycoord:
+		# An array SkyCoord, never squeezed: a single match is a length-1 SkyCoord.
+		coordinates = _skycoord_from_degrees(np.asarray(match_ra, dtype=np.double),
+											 np.asarray(match_dec, dtype=np.double),
+											 "Returning query matches as a SkyCoord")
+		if not (return_key or return_distance or return_target_index):
+			return coordinates
+
+		# The coordinates cannot be a field of a recarray, so the extra fields asked for
+		# are carried alongside them in the astropy container built for exactly this:
+		# a QTable holding a SkyCoord "coord" column plus one column per flag. The column
+		# order matches the recarray's, target_index first.
+		from astropy.table import QTable
+		table = QTable()
+		if return_target_index:
+			table["target_index"] = np.asarray(match_target_index, dtype=np.int64)
+		table["coord"] = coordinates
+		if return_key:
+			# object dtype: a key is a string or None (a point stored without one)
+			table["key"] = np.array(match_key, dtype=object)
+		if return_distance:
+			table["distance"] = np.asarray(match_distance, dtype=np.double) * u.deg
+		return table
+
+	if return_key or return_distance or return_target_index:
 		arrays = [match_ra, match_dec]
 		names = ["ra", "dec"]
+		if return_target_index:
+			# Built with an explicit dtype rather than left to np.rec.fromarrays to infer:
+			# an empty result would otherwise give the field a float dtype, so an index
+			# used to subscript another array would depend on whether anything matched.
+			arrays.insert(0, np.asarray(match_target_index, dtype=np.int64))
+			names.insert(0, "target_index")
 		if return_key:
+			# NOTE: the "key" field's dtype is left to np.rec.fromarrays to infer, which
+			# means an empty result gives it a float dtype rather than a string one - the
+			# same wart "target_index" is built explicitly to avoid. It is not fixed here
+			# because the fix is not symmetric: pinning a dtype would also change the
+			# dtype of every NON-empty keyed result that this method has always returned
+			# (a fixed-width string, or object to carry the None of a keyless point), and
+			# that is a change to the existing API rather than to the empty case alone.
 			arrays.append(match_key)
 			names.append("key")
 		if return_distance:
@@ -120,8 +363,56 @@ def _match_result(match_ra:list, match_dec:list, match_key:list, match_distance:
 		# np.rec is the public spelling of this module; np.core.records is
 		# deprecated in NumPy 1.25+ and gone from the NumPy 2 namespace.
 		return np.rec.fromarrays(arrays, names=",".join(names))
-	else:
+	elif shape is MatchArrayShape.SQUEEZED:
 		return np.squeeze(np.dstack((match_ra,match_dec)))
+	else:
+		return np.column_stack((np.asarray(match_ra, dtype=np.double),
+								np.asarray(match_dec, dtype=np.double)))
+
+#: The largest semi-major axis a genuinely elliptical (axis_ratio < 1) region may have.
+#:
+#: Q3C's ellipse is a conic in the gnomonic projection about its center, and only the
+#: near hemisphere projects. At and past 90 degrees ``q3c_in_ellipse`` silently answers
+#: about a different region: it rejects every point more than 90 degrees from the center
+#: whatever the semi-major axis, and the sin^2 term it compares against stops being
+#: monotonic, so a 150 degree "ellipse" is smaller than a 60 degree one. Verified against
+#: the C source and numerically (the boundary matches the tangent-plane conic to 3e-10
+#: degrees across 1120 configurations); see test_ellipse_geometry.py.
+#:
+#: Read from the C extension rather than repeated here: the same limit is enforced on
+#: both exported ellipse functions in ``qlsc_c_module.c``, and two copies of a number
+#: are two chances to disagree.
+ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS = q3c.ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS
+
+def _validate_ellipse(semi_major_axis:float, axis_ratio:float):
+	'''
+	Check the size and shape of an ellipse against the domain Q3C's geometry supports.
+
+	:param semi_major_axis: semi-major axis of the ellipse (degrees)
+	:param axis_ratio: ratio of the semi-minor to the semi-major axis
+	'''
+	if not (0 < axis_ratio <= 1):
+		raise ValueError(f"The value for axis_ratio must be in the range (0,1]; was given '{axis_ratio}'.")
+
+	if axis_ratio == 1:
+		# a circle is a distance test, with the same domain as a cone search
+		if not (0 <= semi_major_axis <= 180):
+			raise ValueError(f"The value for semi_major_axis must be in the range [0,180]; was given '{semi_major_axis}'.")
+	elif not (0 <= semi_major_axis < ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS):
+		raise ValueError(
+			f"The value for semi_major_axis must be in the range [0,{ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS:g}) for an "
+			f"axis_ratio below 1; was given '{semi_major_axis}'. Q3C's ellipse is a conic in the tangent plane at "
+			f"its center, which only reaches the near hemisphere, so a larger one is not the region asked for. "
+			f"Use axis_ratio=1 (or radial_query) for a circle of any radius up to 180 degrees.")
+
+def _as_stable_pairs(matches:np.ndarray) -> np.ndarray:
+	'''
+	Reshape a :py:data:`MatchArrayShape.SQUEEZED` plain array result to (n,2).
+
+	:param matches: the result of a squeezed-shape query with no flags set
+	:returns: the same coordinates with shape (n,2)
+	'''
+	return np.asarray(matches, dtype=np.double).reshape(-1, 2)
 
 class QLSC:
 	'''
@@ -147,6 +438,28 @@ class QLSC:
 	The default value of `depth` = 30 that divides the sphere into 6,442,450,944 bins (i.e. nside=1,073,741,824),
 	is the one used by the `Q3C PostgreSQL plugin <https://github.com/segasai/q3c>`_.
 	This value is used if neither `nside` or `bin_size` are specified.
+
+	**astropy**
+
+	astropy is an optional dependency. Where it is installed, every method that takes an
+	ra,dec pair also accepts an astropy :class:`~astropy.coordinates.SkyCoord` in place of
+	the pair: it is passed as the **first** of the two parameters and the second is left
+	unset, e.g. ``ang2ipix(coord)``, ``ang2ipix(ra=coord)``,
+	``point_in_ellipse(coord, ra_cen=center_coord, semi_major_axis=..., axis_ratio=...)``.
+	Giving both a SkyCoord and the second angle is an error rather than a silently ignored
+	value. Individual angles may equally be given as :class:`~astropy.units.Quantity`
+	values, and a polygon may be given as a SkyCoord of its vertices.
+
+	**Every sky coordinate object is transformed to ICRS**, which is the frame the ra,dec
+	values in this package are taken to be in. A coordinate expressed in another frame
+	(galactic, FK5, an altaz coordinate with a time and location, ...) is therefore
+	*converted* — which is the reason for accepting these objects — and never reinterpreted
+	as if its angles were already ra,dec. A coordinate carrying a distance keeps only its
+	direction.
+
+	Methods returning coordinates take a ``return_skycoord`` flag to get an ICRS SkyCoord
+	back instead of degrees. No default return value changes, and asking for a SkyCoord
+	without astropy installed raises ``ImportError``.
 
 	:param depth: number of times each bin in each face is subdivided by four
 	'''
@@ -174,6 +487,21 @@ class QLSC:
 	def __repr__(self):
 		return f"<{self.__class__.__module__.split('.')[0]}.{self.__class__.__name__} at {hex(id(self))}, depth={self.depth}>"
 
+	def _longitude(self, ra:Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+		'''
+		Express a computed right ascension in this scheme's longitude convention.
+
+		This class reports right ascension in [0,360) and returns the value unchanged;
+		:py:class:`GeoQLSC` overrides this to wrap into [-180,180). It is the single
+		place the convention is applied, so every method that computes a longitude
+		(:py:func:`ipix2ang`, :py:func:`xy2ang`, and :py:func:`ipix2polygon` through it)
+		follows whichever convention the object was built with.
+
+		:param ra: a right ascension, or an array of them, in degrees
+		:returns: the same angle(s) in this scheme's convention
+		'''
+		return ra
+
 	def ang2ipix(self, ra:Union[float,Iterable]=None, dec:Union[float,Iterable]=None, points:Iterable=None) -> Union[float,np.ndarray]:
 		'''
 		Convert ra,dec positions to an ipix number.
@@ -193,13 +521,34 @@ class QLSC:
 			ipix = ang2ipix(points=np.array([[45,60],[0,55]])
 			ipix = ang2ipix(ra=catalog[:,4], dec=catalog[:,5])
 
-		:param ra: right ascension (degrees)
+		An astropy :class:`~astropy.coordinates.SkyCoord` (scalar or array) may be given in
+		place of the ra,dec pair, as the first positional argument or as either ``ra`` or
+		``points``; ``dec`` must then be left unset. **The coordinate is transformed to
+		ICRS**, the frame every ra,dec value in this package is taken to be in — a galactic
+		or FK5 coordinate is converted, not reinterpreted. Angles may also be given as
+		astropy :class:`~astropy.units.Quantity` values.
+
+		.. code-block:: python
+
+			ipix = ang2ipix(SkyCoord(ra=45*u.deg, dec=60*u.deg))
+			ipix = ang2ipix(SkyCoord(l=121*u.deg, b=-21*u.deg, frame="galactic"))
+			ipix = ang2ipix(points=catalog_skycoord)
+
+		:param ra: right ascension (degrees), or a :class:`~astropy.coordinates.SkyCoord` carrying both angles
 		:param dec: declination (degrees)
-		:param points: an array of [ra,dec] points, shape=(n,2)
+		:param points: an array of [ra,dec] points, shape=(n,2), or a :class:`~astropy.coordinates.SkyCoord`
 		:returns: the ipix integer if a single point is provided, an array of ipix integers if an array of values is provided
 		'''
 
 		# .. todo:: support pd.Series for ra, dec.
+
+		if _is_coordinate_object(points):
+			if ra is not None or dec is not None:
+				raise ValueError("The parameter 'points' was given; 'ra' or 'dec' should not also be specified.")
+			ra, dec = _coordinate_object_degrees(points, "points")
+			points = None
+		else:
+			ra, dec = _coordinate_pair(ra, dec)
 
 		# check "ra","dec" are both set
 		if points is None:
@@ -250,11 +599,39 @@ class QLSC:
 		'''
 		Convert an ra,dec position to an ipix number; also returns the face number, and (x,y) location on the square face.
 
-		:param ra: right ascension angle (degrees)
+		A scalar astropy :class:`~astropy.coordinates.SkyCoord` may be given in place of the
+		ra,dec pair (as ``ra``, with ``dec`` left unset); it is transformed to ICRS, as
+		:py:func:`ang2ipix` describes.
+
+		.. warning::
+
+			**The x,y values returned here are on a different scale from every other
+			(x,y) in this package.** They span [-0.5,0.5] across a cube face, where
+			:py:func:`ipix2xy`, :py:func:`xy2ang` and :py:func:`xy2ipix` all use
+			[-1,1] — exactly a factor of two. Passing these values straight to
+			:py:func:`xy2ang` returns the wrong coordinate, silently, and no error is
+			raised because both scales are inside the accepted range. Double them
+			first::
+
+				position = qlsc.ang2ipix_xy(ra=10., dec=20.)
+				ra, dec = qlsc.xy2ang(facenum=position["facenum"],
+									  x=2 * position["x"], y=2 * position["y"])
+
+			This is Q3C's own internal convention surfacing through the wrapper. It is
+			kept as it is because changing the returned values would break existing
+			code without any error to warn them; it is queued for a 2.0 release
+			(see ``AI/FEATURE_IDEAS.md``) and pinned by ``test_face_xy_scale.py``.
+
+		Note also that ``x,y`` here locate the point itself, whereas
+		:py:func:`ipix2xy` returns the lower left corner of the pixel containing it.
+
+		:param ra: right ascension angle (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec: declination angle (degrees), must be in [-90,90]
 		:param points: an array of ra,dec coordinates (shape: (n,2)) NOT YET SUPPORTED
-		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]
+		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]; note that `x` and `y` are on [-0.5,0.5], NOT the [-1,1] used elsewhere
 		'''
+
+		ra, dec = _coordinate_pair(ra, dec)
 
 		ra = _as_float_scalar(ra, "ra")
 		dec = _as_float_scalar(dec, "dec")
@@ -278,6 +655,7 @@ class QLSC:
 		Non-integer values (including floats that happen to be whole numbers) and
 		values outside [0, nbins) raise ValueError rather than being truncated or
 		clamped: both would silently return the coordinates of a different pixel.
+		Integer arrays of any width are accepted, unsigned ones included.
 
 		:param ipix: an ipix number or an array-like of ipix numbers
 		:returns: an ``int`` for scalar input, an ``np.int64`` array otherwise
@@ -291,6 +669,19 @@ class QLSC:
 		if not np.issubdtype(values.dtype, np.integer):
 			raise ValueError(f"The ipix value(s) must be integers; was given a value of type '{values.dtype}'.")
 
+		if values.dtype == np.uint64:
+			# uint64 is the one integer dtype whose range does not fit in int64, so
+			# it is narrowed here rather than in the bounds check below: how NumPy
+			# promotes a uint64 array compared against a Python int is exactly the
+			# corner that changed between NumPy versions (NEP 50), and float64 -
+			# a plausible common type - has a spacing of 1024 at nbins for depth 30.
+			# Every valid ipix fits in int64; reject what does not and compare there.
+			too_large = values[values > np.uint64(np.iinfo(np.int64).max)]
+			if too_large.size > 0:
+				raise ValueError(f"An ipix number is out of bounds for this scheme (depth={self.depth}); "
+								 f"range: [0,{self.nbins-1}], first offending value: {too_large.flat[0]}.")
+			values = values.astype(np.int64)
+
 		# perform a bounds check
 		out_of_range = values[(values < 0) | (values >= self.nbins)]
 		if out_of_range.size > 0:
@@ -302,7 +693,7 @@ class QLSC:
 
 		return np.ascontiguousarray(values, dtype=np.int64)
 
-	def ipix2ang(self, ipix:Union[int,Iterable]) -> Tuple[Union[float,np.ndarray], Union[float,np.ndarray]]:
+	def ipix2ang(self, ipix:Union[int,Iterable], return_skycoord:bool=False) -> Tuple[Union[float,np.ndarray], Union[float,np.ndarray]]:
 		'''
 		Convert an ipix number to the ra,dec coordinate of the center of the pixel, in degrees.
 
@@ -323,26 +714,37 @@ class QLSC:
 			ra, dec = qlsc.ipix2ang(294541929365396512)
 			ra, dec = qlsc.ipix2ang(catalog_ipix_array)
 
-		:param ipix: an ipix number, or an array-like of ipix numbers
-		:returns: the ra,dec of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input)
-		'''
-		return q3c.ipix2ang(self._hprm, self._validated_ipix(ipix))
+		Set ``return_skycoord`` to get an ICRS astropy :class:`~astropy.coordinates.SkyCoord`
+		instead of the ra,dec tuple — scalar for scalar input, an array SkyCoord for array
+		input. The default return value is unchanged. Asking for one without astropy
+		installed raises ``ImportError``.
 
-	def ipix2ang_center(self, ipix:Union[int,Iterable]) -> Tuple[Union[float,np.ndarray], Union[float,np.ndarray]]:
+		:param ipix: an ipix number, or an array-like of ipix numbers
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` instead of a tuple of degrees
+		:returns: the ra,dec of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input); a :class:`~astropy.coordinates.SkyCoord` if ``return_skycoord`` is set
+		'''
+		ra, dec = q3c.ipix2ang(self._hprm, self._validated_ipix(ipix))
+		ra = self._longitude(ra)
+		if return_skycoord:
+			return _skycoord_from_degrees(ra, dec, "Returning a pixel center as a SkyCoord")
+		return ra, dec
+
+	def ipix2ang_center(self, ipix:Union[int,Iterable], return_skycoord:bool=False) -> Tuple[Union[float,np.ndarray], Union[float,np.ndarray]]:
 		'''
 		Convert an ipix number to the ra,dec coordinate of the center of the pixel, in degrees.
 
 		This is a synonym of :py:func:`ipix2ang`, kept for callers who want the "center"
 		semantics to be explicit at the call site. Like :py:func:`ipix2ang`, it accepts a
-		single ipix value or an array-like of them.
+		single ipix value or an array-like of them, and takes the same ``return_skycoord``.
 
 		The pixel "center" here is defined in the x,y coordinates;
 		the point projected on the sphere is the one returned.
 
 		:param ipix: an ipix number, or an array-like of ipix numbers
-		:returns: the ra,dec of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input)
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` instead of a tuple of degrees
+		:returns: the ra,dec of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input); a :class:`~astropy.coordinates.SkyCoord` if ``return_skycoord`` is set
 		'''
-		return self.ipix2ang(ipix)
+		return self.ipix2ang(ipix, return_skycoord=return_skycoord)
 
 
 	def ipix2xy(self, ipix:Union[int,Iterable]) -> Tuple[Union[int,np.ndarray], Union[float,np.ndarray], Union[float,np.ndarray]]:
@@ -350,7 +752,9 @@ class QLSC:
 		Convert an ipix value to the (x,y) position on the corresponding square face; returns (facenum,x,y).
 
 		The (x,y) returned is the "lower left" corner of the pixel on the face,
-		where the face coordinates run from -1 to +1 in both axes.
+		where the face coordinates run from -1 to +1 in both axes. (:py:func:`ang2ipix_xy`
+		is the exception in this package: it returns the point itself, on [-0.5,0.5].
+		See the warning there.)
 
 		This method accepts a single ipix value or an array-like of them (a NumPy array,
 		list, or tuple of integers). A scalar returns ``(facenum, x, y)`` as an int and two
@@ -362,14 +766,25 @@ class QLSC:
 		'''
 		return q3c.ipix2xy(self._hprm, self._validated_ipix(ipix))
 
-	def xy2ang(self, facenum:int=None, x:float=None, y:float=None, points:collections.abc.Iterable=None): # -> Tuple[float,float]:
+	def xy2ang(self, facenum:int=None, x:float=None, y:float=None, points:collections.abc.Iterable=None,
+			   return_skycoord:bool=False): # -> Tuple[float,float]:
 		'''
 		Convert an x,y coordinate pair on the given face number to (ra,dec).
 
+		The face coordinates run [-1,1] from edge to edge, as they do in
+		:py:func:`ipix2xy` and :py:func:`xy2ipix`. Values coming from
+		:py:func:`ang2ipix_xy` are on [-0.5,0.5] and must be doubled first; see the
+		warning there.
+
+		Set ``return_skycoord`` to get an ICRS astropy :class:`~astropy.coordinates.SkyCoord`
+		instead: scalar for a single (x,y), an array SkyCoord for ``points``. The default
+		return value is unchanged.
+
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
-		:param x: x coordinate on cube face
-		:param y: y coordinate on cube face
+		:param x: x coordinate on cube face, in [-1,1]
+		:param y: y coordinate on cube face, in [-1,1]
 		:param points: an array containing (x,y) coordinate pairs; shape = (n,2)
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` instead of degrees
 		:returns: tuple of (ra,dec) corresponding to the location on the cube face
 		'''
 		# .. todo:: validate ra,dec
@@ -404,17 +819,28 @@ class QLSC:
 			for p in points:
 				ang[idx,:] = q3c.xy2ang(p[0], p[1], facenum)
 				idx +=1 # seriously, fuck Numpy
+			ang[:,0] = self._longitude(ang[:,0])
+			if return_skycoord:
+				return _skycoord_from_degrees(ang[:,0], ang[:,1], "Returning face coordinates as a SkyCoord")
 			return ang
 		else:
-			return q3c.xy2ang(x, y, facenum)
+			ra, dec = q3c.xy2ang(x, y, facenum)
+			ra = self._longitude(ra)
+			if return_skycoord:
+				return _skycoord_from_degrees(ra, dec, "Returning a face coordinate as a SkyCoord")
+			return ra, dec
 
 	def xy2ipix(self, facenum:int=None, x:float=None, y:float=None) -> int: #, points:collections.abc.Iterable):
 		'''
 		Convert an x,y coordinate pair on the given face number to the ipix value.
 
+		The face coordinates run [-1,1] from edge to edge; values from
+		:py:func:`ang2ipix_xy` are on [-0.5,0.5] and must be doubled first, as its
+		warning explains.
+
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
-		:param x: x coordinate on cube face
-		:param y: y coordinate on cube face
+		:param x: x coordinate on cube face, in [-1,1]
+		:param y: y coordinate on cube face, in [-1,1]
 		'''
 		ra,dec = self.xy2ang(x=x, y=y, facenum=facenum)
 		return self.ang2ipix(ra, dec)
@@ -544,10 +970,23 @@ class QLSC:
 	def ipix2face(self, ipix:int) -> int:
 		'''
 		Return the face number the given ipix value falls on.
+
+		The ipix values of a face are contiguous, so the face is the integer quotient of
+		the ipix value and the number of pixels per face. The arithmetic is done in
+		integers: at depths above about 26 the operands exceed the 53 bits a double can
+		hold exactly, and going through floating point rounded the last pixel of every
+		face onto the next one - at depth 30 the very last pixel of the scheme was
+		reported as being on face 6, which is not a face at all. (The same trap was
+		fixed in the C extension's ipix2xy; see the note there.)
+
+		:param ipix: the pixel identifier number
+		:returns: the cube face number, an integer in [0,5]
 		'''
-		if not (0 <= ipix < self.nbins):
-			raise ValueError(f"ipix value out of range for this depth; should be in [0,{self.nbins}).")
-		return ipix // math.pow(self.nside, 2)
+		# _validated_ipix rejects non-integers and out-of-range values, and returns a
+		# Python int for a single value; int() then refuses an array rather than
+		# quietly returning one from a method documented to take one pixel.
+		ipix = int(self._validated_ipix(ipix))
+		return ipix // (self.nside * self.nside)
 
 	@property
 	def nside(self) -> int:
@@ -563,9 +1002,9 @@ class QLSC:
 		'''
 		return int(pow(self.nside,2)) * 6
 
-	def face_number(self, ra:float, dec:float, ipix:int=None) -> int:
+	def face_number(self, ra:float=None, dec:float=None, ipix:int=None) -> int:
 		'''
-		Return the cube face number for the provided coordinate.
+		Return the cube face number for the provided coordinate, or for a pixel.
 
 		Cube faces are numbered as the following:
 
@@ -576,31 +1015,52 @@ class QLSC:
 		|  face 4 = 225° ≤ α < 315
 		|  face 5 = bottom
 
-		:param ra: right ascension in degrees; must be in [0,360]
+		Right ascension is periodic and is accepted at any value, as
+		:py:func:`ang2ipix` accepts it: ``face_number(-350, 20)`` and
+		``face_number(370, 20)`` both answer for ra=10.
+
+		Give it either a coordinate or an ``ipix`` value, not both. For a pixel the
+		answer is :py:func:`ipix2face`, which reads the face straight out of the pixel
+		number; it does not depend on this object's depth in the coordinate form.
+
+		A scalar astropy :class:`~astropy.coordinates.SkyCoord` may be given in place of the
+		ra,dec pair (as ``ra``, with ``dec`` left unset); it is transformed to ICRS, as
+		:py:func:`ang2ipix` describes.
+
+		:param ra: right ascension in degrees; any value, reduced to [0,360) internally; or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec: declination in degrees; must be in [-90,90]
-		:param ipix: the pixel identifier number
-		:returns: the cube face number
+		:param ipix: the pixel identifier number, as an alternative to ra,dec
+		:returns: the cube face number, an integer in [0,5]
 		'''
-		# be careful with all() and any() as 0 is a legitimate value
+		# Every test below is against None, never truthiness: ipix=0 and dec=0 are both
+		# perfectly good values. Writing "if ipix:" made face_number(ipix=0) fall through
+		# to the coordinate branch and fail there complaining about a missing ra.
 
-		if ipix and True in [x is not None for x in [ra,dec]]:
-			raise ValueError("Only specify 'ra','dec' OR 'ipix', not all three.")
-		if (ra is not None or dec is not None) and (not all([x is not None for x in [ra,dec]])):
-			raise ValueError(f"Both parameters 'ra' and 'dec' are required when one is provided (ra={ra}, dec={dec}).")
-		if ipix:
-			if not (0 <= ipix < self.nbins):
-				raise ValueError(f"The ipix number provided ('{ipix}') is outside the range [0,{self.nbins-1}].")
-		else:
-			# ra,dec provided
-			ra = _as_float_scalar(ra, "ra")
-			dec = _as_float_scalar(dec, "dec")
-			if not -90 <= dec <= 90:
-				raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
-			if not -360 <= ra <= 360:
-				raise ValueError(f"The value of 'ra' must be normalized to [0,360]; was given '{ra}'.")
+		# resolved before the checks below so that a SkyCoord given as 'ra' counts as
+		# having supplied both angles
+		ra, dec = _coordinate_pair(ra, dec)
 
-		if ipix:
-			ra,dec = self.ipix2ang(ipix)
+		if ipix is not None and (ra is not None or dec is not None):
+			raise ValueError("Specify either 'ra' and 'dec' or 'ipix', not both.")
+
+		if ipix is not None:
+			# the face is an exact property of the pixel number; no need to go through
+			# a coordinate, which for a pixel on a face boundary is a round trip that
+			# only floating point can spoil
+			return self.ipix2face(ipix)
+
+		if ra is None or dec is None:
+			raise ValueError(f"Both 'ra' and 'dec' are required (ra={ra}, dec={dec}); "
+							 f"alternatively pass 'ipix' on its own.")
+
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
+		if not -90 <= dec <= 90:
+			raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
+		# ra needs no range check: it is periodic, and the C wrapper reduces it
+		# to [0,360) before handing it to q3c_get_facenum, which requires that
+		# range and does not enforce it. Rejecting ra outside [-360,360] used to
+		# hide the fact that everything in [-360,0) was answered wrongly.
 
 		return q3c.facenum(self._hprm, ra, dec)
 
@@ -632,47 +1092,74 @@ class QLSC:
 		# 	else:
 		# 		return 5
 
-	def ipix_area(self, ipix:int, depth:int) -> float:
+	def ipix_area(self, ipix:int, depth:int=None) -> float:
 		'''
-		Return the area of a given QLSC pixel in steradians for a given ipix.
+		Return the area of a given QLSC pixel, in steradians.
 
-		NOTE: currently this method returns the average bin size and ignores the ipix and depth values!
+		This is the area of the pixel actually asked for, not an average. QLSC pixels
+		are **not** equal area: the largest, at the centre of a cube face, is
+		3·√3 ≈ 5.196 times the smallest, at a cube vertex. Relative to the mean
+		(4π / number of pixels) the range is about 1.91x down to 0.37x, and the spread
+		is already a factor of 2.5 at ``depth=2``. Where an approximate answer will do,
+		the mean is ``4 * math.pi / qlsc.nbins``; this method is for when it will not.
 
-		Not all pixels are guaranteed to be the same size, but they are very close,
-		i.e. the size of any one pixel is a good approximation to any other.
+		The areas of all the pixels of a scheme sum to 4π.
 
-		pixel area ≈ 4π / no. pixels on sphere
+		By default the pixel is measured at this object's own depth. Pass ``depth`` to
+		measure the ancestor pixel containing ``ipix`` at a coarser depth instead:
+		``depth=0`` is the whole cube face, and ``depth`` equal to this object's depth
+		(the default) is the pixel itself. A finer depth is refused - this scheme does
+		not resolve it, and the underlying Q3C function would answer with a silently
+		meaningless number rather than complain.
 
 		:param ipix: the pixel identifier number
+		:param depth: the depth at which to measure, in [0, this object's depth]; the default is this object's depth
 		:returns: the area of the specified pixel in steradians
 		'''
+		ipix = int(self._validated_ipix(ipix))
 
-		return 4. * math.pi / self.nbins
+		if depth is None:
+			depth = self.depth
+		if isinstance(depth, bool) or not isinstance(depth, (int, np.integer)):
+			raise ValueError(f"The value for 'depth' must be an integer; was given '{depth}'.")
+		if not (0 <= depth <= self.depth):
+			raise ValueError(f"The value for 'depth' must be in the range [0,{self.depth}] for this scheme; "
+							 f"was given '{depth}'. A depth finer than the scheme's own is not resolved by it.")
 
-		#if not (0 <= depth <= 30):
-		#	raise ValueError(f"The depth provided {depth} is out of the range 0-30")
+		# q3c_pixarea's third argument is not a depth: it is the number of levels to go
+		# UP from the scheme's own resolution, applied as (x0 >> n) << n to the pixel's
+		# face coordinates. So the scheme's own depth is offset 0, and depth 0 - a whole
+		# face - is offset self.depth. Past self.depth the shift walks the coordinates
+		# out of the face entirely and q3c returns an area larger than a face without a
+		# word of complaint, which is why the range check above is not optional.
+		return q3c.pixarea(self._hprm, ipix, self.depth - depth)
 
-		# The paramter call for the underlying C function is q3c_pixarea(hprm, ipix, depth).
-		# It's not clear why "depth" is a parameter since it should be read from hprm.
-		# I left the parameter exposed in the Python wrapper, but in this method will just pass depth.
-
-		#return q3c.pixarea(self._hprm, ipix, depth)
-
-	def ang2ipix_at_depth(self, ra:float, dec:float, depth:int) -> int:
+	def ang2ipix_at_depth(self, ra:float=None, dec:float=None, depth:int=None) -> int:
 		'''
 		Return the ipix value at the specified coordinate for any given bin level.
 		Returns the ipix value of the pixel center at certain pixel depth covering the specified (ra,dec). [??]
 
-		:param ra: right ascension (degrees); must be in [0,360]
+		A scalar astropy :class:`~astropy.coordinates.SkyCoord` may be given in place of the
+		ra,dec pair (as ``ra``, with ``dec`` left unset); it is transformed to ICRS.
+
+		:param ra: right ascension (degrees); must be in [0,360]; or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec: declination (degrees); must be in [-90,90]
 		:param depth: ; must be in the integer range [1-30]
 		:returns:
 		'''
+		ra, dec = _coordinate_pair(ra, dec)
+		# 'ra', 'dec' and 'depth' are only formally optional so that a SkyCoord can be
+		# given as the single positional coordinate argument; all three are required.
+		if ra is None or dec is None:
+			raise ValueError(f"Both 'ra' and 'dec' must be specified (or a single SkyCoord as 'ra'); "
+							 f"was given ra={ra}, dec={dec}.")
+		if depth is None:
+			raise ValueError("A value for 'depth' must be specified.")
 		if not (1 <= depth <= 30):
 			raise ValueError(f"The depth provided {depth} is outside the integer range [1,30].")
 		return ( q3c.ang2ipix(self._hprm, ra, dec) >> (2*depth) << (2*depth) ) + (1 << (2 * (depth-1))) - 1
 
-	def ipix2polygon(self, ipix:int=None, duplicate_endpoint=False):
+	def ipix2polygon(self, ipix:int=None, duplicate_endpoint=False, return_skycoord:bool=False):
 		'''
 		Returns the points that describe the polygon that define this pixel.
 
@@ -684,9 +1171,22 @@ class QLSC:
 		projected face by face (:py:func:`xy2ang` takes one face number), so the shape and
 		the grouping gain nothing over calling this method in a loop.
 
+		The default is the open form: four corners, shape (4,2), with the edge from the
+		last back to the first left implicit. Set ``duplicate_endpoint`` for the closed
+		form, five rows with the first repeated as the last, which is what most drawing
+		code wants. Either form may be handed to :py:func:`point_in_polygon` and
+		:py:func:`QLSCIndex.polygon_query`; a repeated vertex makes a zero-length edge,
+		which contributes nothing to the containment test.
+
+		Set ``return_skycoord`` to get the corners as an array ICRS astropy
+		:class:`~astropy.coordinates.SkyCoord` instead of the (4,2) array; the corner
+		ordering is the same. Either form may be handed back to
+		:py:func:`point_in_polygon` and :py:func:`QLSCIndex.polygon_query`.
+
 		:param ipix: the pixel identifier number
 		:param duplicate_endpoint: if True, repeat the first coordinate in the polygon as the last element
-		:returns: an array of ra,dec coordinates in degrees
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` of the corners instead of an array of degrees
+		:returns: an array of ra,dec coordinates in degrees, with shape (4,2) or, with ``duplicate_endpoint`` set, (5,2)
 		'''
 		if ipix is None:
 			raise ValueError(f"An 'ipix' value must be specified.")
@@ -700,26 +1200,17 @@ class QLSC:
 
 		facenum, x, y = self.ipix2xy(ipix) # returns lower left corner
 
+		polygon = np.array([
+				[  x ,  y  ],
+				[ x+d,  y  ],
+				[ x+d, y+d ],
+				[  x , y+d ]
+			], dtype=np.double)
+
 		if duplicate_endpoint:
-			polygon = np.array([
-					[  x ,  y  ],
-					[ x+d,  y  ],
-					[ x+d, y+d ],
-					[  x , y+d ],
-					[  x ,  y  ]
-				], dtype=np.double)
-		else:
-			polygon = np.array([
-					[  x ,  y  ],
-					[ x+d,  y  ],
-					[ x+d, y+d ],
-					[  x , y+d ]
-				], dtype=np.double)
+			polygon = np.vstack((polygon, polygon[:1]))
 
-		if duplicate_endpoint == True:
-			polygon = polygon[:-1]
-
-		return self.xy2ang(facenum=facenum, points=polygon)
+		return self.xy2ang(facenum=facenum, points=polygon, return_skycoord=return_skycoord)
 
 	def point_in_polygon(self, ra:float=None, dec:float=None, polygon:Iterable=None) -> bool:
 		'''
@@ -734,11 +1225,18 @@ class QLSC:
 		anywhere on the sky). A ValueError is raised when the limit is exceeded.
 		The result does not depend on this object's depth.
 
-		:param ra: right ascension of the point to test (degrees)
+		The point may be given as a scalar astropy :class:`~astropy.coordinates.SkyCoord`
+		(as ``ra``, with ``dec`` left unset), and the polygon as an array
+		:class:`~astropy.coordinates.SkyCoord` of its vertices; both are transformed to
+		ICRS, as :py:func:`ang2ipix` describes.
+
+		:param ra: right ascension of the point to test (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec: declination of the point to test (degrees)
-		:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2)
+		:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2), or a :class:`~astropy.coordinates.SkyCoord` of the vertices
 		:returns: True if the point is inside the polygon
 		'''
+		ra, dec = _coordinate_pair(ra, dec)
+
 		if any([x is None for x in [ra, dec, polygon]]):
 			raise ValueError("Values for 'ra', 'dec', and 'polygon' must all be specified.")
 
@@ -759,21 +1257,42 @@ class QLSC:
 		'''
 		Test whether an ra,dec point lies inside an ellipse on the sphere.
 
-		The ellipse is the one Q3C defines: centered on (``ra_cen``, ``dec_cen``), with the
-		given semi-major axis, axis ratio (semi-minor over semi-major, in ``(0,1]``, where 1
-		is a circle) and position angle. This is the exact containment test used to filter
-		:py:func:`QLSCIndex.ellipse_query` results, and its answer does not depend on this
-		object's depth.
+		The ellipse is the one Q3C defines: **a conic in the gnomonic (tangent plane)
+		projection about its center**, with semi-axes ``tan(semi_major_axis)`` and
+		``tan(semi_major_axis) * axis_ratio`` in that plane. Along the major axis its
+		edge is exactly ``semi_major_axis`` degrees from the center; across the minor
+		axis the edge is at ``arctan(tan(semi_major_axis) * axis_ratio)``, which is
+		close to ``semi_major_axis * axis_ratio`` for a small ellipse and noticeably
+		wider for a large one. The answer does not depend on this object's depth.
 
-		:param ra: right ascension of the point to test (degrees)
+		Only the near hemisphere has a tangent plane projection, so a genuinely
+		elliptical region (``axis_ratio`` below 1) is limited to a semi-major axis of
+		**less than 90 degrees**; anything larger raises ``ValueError`` rather than
+		answering about a region that is not the one asked for. An ``axis_ratio`` of
+		exactly 1 is a circle, needs no tangent plane, and is instead tested by angular
+		separation over the whole [0,180] range — the identical (and inclusive) test
+		:py:func:`QLSCIndex.radial_query` applies, so the two always agree.
+
+		A point exactly on the edge of a genuinely elliptical region counts as outside,
+		which is Q3C's own convention; a point exactly on the edge of a circular one
+		counts as inside, matching the cone search.
+
+		The point and the center may each be given as a scalar astropy
+		:class:`~astropy.coordinates.SkyCoord` (as ``ra`` and ``ra_cen``, with ``dec`` and
+		``dec_cen`` left unset); they are transformed to ICRS, as :py:func:`ang2ipix` describes.
+
+		:param ra: right ascension of the point to test (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec: declination of the point to test (degrees)
-		:param ra_cen: right ascension of the center of the ellipse (degrees)
+		:param ra_cen: right ascension of the center of the ellipse (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec_cen: declination of the center of the ellipse (degrees)
-		:param semi_major_axis: semi-major axis of the ellipse (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param semi_major_axis: semi-major axis of the ellipse (degrees); in [0,90) unless ``axis_ratio`` is 1, when [0,180] is accepted. Accepts a `float` value or `astropy.units.Quantity`
 		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
 		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
 		:returns: True if the point is inside the ellipse
 		'''
+		ra, dec = _coordinate_pair(ra, dec)
+		ra_cen, dec_cen = _coordinate_pair(ra_cen, dec_cen, "ra_cen", "dec_cen")
+
 		if any([x is None for x in [ra, dec, ra_cen, dec_cen, semi_major_axis, axis_ratio]]):
 			raise ValueError("Values for 'ra', 'dec', 'ra_cen', 'dec_cen', 'semi_major_axis' and 'axis_ratio' must all be specified.")
 
@@ -791,11 +1310,109 @@ class QLSC:
 		if not (-90 <= dec_cen <= 90):
 			ra_cen, dec_cen = _normalize_ang(ra_cen, dec_cen)
 
-		# the remaining validation (axis ratio range, negative semi-major axis) is
-		# performed in the C layer, which raises ValueError
+		_validate_ellipse(semi_major_axis, axis_ratio)
+
+		if axis_ratio == 1:
+			# A circle, where Q3C's tangent-plane conic is neither needed nor usable
+			# past 90 degrees: the region is the spherical cap of that radius, and the
+			# test is exactly radial_query's, boundary included.
+			return sindist(ra, dec, ra_cen, dec_cen) <= pow(sin(deg2rad(semi_major_axis)/2.), 2)
+
 		return q3c.in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
 							  semi_major_axis=semi_major_axis, axis_ratio=axis_ratio,
 							  position_angle=position_angle)
+
+	def coverage(self, ipix:Union[int,Iterable]=None, values:Union[float,Iterable]=None,
+				 value_name:str=None, value_units:str=None, value_domain:Iterable=None,
+				 meta:dict=None) -> dict:
+		'''
+		Describe a set of pixels as a "sky-coverage" version 1 document.
+
+		The document is the JSON interchange format for coverage maps on the sphere
+		specified by the `astplot-js <https://github.com/demitri/astplot-js>`_ project: a
+		set of polygons in degrees, each optionally carrying a scalar value, which a
+		consumer renders as a filled-polygon coverage map or choropleth in any projection.
+		This method returns it as a plain Python dictionary; writing it out is one call to
+		:py:func:`json.dumps`, using the standard library encoder alone.
+
+		.. code-block:: python
+
+			import json
+			q = QLSC(depth=6)
+			with open("coverage.json", "w") as f:
+				json.dump(q.coverage(ipix_array, values=counts, value_name="count"), f)
+
+		Each pixel becomes one entry of the document's ``polygons`` array: its four corners
+		(as :py:func:`ipix2polygon` returns them) as ``vertices``, its ipix number as ``id``,
+		and, when ``values`` is given, the corresponding scalar as ``value``. The document
+		declares degrees, the ICRS frame and geodesic edges, and records this qlsc version
+		and this scheme's depth in ``meta``. Right ascension is written in [0,360) — the
+		convention of the frame the document declares — even on a :py:class:`GeoQLSC`,
+		which reports [-180,180) everywhere else.
+
+		A single ipix value produces a document with one polygon; an array-like of them
+		produces one polygon each, in the order given. The ipix numbers are not required to
+		be unique or sorted, and no pixel is dropped or merged.
+
+		:param ipix: an ipix number, or a one-dimensional array-like of ipix numbers
+		:param values: the scalar to attach to each pixel, one per ipix value; the default attaches none
+		:param value_name: what the values are (e.g. "count"), recorded for the consumer's legend
+		:param value_units: the units of the values, recorded for the consumer's legend
+		:param value_domain: a [min,max] pair pinning the consumer's colour scale, so several documents can share one scale
+		:param meta: additional producer metadata to record; the "producer", "scheme" and "depth" keys are written by qlsc and cannot be replaced
+		:returns: the sky-coverage document as a plain Python dictionary
+		'''
+		if ipix is None:
+			raise ValueError("An 'ipix' value must be specified.")
+
+		validated = self._validated_ipix(ipix)
+
+		if isinstance(validated, (int, np.integer)):
+			# scalar input: one pixel
+			ipix_values = [int(validated)]
+		else:
+			if validated.ndim != 1:
+				raise ValueError(f"The 'ipix' values must be a single value or a one-dimensional array-like; "
+								 f"was given shape {validated.shape}. A document is a flat list of polygons, "
+								 f"so a higher-dimensional array would have to be flattened, discarding its shape.")
+			ipix_values = validated
+
+		if values is None:
+			if any([x is not None for x in [value_name, value_units, value_domain]]):
+				raise ValueError("A 'value_name', 'value_units' or 'value_domain' describes the per-pixel "
+								 "'values', which were not provided; there would be nothing for the "
+								 "description to refer to.")
+			polygon_values = None
+		else:
+			# np.atleast_1d, so that a scalar (or a size-1 array) is one value for one
+			# pixel: a size-1 array is a scalar value everywhere else in qlsc, and there
+			# is no reason for the values of a one-pixel document to be the exception.
+			given = np.atleast_1d(np.asarray(values))
+			if given.ndim != 1:
+				raise ValueError(f"The 'values' must be a single value or a one-dimensional array-like "
+								 f"parallel to 'ipix'; was given shape {np.shape(values)}.")
+			if given.shape[0] != len(ipix_values):
+				raise ValueError(f"The number of values ({given.shape[0]}) does not match the number of "
+								 f"ipix values ({len(ipix_values)}).")
+			polygon_values = [_coverage_value(v, f"value for ipix {int(i)}")
+							  for i,v in zip(ipix_values, given)]
+
+		polygons = list()
+		for n,pixel in enumerate(ipix_values):
+			pixel = int(pixel)
+			vertices = np.asarray(self.ipix2polygon(pixel), dtype=np.double)
+			# A sky-coverage document is an interchange artifact read by other software,
+			# and it declares the ICRS frame; its longitudes are therefore written in that
+			# frame's own [0,360) convention whatever convention this object reports in.
+			# Without this a GeoQLSC (which reports [-180,180)) would emit a document whose
+			# numbers depend on which class produced it - the same positions, but a range
+			# no consumer was told to expect. This is a no-op for QLSC itself.
+			vertices[:,0] = np.mod(vertices[:,0], 360.)
+			polygons.append(_polygon_entry(pixel, vertices,
+										   None if polygon_values is None else polygon_values[n]))
+
+		return _sky_coverage_document(polygons, self.depth, value_name=value_name,
+									  value_units=value_units, value_domain=value_domain, meta=meta)
 
 
 class QLSCIndex:
@@ -817,6 +1434,40 @@ class QLSCIndex:
 
 	The underlying storage is an SQLite database, but this should be considered an implementation
 	detail and can change. (This may be documented for expanded use in the future.)
+
+	**Keys**
+
+	A point may be given a ``key``: a string label, optional, and not required to be
+	unique. The index is therefore a collection of points that happen to be labelled —
+	a multimap of keys to points — and not a dictionary of keys to single points.
+	The mapping-style operations follow from that, and this is their contract:
+
+	* ``len(index)`` counts **points**, whether they carry a key or not.
+	* ``key in index`` is True if at least one point carries that key.
+	* iterating the index, or :py:func:`keys`, yields one key **per point**: a key
+	  shared by three points is yielded three times, and points stored without a key
+	  are not represented at all. The number of keys yielded can therefore be either
+	  more or less than ``len(index)``.
+	* :py:func:`find_by_key` returns **every** point carrying a key, and
+	  :py:func:`remove_point` with a key removes every point carrying it.
+	* A point stored without a key can only be found by position (:py:func:`radial_query`
+	  and its siblings) and only be removed by coordinate.
+	* Keys must be strings. Anything else raises ``TypeError`` at every boundary,
+	  including :py:func:`add_point` and :py:func:`add_points`: the underlying column
+	  has SQLite's TEXT affinity, so a key of ``5`` would be stored as ``'5'`` and
+	  could then never be found with ``5``.
+
+	**astropy**
+
+	As with :py:class:`QLSC`, every method taking an ra,dec pair also accepts an astropy
+	:class:`~astropy.coordinates.SkyCoord` in place of the pair (given as the first of the
+	two parameters, the second left unset), and **transforms it to ICRS** — the frame this
+	index stores coordinates in. The methods that return coordinates
+	(:py:func:`radial_query`, :py:func:`polygon_query`, :py:func:`ellipse_query`,
+	:py:func:`find_by_key`) take a ``return_skycoord`` flag to hand them back as an ICRS
+	SkyCoord instead of degrees; combined with ``return_key`` or ``return_distance`` the
+	result is an :class:`~astropy.table.QTable`, since a SkyCoord cannot be a field of a
+	:class:`numpy.recarray`. No default return value changes.
 
 	:param qlsc: an instance of :py:class:`QLSC` set to the desired segmentation level
 	:param filepath: the file path (string path, ``pathlib.Path``, or ``file://`` URL) where a persistent index will be stored; the default is to create the index in memory
@@ -916,9 +1567,36 @@ class QLSCIndex:
 			if not db_ok:
 				connection.close()
 				raise Exception(f"The file provided is an SQLite database (good) but not in a format I recognize (bad).")
+			self._ensure_key_index(connection)
 
 		if not self._is_in_memory_db():
 			connection.close()
+
+	def _ensure_key_index(self, connection:sqlite3.Connection):
+		'''
+		Add the index on the "key" column to an index file that predates it.
+
+		Index files written by qlsc 1.1 and earlier have an index on ipix but none on
+		key, so every lookup or removal by key scans the whole table. The index is
+		additive — no table, column, or row changes, and an older qlsc simply ignores
+		an index it does not know about — so an existing file is upgraded in place
+		when it is opened, and the schema version does not move.
+
+		A file that cannot be written to (a read-only file or filesystem, or one
+		locked by another process) keeps the index it has: this is an optimization,
+		every operation returns exactly the same answer without it, and refusing to
+		open a file that opened fine before would be the worse failure. That case is
+		reported at warning level rather than passed over in silence. Any error that
+		is not SQLite refusing the write is a real problem and is left to propagate.
+
+		:param connection: an open connection to an existing index database
+		'''
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				cursor.execute(f"CREATE INDEX IF NOT EXISTS key_idx ON {self.database_tablename}(key)")
+		except sqlite3.OperationalError as e:
+			logger.warning(f"The index on the 'key' column of '{self.db_filepath}' could not be created ({e}). "
+						   f"Lookups and removals by key will scan the whole table; results are unaffected.")
 
 	def _validate_db_as_qlsc_index(self, connection:sqlite3.Connection):
 		'''
@@ -931,7 +1609,10 @@ class QLSCIndex:
 				if metadata is None:
 					raise RuntimeError(f"The file at '{self.db_filepath}' has a QLSC index metadata table but no metadata row; the file appears to be corrupted.")
 				if self.qlsc.depth != metadata["depth"]:
-					self.qlsc = QLSC(depth=metadata["depth"])
+					# type(...) rather than QLSC: the scheme carries the longitude
+					# convention (see GeoQLSC), which adopting the file's depth must not
+					# quietly discard
+					self.qlsc = type(self.qlsc)(depth=metadata["depth"])
 				self.name = metadata["index_name"]
 				self.description = metadata["index_description"]
 				return True
@@ -1017,6 +1698,10 @@ class QLSCIndex:
 
 			cursor.execute(f'''CREATE INDEX ipix_idx ON {self.database_tablename}(ipix); ''')
 
+			# Not unique: keys are labels, and several points may share one.
+			# Without this, every lookup or removal by key scans the whole table.
+			cursor.execute(f'''CREATE INDEX key_idx ON {self.database_tablename}(key); ''')
+
             # Create a metadata table - COUNT(*) on SQLite databases always does a full scan,
             # so keep track of rows count here.
             # Could add additional information here.
@@ -1093,15 +1778,25 @@ class QLSCIndex:
 		is added to the index without a key and again later with a key, it will not be added
 		to the index (and vice versa).
 
-		:param ra: a single right ascension value, in degrees
+		A scalar astropy :class:`~astropy.coordinates.SkyCoord` may be given in place of the
+		ra,dec pair (as ``ra``, with ``dec`` left unset). **It is transformed to ICRS**, the
+		frame this index stores coordinates in; a galactic or FK5 coordinate is converted,
+		not reinterpreted.
+
+		:param ra: a single right ascension value, in degrees, or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec: a single declination value, in degrees
-		:param key: a unique identifier for the coordinate (optional)
+		:param key: a string identifier for the coordinate (optional, and not required to be unique)
 		'''
 
 		self._ensure_open()
 
+		ra, dec = _coordinate_pair(ra, dec)
+
 		if any([x is None for x in [ra,dec]]):
 			raise ValueError("Both 'ra' and 'dec' values must be specified.")
+
+		# validated on the way in as well as on the way out; see _validated_key
+		key = self._validated_key(key, allow_none=True, description="the 'key' argument")
 
 		# Coerce scalar-like values: without this, a NumPy array passed here would be
 		# stored by sqlite3 as a BLOB via the buffer protocol - silently losing the
@@ -1147,27 +1842,58 @@ class QLSCIndex:
 		be made to normalize the points first. This may only be an issue when providing an extremely
 		large number of points.
 
-		:param ra: an Iterable (e.g. NumPy array) of right ascension points in degrees
+		An array astropy :class:`~astropy.coordinates.SkyCoord` may be given in place of the
+		ra,dec pair (as ``ra``, with ``dec`` left unset) or as ``points``. **It is transformed
+		to ICRS**, the frame this index stores coordinates in.
+
+		:param ra: an Iterable (e.g. NumPy array) of right ascension points in degrees, or a :class:`~astropy.coordinates.SkyCoord`
 		:param dec: an Iterable of declination points in degrees
-		:param points: an Iterable of tuples of (ra,dec) pairs
-		:param key: an Iterable of unique identifiers for each point
+		:param points: an Iterable of tuples of (ra,dec) pairs, or a :class:`~astropy.coordinates.SkyCoord`
+		:param keys: an Iterable of string identifiers, one per point; an entry of ``None`` means that point has no key
 		'''
 		self._ensure_open()
 
+		coordinate_object = points if _is_coordinate_object(points) else ra
+		if _is_coordinate_object(coordinate_object):
+			if coordinate_object is points and (ra is not None or dec is not None):
+				raise ValueError("Only 'ra','dec' OR 'points' can be specified.")
+			if coordinate_object is ra and points is not None:
+				raise ValueError("Only 'ra','dec' OR 'points' can be specified.")
+			ra, dec = _coordinate_pair(coordinate_object, dec if coordinate_object is ra else None)
+			# a scalar SkyCoord describes one point; this method takes collections of them
+			ra, dec = np.atleast_1d(ra), np.atleast_1d(dec)
+			points = None
+		else:
+			ra, dec = _coordinate_pair(ra, dec)
+
 		if all([x is None for x in [ra,dec,points]]):
 			raise ValueError("'ra','dec' OR 'points' must be specified.")
-		if all([x is True for x in [ra, dec, points]]):
+		# This was written as "all([x is True for x in [ra, dec, points]])", which is
+		# never satisfied by an array (or by anything but the literal True), so both
+		# forms could be given at once and the 'ra','dec' pair was silently discarded
+		# by the reassignment below.
+		if points is not None and (ra is not None or dec is not None):
 			raise ValueError("Only 'ra','dec' OR 'points' can be specified.")
 		elif points is None and any([x is None for x in [ra,dec]]):
 			raise ValueError("If 'ra' or dec' is given, then other parameter must also be provided.")
 
 		if keys is not None:
+			# zip() stops at the shortest input, so an unequal number of keys silently
+			# drops points instead of failing. Nothing below may assume these lengths
+			# agree; check them here, before any database work.
 			if points is not None:
 				if len(points) != len(keys):
 					raise ValueError(f"The number of points provided ({len(points)}) does not match the number of keys ({len(keys)}).")
 			else:
-				if len(ra) != len(dec) != len(keys):
+				# NOT "len(ra) != len(dec) != len(keys)": that chained comparison is
+				# False whenever len(ra) == len(dec), whatever len(keys) is, so three
+				# coordinates and two keys stored two points and dropped the third.
+				if not (len(ra) == len(dec) == len(keys)):
 					raise ValueError(f"The number of ra,dec coordinates provided ({len(ra)},{len(dec)}) does not match the number of keys ({len(keys)}).")
+			# validated up front rather than inside the executemany generator: an
+			# exception raised mid-insert would leave the in-memory connection holding
+			# an open transaction
+			self._validate_keys(keys)
 
 #		if pandas_available:
 #			if isinstance(ra, pandas.core.series.Series):
@@ -1205,10 +1931,10 @@ class QLSCIndex:
 					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec) VALUES (?, ?, ?)"
 					# use individual lists instead of something like np.dstack- we don't want
 					# the 64-bit ipix integers converted to floats and risk changing the value due to rounding
-					cursor.executemany(query, zip(ipix, ra, dec)) # pass list of tuples (e.g. use zip)
+					cursor.executemany(query, _zip_exact(ipix, ra, dec))
 				else:
 					query = f"INSERT OR IGNORE INTO {self.database_tablename} (ipix, ra, dec, key) VALUES (?, ?, ?, ?)"
-					cursor.executemany(query, zip(ipix, ra, dec, keys))
+					cursor.executemany(query, _zip_exact(ipix, ra, dec, keys))
 
 				cursor.execute("COMMIT")
 
@@ -1247,12 +1973,19 @@ class QLSCIndex:
 		Removing something that is not in the index raises ``KeyError`` rather than quietly
 		doing nothing.
 
-		:param ra: right ascension of the point to remove, in degrees
+		A scalar astropy :class:`~astropy.coordinates.SkyCoord` may be given in place of the
+		ra,dec pair (as ``ra``, with ``dec`` left unset); it is transformed to ICRS. The
+		coordinate must still match the one that was stored exactly, so the coordinate to
+		remove is best taken from what a query returned.
+
+		:param ra: right ascension of the point to remove, in degrees, or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec: declination of the point to remove, in degrees
 		:param key: the key of the point(s) to remove
 		:returns: the number of points removed
 		'''
 		self._ensure_open()
+
+		ra, dec = _coordinate_pair(ra, dec)
 
 		by_coordinate = ra is not None or dec is not None
 
@@ -1294,18 +2027,89 @@ class QLSCIndex:
 
 		return removed
 
-	def _validated_key(self, key) -> str:
+	def _validated_key(self, key, allow_none:bool=False, description:str="the key") -> str:
 		'''
-		Validate a key used to look up or remove points.
+		Validate a key on its way into, or into a lookup against, the index.
 
-		The ``key`` column has SQLite's TEXT affinity, so a non-string key would be
-		stored (and compared) as its text representation — a silent mismatch waiting
-		to happen. Require a string and say so instead.
+		The ``key`` column has SQLite's TEXT affinity, so a non-string key is stored
+		as its text representation: ``add_point(..., key=5)`` used to succeed while
+		``5 in index`` raised and ``'5' in index`` was the only way to find it back.
+		Requiring a string at every boundary is what keeps the value that goes in
+		equal to the value that comes out.
+
+		``None`` means "this point has no key" and is accepted where that is
+		meaningful (adding points), but not in a lookup, where there is no such key
+		to find.
+
+		:param key: the value to validate
+		:param allow_none: whether ``None`` (meaning "no key") is acceptable here
+		:param description: how to refer to the value in an error message
+		:returns: the key, unchanged
 		'''
+		if key is None and allow_none:
+			return None
 		if not isinstance(key, str):
 			raise TypeError(f"Index keys are strings (the underlying column has TEXT affinity); "
-							f"was given '{key!r}' of type '{type(key).__name__}'.")
+							f"{description} is '{key!r}' of type '{type(key).__name__}'.")
 		return key
+
+	def _validate_keys(self, keys:Iterable):
+		'''
+		Validate every key in an iterable on its way into the index.
+
+		A ``None`` entry means that particular point has no key.
+
+		:param keys: an iterable of keys, one per point
+		'''
+		if isinstance(keys, np.ndarray) and keys.dtype.kind == "U":
+			return # a unicode array cannot hold a non-string element
+		for position, key in enumerate(keys):
+			self._validated_key(key, allow_none=True, description=f"keys[{position}]")
+
+	def find_by_key(self, key:str, return_skycoord:bool=False) -> np.recarray:
+		'''
+		Return the coordinates of every point in this index carrying the given key.
+
+		Keys are not required to be unique, so this returns every match, not one.
+		The result is always a :class:`numpy.recarray` with the fields "ra" and "dec",
+		even for a single match — unlike the default return of :py:func:`radial_query`,
+		which squeezes.
+
+		A key that is not in the index raises ``KeyError``, as :py:func:`remove_point`
+		does; use ``key in index`` for a check that does not raise.
+
+		Set ``return_skycoord`` to get an array ICRS astropy
+		:class:`~astropy.coordinates.SkyCoord` of the matches instead of the recarray.
+
+		:param key: the key of the point(s) to return
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` instead of a recarray
+		:returns: a :class:`numpy.recarray` with the fields ``ra,dec``, or a :class:`~astropy.coordinates.SkyCoord`
+		'''
+		self._ensure_open()
+		key = self._validated_key(key)
+
+		match_ra = list()
+		match_dec = list()
+
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				for row in cursor.execute(f"SELECT ra,dec FROM {self.database_tablename} WHERE key=?", (key,)):
+					match_ra.append(row["ra"])
+					match_dec.append(row["dec"])
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+		if len(match_ra) == 0:
+			raise KeyError(f"No point with the key '{key}' was found in this index.")
+
+		if return_skycoord:
+			return _skycoord_from_degrees(np.asarray(match_ra, dtype=np.double),
+										  np.asarray(match_dec, dtype=np.double),
+										  "Returning the points found by key as a SkyCoord")
+
+		return np.rec.fromarrays([match_ra, match_dec], names="ra,dec")
 
 	def keys(self) -> Iterable[str]:
 		'''
@@ -1336,6 +2140,68 @@ class QLSCIndex:
 		finally:
 			if not self._is_in_memory_db():
 				connection.close()
+
+	def _all_points(self, with_keys:bool=False):
+		'''
+		Read every point of the index into memory.
+
+		This is the whole index, materialized: it is used by :py:func:`qlsc.crossmatch`,
+		which iterates over the smaller of two catalogs, and the memory cost of doing so is
+		documented there. There is deliberately no public equivalent — the index is a
+		query structure, and a caller that wants the points back has them already.
+
+		The rows are streamed into arrays sized from the row count rather than fetched into
+		a list first: a ``sqlite3.Row`` costs far more than the two doubles it carries, and
+		materializing one per point doubles the peak memory of the read for no purpose.
+
+		The row count is a size hint, not a contract — this class opens and closes
+		connections per operation so that it can be used from several threads, so the index
+		can grow or shrink between counting it and reading it. The arrays are therefore
+		grown if the read overruns them and trimmed if it falls short; no point is dropped
+		to make the answer fit the count.
+
+		:param with_keys: whether to read the key column as well
+		:returns: a tuple of (ra, dec, keys), where keys is a list of str-or-None, or None if it was not asked for
+		'''
+		self._ensure_open()
+
+		columns = "ra,dec,key" if with_keys else "ra,dec"
+
+		expected = self.number_of_points
+		ra = np.empty(expected, dtype=np.double)
+		dec = np.empty(expected, dtype=np.double)
+		keys = [None] * expected if with_keys else None
+
+		n = 0
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				for row in cursor.execute(f"SELECT {columns} FROM {self.database_tablename}"):
+					if n == ra.shape[0]:
+						# the index grew after it was counted; grow rather than truncate
+						grown = max(2 * n, 1)
+						ra = np.resize(ra, grown)
+						dec = np.resize(dec, grown)
+					ra[n] = row["ra"]
+					dec[n] = row["dec"]
+					if with_keys:
+						if n == len(keys):
+							keys.append(row["key"])
+						else:
+							keys[n] = row["key"]
+					n += 1
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+		if n != ra.shape[0]:
+			# the index shrank, or grew and the arrays were doubled past the end
+			ra = ra[:n]
+			dec = dec[:n]
+			if with_keys:
+				keys = keys[:n]
+
+		return ra, dec, keys
 
 	def __len__(self) -> int:
 		'''
@@ -1510,13 +2376,21 @@ class QLSCIndex:
 		'''
 		query_hprm = self._query_scheme()._hprm
 
+		# An ellipse is not grown all the way to 180 degrees the way a cone is: the C
+		# wrapper refuses an elliptical region of ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS or more
+		# (the tangent plane it is defined in reaches no further), and there is nothing to
+		# gain by trying - from Q3C_MAXRAD upwards q3c stops doing geometry and returns
+		# the whole sphere, so no larger search can widen the coverage. The ceiling is
+		# raised to the requested size if that is already the larger of the two, so
+		# widening can never shrink the search below what was asked for.
 		return self._widened_candidate_ranges(
 			lambda size: q3c.ellipse_query(query_hprm, ra, dec, size, axis_ratio, position_angle),
 			semi_major_axis,
 			f"ellipse query at (ra={ra}, dec={dec}) with semi_major_axis={semi_major_axis} deg, "
-			f"axis_ratio={axis_ratio}, position_angle={position_angle} deg")
+			f"axis_ratio={axis_ratio}, position_angle={position_angle} deg",
+			maximum=min(q3c.Q3C_MAXRAD, ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS))
 
-	def _widened_candidate_ranges(self, region_query, size:float, description:str):
+	def _widened_candidate_ranges(self, region_query, size:float, description:str, maximum:float=180.0):
 		'''
 		Run a candidate range search, growing the region until it produces usable ranges.
 
@@ -1526,86 +2400,62 @@ class QLSCIndex:
 		queried as ra=0), so the search uses a size of at least 1e-6 degrees. At rare
 		positions a given size can also overflow q3c's internal range capacity; a larger
 		region produces fewer, coarser ranges, so the size is grown and the search retried
-		on either failure mode, raising only if even a whole-sphere search fails.
+		on either failure mode, raising only if even the largest search fails.
 
 		The region searched always contains the region asked for, so the ranges are a
-		superset and the caller's exact filter still gives the right answer.
+		superset and the caller's exact filter still gives the right answer. The ceiling
+		is never below the size actually requested, so widening cannot shrink the search.
 
 		:param region_query: a callable taking a size in degrees and returning the (fulls, partials) arrays
 		:param size: the requested size of the region in degrees (a radius or a semi-major axis)
 		:param description: the query, for the warning message
+		:param maximum: the largest size to grow the search to; growing past ``q3c.Q3C_MAXRAD`` cannot widen the coverage further, since q3c returns the whole sphere from there on
 		:returns: a tuple of the (fulls, partials) depth-30 ipix range arrays
 		'''
 		initial_search_size = max(size, 1e-6)
+		ceiling = max(initial_search_size, maximum)
 		search_size = initial_search_size
 		while True:
 			try:
 				fulls, partials = region_query(search_size)
 			except q3c.RangeOverflowError:
-				if search_size >= 180.0:
-					raise # even a whole-sphere search failed
-				search_size = min(search_size * 10, 180.0)
+				if search_size >= ceiling:
+					raise # even the widest permitted search failed
+				search_size = min(search_size * 10, ceiling)
 				continue
-			if len(fulls) + len(partials) > 0 or search_size >= 180.0:
+			if len(fulls) + len(partials) > 0 or search_size >= ceiling:
 				break
-			search_size = min(search_size * 10, 180.0)
+			search_size = min(search_size * 10, ceiling)
 
 		if search_size > initial_search_size:
 			logger.warning(f"The {description} required widening the candidate search region to {search_size} deg; results are correct, but the query may be slower than usual.")
 
 		return fulls, partials
 
-	def radial_query(self, ra:float, dec:float, radius:Union[float, "Quantity"], return_key:bool=False, return_distance:bool=False) -> np.recarray:
+	def _cone_matches(self, center_ra:float, center_dec:float, radius:float,
+					  return_key:bool, return_distance:bool, target_index:int,
+					  match_ra:list, match_dec:list, match_key:list, match_distance:list,
+					  match_target_index:list):
 		'''
-		Given an ra,dec coordinate and a radius (all in degrees), return the points that fall in the cone search.
+		Find the indexed points inside one cone and append them to the match lists.
 
-		The default return value (both flags left False) is unchanged: an array of the
-		matching coordinates with shape (n,2). If either ``return_key`` or
-		``return_distance`` is set, the result is instead a :class:`numpy.recarray` whose
-		fields are "ra", "dec", then "key" and "distance" for whichever flags were set.
+		This is the whole of a single cone search, factored out so that a scalar query and
+		one target of a batch query run identical code. The lists are appended to rather
+		than returned so that a batch query accumulates every target's matches in one set
+		of lists, in target order.
 
-		The "distance" field is the angular separation between the query center and each
-		match, in degrees. It costs nothing to ask for: the cone filter already computes
-		the sine-squared half-distance of every candidate. Coordinates that are equivalent
-		representations of the query center (e.g. a point stored at ra=360 and queried at
-		ra=0, or any ra at a pole) report a separation of exactly 0.
-
-		:param ra: right ascension (degrees)
-		:param dec: declination (degrees)
-		:param radius: radius (degrees) in the range [0,180], accepts a `float` value or `astropy.units.Quantity`
-		:param return_key: if set to True, include the key value as provided when added to the index
-		:param return_distance: if set to True, include the angular separation from the query center in degrees
-		:returns: an array of matches with shape (n,2) if both flags are False; otherwise a :class:`numpy.recarray` with the fields ``ra,dec`` plus ``key`` and/or ``distance``
+		:param center_ra: right ascension of the center of the cone (degrees)
+		:param center_dec: declination of the center of the cone (degrees)
+		:param radius: radius of the cone (degrees), already validated to be in [0,180]
+		:param return_key: whether the caller asked for the "key" field
+		:param return_distance: whether the caller asked for the "distance" field
+		:param target_index: the position of this target in the caller's target list, or None for a scalar query
+		:param match_ra: the list to append the ra of each match to
+		:param match_dec: the list to append the dec of each match to
+		:param match_key: the list to append the key of each match to
+		:param match_distance: the list to append the separation of each match to
+		:param match_target_index: the list to append ``target_index`` to, once per match
 		'''
-
-		self._ensure_open()
-
-		if astropy_available:
-			if isinstance(radius, Quantity):
-				radius = radius.to(u.deg).value
-
-		ra = _as_float_scalar(ra, "ra")
-		dec = _as_float_scalar(dec, "dec")
-		radius = _as_float_scalar(radius, "radius")
-
-		if abs(dec) > 90:
-			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
-
-		# above 180 degrees the sin^2(radius/2) filter below becomes periodic and meaningless
-		if not (0 <= radius <= 180):
-			raise ValueError(f"The value for radius must be in the range [0,180]; was given '{radius}'.")
-
-		center_ra = ra
-		center_dec = dec
-
-		# gather matches into these lists
-		match_ra = list()
-		match_dec = list()
-		match_key = list()
-		match_distance = list()
-
-		#if isinstance(self._db, sqlite3.Connection):
-
 		fulls, partials = self._find_candidate_ranges(center_ra, center_dec, radius)
 
 		#logger.debug(f"{center_ra=}, {center_dec=}, {radius=}")
@@ -1647,10 +2497,239 @@ class QLSCIndex:
 					match_key.append(row["key"])
 				if return_distance:
 					match_distance.append(_sindist2deg(row_sindist))
+				if target_index is not None:
+					match_target_index.append(target_index)
 
-		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance)
+	def _validated_targets(self, ra, dec, radius):
+		'''
+		Validate the target list of a batch cone search.
 
-	def polygon_query(self, polygon:Iterable=None, return_key:bool=False) -> np.ndarray:
+		Everything is checked before any query runs: a bad target halfway down a list
+		would otherwise raise after an arbitrary amount of work, with no indication of how
+		much of the answer had been computed.
+
+		:param ra: the right ascensions of the targets (degrees)
+		:param dec: the declinations of the targets (degrees)
+		:param radius: one radius for every target, or one radius per target (degrees)
+		:returns: a tuple of the (ra, dec, radius) arrays, all of the same length
+		'''
+		# Every angle is put into degrees BEFORE np.asarray sees it: np.asarray on an
+		# astropy Quantity yields its numbers with the units discarded, so a target list
+		# in radians would be read as degrees and silently produce the wrong answer.
+		# radial_query has already done this for its own arguments; repeating it here
+		# costs nothing and keeps this helper correct on its own.
+		ra = _degrees_or_unchanged(ra)
+		dec = _degrees_or_unchanged(dec)
+		radius = _degrees_or_unchanged(radius)
+
+		target_ra = np.atleast_1d(np.asarray(ra, dtype=np.double))
+		target_dec = np.atleast_1d(np.asarray(dec, dtype=np.double))
+
+		for values,name in ((target_ra, "ra"), (target_dec, "dec")):
+			if values.ndim != 1:
+				raise ValueError(f"The '{name}' values of a batch query must be a one-dimensional "
+								 f"array-like; was given shape {values.shape}.")
+
+		if target_ra.shape != target_dec.shape:
+			raise ValueError(f"The number of 'ra' values ({target_ra.shape[0]}) does not match the "
+							 f"number of 'dec' values ({target_dec.shape[0]}).")
+
+		if np.size(radius) == 1:
+			# a single radius applies to every target; a size-1 array is a scalar here as
+			# it is everywhere else in qlsc
+			target_radius = np.full(target_ra.shape, _as_float_scalar(radius, "radius"), dtype=np.double)
+		else:
+			target_radius = np.atleast_1d(np.asarray(radius, dtype=np.double))
+			if target_radius.ndim != 1:
+				raise ValueError(f"The 'radius' values of a batch query must be a single value or a "
+								 f"one-dimensional array-like; was given shape {target_radius.shape}.")
+			if target_radius.shape != target_ra.shape:
+				raise ValueError(f"The number of 'radius' values ({target_radius.shape[0]}) does not "
+								 f"match the number of targets ({target_ra.shape[0]}).")
+
+		if not (np.isfinite(target_ra).all() and np.isfinite(target_dec).all()):
+			raise ValueError("The 'ra' and 'dec' values must all be finite.")
+		if not np.isfinite(target_radius).all():
+			raise ValueError("The 'radius' values must all be finite.")
+
+		if not ((-90 <= target_dec).all() and (target_dec <= 90).all()):
+			offending = target_dec[(target_dec < -90) | (target_dec > 90)]
+			raise ValueError(f"The values for dec must be in the range [-90,90]; "
+							 f"first offending value: '{offending[0]}'.")
+
+		# above 180 degrees the sin^2(radius/2) filter becomes periodic and meaningless
+		if not ((0 <= target_radius).all() and (target_radius <= 180).all()):
+			offending = target_radius[(target_radius < 0) | (target_radius > 180)]
+			raise ValueError(f"The values for radius must be in the range [0,180]; "
+							 f"first offending value: '{offending[0]}'.")
+
+		return target_ra, target_dec, target_radius
+
+	def radial_query(self, ra:Union[float,Iterable]=None, dec:Union[float,Iterable]=None,
+					 radius:Union[float, Iterable, "Quantity"]=None, return_key:bool=False,
+					 return_distance:bool=False, return_counts:bool=False,
+					 return_skycoord:bool=False) -> np.recarray:
+		'''
+		Given an ra,dec coordinate and a radius (all in degrees), return the points that fall in the cone search.
+
+		The default return value (all flags left False) is unchanged: an array of the
+		matching coordinates with shape (n,2). If any of ``return_key`` or
+		``return_distance`` is set, the result is instead a :class:`numpy.recarray` whose
+		fields are "ra", "dec", then "key" and "distance" for whichever flags were set.
+
+		.. warning::
+
+			**That plain array is squeezed, so a single match comes back with shape (2,),
+			not (1,2)**, and ``matches[:,0]`` raises for exactly that one case. Nothing
+			else in the package does this — :py:func:`polygon_query` and
+			:py:func:`ellipse_query` always return (n,2) — but changing it here would
+			break existing callers without an error to warn them, so it is kept and
+			queued for a 2.0 release. It is named by
+			:class:`~qlsc.qlsc_base.MatchArrayShape` (``SQUEEZED``, which is this method
+			and only this method) so that which queries carry the wart is stated in one
+			place rather than left to be discovered. Use ``np.atleast_2d(matches)``, or
+			set ``return_distance``/``return_key`` and read the fields by name, to get a
+			shape that does not depend on how many points matched. The batch form below
+			is unaffected: it always returns a recarray.
+
+		The "distance" field is the angular separation between the query center and each
+		match, in degrees. It costs nothing to ask for: the cone filter already computes
+		the sine-squared half-distance of every candidate. Coordinates that are equivalent
+		representations of the query center (e.g. a point stored at ra=360 and queried at
+		ra=0, or any ra at a pole) report a separation of exactly 0.
+
+		**Batch queries.** ``ra`` and ``dec`` may instead be arrays of coordinates — a list
+		of targets to match against the index, which is what a catalog cross-identification
+		needs — with ``radius`` either one value for every target or one value per target.
+		The result is then always a :class:`numpy.recarray`, whose first field is
+		"target_index": the position in the target list that each match belongs to. The
+		matches of a batch query are one flat table, not one array per target, and they are
+		grouped by target in the order the targets were given.
+
+		A target that matches nothing contributes no rows, so a zero-match target is not
+		visible in that table. Set ``return_counts`` to have the method return a tuple of
+		``(matches, counts)`` instead, where ``counts`` is an array of ``np.int64`` with one
+		entry per target giving the number of matches it found — zero for a target that
+		found none. (The same array is ``np.bincount(matches.target_index,
+		minlength=len(ra))``; ``return_counts`` exists so that the zero-match targets do not
+		have to be reconstructed.)
+
+		The batch form runs one query per target: the ipix ranges covering a cone depend on
+		where the cone is, so they cannot be shared between targets, and merging every
+		target's ranges into a single query would return a candidate set that then has to be
+		re-attributed to targets in Python. The saving over a Python loop is therefore modest
+		and comes from the per-call validation and dispatch, not from the database. Measured
+		on an in-memory index of 100,000 points at depth 30, 1,000 targets at a radius of one
+		degree (7,654 matches) ran at about 11,400 targets per second as a batch against
+		10,400 called one at a time — roughly 9% faster. Use the batch form for the
+		"target_index" bookkeeping and the zero-match accounting, not for a speedup.
+
+		**Scalar-like values.** As everywhere else in qlsc, a size-1 array is a scalar: a
+		batch query is one whose ``ra``/``dec`` have a shape *and* more than one element.
+		A target list that happens to have a single entry would therefore be read as a
+		scalar query; set ``return_counts`` to ask for the batch contract unambiguously,
+		whatever the shape of the input.
+
+		**astropy.** The center may be given as an astropy
+		:class:`~astropy.coordinates.SkyCoord` (as ``ra``, with ``dec`` left unset and
+		``radius`` given by keyword); it is transformed to ICRS, as :py:func:`add_point`
+		describes. An **array** SkyCoord is a target list, so it selects the batch form
+		exactly as arrays of degrees do.
+
+		Set ``return_skycoord`` to get the matching coordinates as an array ICRS
+		:class:`~astropy.coordinates.SkyCoord` — of length n, never squeezed, so a single
+		match is a length-1 SkyCoord. Combined with any of the other flags the result is
+		instead an :class:`~astropy.table.QTable` with a "coord" column holding that
+		SkyCoord plus a "target_index", "key" and/or "distance" column ("distance" as a
+		:class:`~astropy.units.Quantity` in degrees), since a SkyCoord cannot be a field of
+		a recarray. The default return value is unchanged, and asking for either without
+		astropy installed raises ``ImportError``.
+
+		:param ra: right ascension (degrees), or an array of them to query as a list of targets; accepts an `astropy.units.Quantity` or a :class:`~astropy.coordinates.SkyCoord` carrying the center(s)
+		:param dec: declination (degrees), or an array of them to query as a list of targets; accepts an `astropy.units.Quantity`
+		:param radius: radius (degrees) in the range [0,180], accepts a `float` value, an array of one value per target, or an `astropy.units.Quantity`
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_distance: if set to True, include the angular separation from the query center in degrees
+		:param return_counts: batch queries only; if set to True, return a tuple of (matches, counts) where counts holds the number of matches of each target
+		:param return_skycoord: if set to True, return the coordinates as an astropy :class:`~astropy.coordinates.SkyCoord`
+		:returns: an array of matches with shape (n,2) if no flag is set and the query is scalar; otherwise a :class:`numpy.recarray` with the fields ``ra,dec`` plus ``target_index``, ``key`` and/or ``distance``, a :class:`~astropy.coordinates.SkyCoord`, or an :class:`~astropy.table.QTable`; a tuple of (matches, counts) if ``return_counts`` is set
+		'''
+
+		self._ensure_open()
+
+		# Every angle this method takes may be an astropy Quantity, coordinates included:
+		# np.asarray on a Quantity discards its units, so a target list given in radians
+		# would otherwise be read as degrees and quietly return the wrong points.
+		# _coordinate_pair does that conversion for the coordinates and also unpacks a
+		# SkyCoord given in place of the pair.
+		ra, dec = _coordinate_pair(ra, dec)
+		radius = _degrees_or_unchanged(radius)
+
+		# 'ra', 'dec' and 'radius' are only formally optional so that a SkyCoord can be
+		# given as the single positional coordinate argument; all three are still required.
+		if ra is None or dec is None:
+			raise ValueError(f"Both 'ra' and 'dec' must be specified (or a single SkyCoord as 'ra'); "
+							 f"was given ra={ra}, dec={dec}.")
+		if radius is None:
+			raise ValueError("A value for 'radius' must be specified.")
+
+		# A batch query is one given a list of targets. A value with a shape but only one
+		# element stays a scalar: every scalar-taking API in qlsc accepts a size-1 array,
+		# and changing that here would silently change the return shape of existing code.
+		# return_counts is per-target by nature, so it selects the batch contract outright,
+		# which is how a single-target list is expressed unambiguously.
+		is_batch = return_counts or any([np.ndim(x) > 0 and np.size(x) != 1 for x in (ra, dec)])
+
+		# gather matches into these lists
+		match_ra = list()
+		match_dec = list()
+		match_key = list()
+		match_distance = list()
+		match_target_index = list()
+
+		if not is_batch:
+			ra = _as_float_scalar(ra, "ra")
+			dec = _as_float_scalar(dec, "dec")
+			radius = _as_float_scalar(radius, "radius")
+
+			if abs(dec) > 90:
+				raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
+
+			# above 180 degrees the sin^2(radius/2) filter becomes periodic and meaningless
+			if not (0 <= radius <= 180):
+				raise ValueError(f"The value for radius must be in the range [0,180]; was given '{radius}'.")
+
+			self._cone_matches(ra, dec, radius, return_key, return_distance, None,
+							   match_ra, match_dec, match_key, match_distance, match_target_index)
+
+			# radial_query keeps its historical squeezed shape; see MatchArrayShape
+			return _match_result(match_ra, match_dec, match_key, match_distance,
+								 return_key, return_distance, MatchArrayShape.SQUEEZED,
+								 return_skycoord=return_skycoord)
+
+		target_ra, target_dec, target_radius = self._validated_targets(ra, dec, radius)
+
+		counts = np.zeros(target_ra.shape, dtype=np.int64)
+		for n in range(target_ra.shape[0]):
+			before = len(match_ra)
+			self._cone_matches(float(target_ra[n]), float(target_dec[n]), float(target_radius[n]),
+							   return_key, return_distance, n,
+							   match_ra, match_dec, match_key, match_distance, match_target_index)
+			counts[n] = len(match_ra) - before
+
+		# A batch result always carries "target_index", so it is always a recarray and the
+		# plain-array shape never applies; SQUEEZED is passed for consistency with the
+		# scalar path of the same method rather than because it has any effect here.
+		matches = _match_result(match_ra, match_dec, match_key, match_distance,
+								return_key, return_distance, MatchArrayShape.SQUEEZED,
+								match_target_index=match_target_index, return_target_index=True,
+								return_skycoord=return_skycoord)
+
+		if return_counts:
+			return matches, counts
+		return matches
+
+	def polygon_query(self, polygon:Iterable=None, return_key:bool=False, return_skycoord:bool=False) -> np.ndarray:
 		'''
 		Return the points of the index that fall inside a polygon on the sphere.
 
@@ -1674,14 +2753,21 @@ class QLSCIndex:
 		polygon can include area outside it. That produces extra candidates, never missing
 		ones, and the extras are removed by the exact test.)
 
-		The default return value is an array of the matching coordinates with shape (n,2).
+		The default return value is an array of the matching coordinates with shape (n,2)
+		— always (n,2), including for a single match, unlike :py:func:`radial_query`.
 		If ``return_key`` is set the result is instead a :class:`numpy.recarray` with the
 		fields "ra", "dec" and "key". There is no ``return_distance``: a polygon has no
 		center to measure a separation from.
 
-		:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2)
+		The polygon may be given as an array astropy :class:`~astropy.coordinates.SkyCoord`
+		of its vertices, which is transformed to ICRS. Set ``return_skycoord`` to get the
+		matches as a SkyCoord (or, with ``return_key``, as an
+		:class:`~astropy.table.QTable`), exactly as :py:func:`radial_query` describes.
+
+		:param polygon: an array of the polygon's vertices as [ra,dec] pairs, shape (n,2), or a :class:`~astropy.coordinates.SkyCoord` of the vertices
 		:param return_key: if set to True, include the key value as provided when added to the index
-		:returns: an array of matches with shape (n,2), or a :class:`numpy.recarray` with the fields ``ra,dec,key``
+		:param return_skycoord: if set to True, return the coordinates as an astropy :class:`~astropy.coordinates.SkyCoord`
+		:returns: an array of matches with shape (n,2), a :class:`numpy.recarray` with the fields ``ra,dec,key``, a :class:`~astropy.coordinates.SkyCoord`, or an :class:`~astropy.table.QTable`
 		'''
 		self._ensure_open()
 
@@ -1704,53 +2790,82 @@ class QLSCIndex:
 		query = self._candidate_row_query(merged_ranges, columns,
 										  f"polygon query over a polygon with {len(poly_ra)} vertices")
 
-		# the C function is called directly rather than through QLSC.point_in_polygon:
-		# the vertices have already been validated and converted above, and doing that
-		# again for every candidate row is the whole cost of this loop. The test itself
-		# is identical.
-		query_hprm = self._query_scheme()._hprm
+		# The candidates are gathered first and filtered in one batched C call rather
+		# than one call per row: q3c projects all n vertices onto the cube faces on
+		# every scalar call, which is the dominant cost of filtering a large candidate
+		# set. check_sphere_points_in_poly projects once and reuses it (q3c's own
+		# invocation=1 path), and the answers are identical.
+		candidate_ra = list()
+		candidate_dec = list()
+		candidate_key = list()
 		for row in self._select_candidate_rows(query):
-			row_ra, row_dec = row["ra"], row["dec"]
-			if q3c.check_sphere_point_in_poly(query_hprm, row_ra, row_dec, poly_ra, poly_dec):
-				match_ra.append(row_ra)
-				match_dec.append(row_dec)
-				if return_key:
-					match_key.append(row["key"])
+			candidate_ra.append(row["ra"])
+			candidate_dec.append(row["dec"])
+			if return_key:
+				candidate_key.append(row["key"])
 
-		return _match_result(match_ra, match_dec, match_key, None, return_key, False)
+		if candidate_ra:
+			inside = q3c.check_sphere_points_in_poly(self._query_scheme()._hprm,
+													 np.asarray(candidate_ra, dtype=np.double),
+													 np.asarray(candidate_dec, dtype=np.double),
+													 poly_ra, poly_dec)
+			for i in np.flatnonzero(inside):
+				match_ra.append(candidate_ra[i])
+				match_dec.append(candidate_dec[i])
+				if return_key:
+					match_key.append(candidate_key[i])
+
+		return _match_result(match_ra, match_dec, match_key, None, return_key, False,
+							 MatchArrayShape.STABLE, return_skycoord=return_skycoord)
 
 	def ellipse_query(self, ra:float=None, dec:float=None, semi_major_axis:Union[float, "Quantity"]=None,
 					  axis_ratio:float=None, position_angle:Union[float, "Quantity"]=0.0,
-					  return_key:bool=False, return_distance:bool=False) -> np.ndarray:
+					  return_key:bool=False, return_distance:bool=False, return_skycoord:bool=False) -> np.ndarray:
 		'''
 		Return the points of the index that fall inside an ellipse on the sphere.
 
-		The ellipse is centered on (``ra``, ``dec``) with the given semi-major axis, axis
-		ratio (semi-minor over semi-major, in ``(0,1]``) and position angle. An
-		``axis_ratio`` of 1 is a circle and returns the same points as
-		:py:func:`radial_query` with that radius.
+		The ellipse is the one :py:func:`QLSC.point_in_ellipse` describes: centered on
+		(``ra``, ``dec``), with the given semi-major axis, axis ratio (semi-minor over
+		semi-major, in ``(0,1]``) and position angle, and shaped as a conic in the
+		gnomonic projection about its center.
 
 		Matches are found by selecting the pixels covering the ellipse and then testing
 		every candidate with :py:func:`QLSC.point_in_ellipse`, the exact containment test,
 		so the result contains exactly the indexed points inside the ellipse.
 
-		The default return value is an array of the matching coordinates with shape (n,2).
+		An ``axis_ratio`` of exactly 1 is a circle, and this method then **is** a cone
+		search: it hands the query to :py:func:`radial_query` and returns what that
+		returns, so the two agree by construction rather than by coincidence, for any
+		radius up to 180 degrees. A genuinely elliptical query (``axis_ratio`` below 1)
+		is limited to a semi-major axis of less than 90 degrees, the extent of the
+		tangent plane the shape is defined in; a larger one raises ``ValueError``.
+
+		The default return value is an array of the matching coordinates with shape (n,2)
+		— always (n,2), including for a single match, unlike :py:func:`radial_query`.
 		If either ``return_key`` or ``return_distance`` is set, the result is instead a
 		:class:`numpy.recarray` whose fields are "ra", "dec", then "key" and "distance" for
 		whichever flags were set. The "distance" field is the angular separation between
 		the center of the ellipse and each match, in degrees — not a distance to the
 		ellipse's boundary.
 
-		:param ra: right ascension of the center of the ellipse (degrees)
+		The center may be given as a scalar astropy :class:`~astropy.coordinates.SkyCoord`
+		(as ``ra``, with ``dec`` left unset); it is transformed to ICRS. Set
+		``return_skycoord`` to get the matches as a SkyCoord (or, with the other flags, as
+		an :class:`~astropy.table.QTable`), exactly as :py:func:`radial_query` describes.
+
+		:param ra: right ascension of the center of the ellipse (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
 		:param dec: declination of the center of the ellipse (degrees)
-		:param semi_major_axis: semi-major axis of the ellipse (degrees), in the range [0,180], accepts a `float` value or `astropy.units.Quantity`
+		:param semi_major_axis: semi-major axis of the ellipse (degrees); in [0,90) unless ``axis_ratio`` is 1, when [0,180] is accepted. Accepts a `float` value or `astropy.units.Quantity`
 		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
 		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
 		:param return_key: if set to True, include the key value as provided when added to the index
 		:param return_distance: if set to True, include the angular separation from the center in degrees
-		:returns: an array of matches with shape (n,2) if both flags are False; otherwise a :class:`numpy.recarray` with the fields ``ra,dec`` plus ``key`` and/or ``distance``
+		:param return_skycoord: if set to True, return the coordinates as an astropy :class:`~astropy.coordinates.SkyCoord`
+		:returns: an array of matches with shape (n,2) if no flag is set; otherwise a :class:`numpy.recarray`, a :class:`~astropy.coordinates.SkyCoord`, or an :class:`~astropy.table.QTable`
 		'''
 		self._ensure_open()
+
+		ra, dec = _coordinate_pair(ra, dec)
 
 		if any([x is None for x in [ra, dec, semi_major_axis, axis_ratio]]):
 			raise ValueError("Values for 'ra', 'dec', 'semi_major_axis' and 'axis_ratio' must all be specified.")
@@ -1764,12 +2879,21 @@ class QLSCIndex:
 		if abs(dec) > 90:
 			raise ValueError(f"The value for dec must be in the range [-90,90]; was given '{dec}'.")
 
-		# the same bound radial_query places on its radius: beyond 180 degrees a
-		# semi-major axis has no meaning on a sphere
-		if not (0 <= semi_major_axis <= 180):
-			raise ValueError(f"The value for semi_major_axis must be in the range [0,180]; was given '{semi_major_axis}'.")
-		if not (0 < axis_ratio <= 1):
-			raise ValueError(f"The value for axis_ratio must be in the range (0,1]; was given '{axis_ratio}'.")
+		_validate_ellipse(semi_major_axis, axis_ratio)
+
+		if axis_ratio == 1:
+			# A circle is a cone search, so run one: the promise that the two agree is
+			# then structural. Q3C's elliptical predicate could not keep that promise -
+			# it is a tangent plane conic, so it rejects everything past 90 degrees from
+			# the center and is not even monotonic in the semi-major axis beyond that.
+			matches = self.radial_query(ra=ra, dec=dec, radius=semi_major_axis,
+										return_key=return_key, return_distance=return_distance,
+										return_skycoord=return_skycoord)
+			if return_skycoord or return_key or return_distance:
+				# a SkyCoord and a QTable are already the shape this method promises
+				return matches
+			# radial_query keeps its historical squeezed shape; this method promises (n,2)
+			return _as_stable_pairs(matches)
 
 		center_ra = ra
 		center_dec = dec
@@ -1821,5 +2945,522 @@ class QLSCIndex:
 					else:
 						match_distance.append(_sindist2deg(sindist(row_ra, row_dec, center_ra, center_dec)))
 
-		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance)
+		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance,
+							 MatchArrayShape.STABLE, return_skycoord=return_skycoord)
 
+	def coverage(self, depth:int=None, value_domain:Iterable=None, meta:dict=None) -> dict:
+		'''
+		Describe the sky coverage of this index as a "sky-coverage" version 1 document.
+
+		The index's points are counted per pixel at the requested depth, and each pixel
+		holding at least one point becomes a polygon of the document carrying that count as
+		its value. The result is what :py:func:`QLSC.coverage` returns — a plain Python
+		dictionary ready for :py:func:`json.dumps` — with the value described as a "count"
+		of "points". Pixels holding no points are not in the document at all: an empty
+		coverage is empty, not a field of zeros.
+
+		.. code-block:: python
+
+			import json
+			with open("coverage.json", "w") as f:
+				json.dump(index.coverage(depth=6), f)
+
+		The counting is a single ``GROUP BY`` over the ipix column, using the fact that an
+		ipix number at a coarser depth is the index's own ipix number shifted right by two
+		bits per level. There is therefore one query and no per-point work in Python,
+		whatever the size of the index.
+
+		The depth must not be finer than the index's own: the index stores the pixel each
+		point falls in at its own depth, and a finer pixel cannot be recovered from a
+		coarser one. Asking for one raises ``ValueError`` rather than silently returning the
+		index's depth.
+
+		:param depth: the depth to count at; must be in [0, this index's depth]. The default is depth 5 (6,144 pixels for the whole sky), or the index's depth if that is coarser.
+		:param value_domain: a [min,max] count range pinning the consumer's colour scale, so several documents can share one scale
+		:param meta: additional producer metadata to record; the "producer", "scheme" and "depth" keys are written by qlsc and cannot be replaced
+		:returns: the sky-coverage document as a plain Python dictionary
+		'''
+		self._ensure_open()
+
+		if depth is None:
+			depth = min(DEFAULT_COVERAGE_DEPTH, self.qlsc.depth)
+
+		if isinstance(depth, bool) or not isinstance(depth, (int, np.integer)):
+			raise TypeError(f"The 'depth' must be an integer; was given '{depth!r}'.")
+		depth = int(depth)
+		if depth < 0:
+			raise ValueError(f"The value for 'depth' must be an integer on [0,30]; was given '{depth}'.")
+		if depth > self.qlsc.depth:
+			raise ValueError(f"The coverage depth ({depth}) is finer than this index's depth ({self.qlsc.depth}); "
+							 f"the index does not record where within its own pixels its points fall, so a finer "
+							 f"pixel cannot be recovered.")
+
+		# Two ipix bits per depth level: the pixel containing a point at a coarser depth is
+		# the index's ipix value shifted right. This is the same mapping the region queries
+		# use to bring depth-30 candidate ranges down to the index's depth.
+		shift = 2 * (self.qlsc.depth - depth)
+
+		connection = self._new_db_connection()
+		try:
+			with contextlib.closing(connection.cursor()) as cursor:
+				# One GROUP BY does all of the counting inside SQLite; the rows that come
+				# back are one per occupied pixel, not one per point.
+				rows = cursor.execute(f"SELECT ipix >> ? AS coverage_ipix, COUNT(*) AS point_count "
+									  f"FROM {self.database_tablename} GROUP BY coverage_ipix",
+									  (shift,)).fetchall()
+		finally:
+			if not self._is_in_memory_db():
+				connection.close()
+
+		# type(...) rather than QLSC, as when a file's depth is adopted: the scheme carries
+		# the longitude convention (see GeoQLSC). The document's own vertices are written
+		# in [0,360) either way, but building a plain QLSC here would be a trap waiting for
+		# the next thing a scheme subclass carries.
+		coverage_qlsc = self.qlsc if self.qlsc.depth == depth else type(self.qlsc)(depth=depth)
+
+		return coverage_qlsc.coverage(ipix=[row["coverage_ipix"] for row in rows],
+									  values=[row["point_count"] for row in rows],
+									  value_name="count", value_units="points",
+									  value_domain=value_domain, meta=meta)
+
+
+# ---------------------------------------------------------------------------------------
+# Geographic (longitude/latitude) veneer
+#
+# The quadrilateralized spherical cube was devised for the Earth, and the README has said
+# since 2020 that this package "could just as easily be used for latitude and longitude
+# coordinates". The classes below are what that promises: a thin layer over QLSC and
+# QLSCIndex, with no change to the indexing, the geometry, or the C code.
+#
+# The mapping is deliberately small, because most of it is the identity:
+#
+#   * latitude IS declination. Same range, same sign, same meaning. Nothing to convert.
+#   * longitude IS right ascension as an input. Right ascension is periodic and every
+#     entry point in this package already reduces it to [0,360) internally, so a
+#     longitude of -74 is accepted, unchanged, anywhere an ra is.
+#   * longitude differs from right ascension only on the way OUT: this package reports
+#     right ascension in [0,360), while a longitude belongs in [-180,180).
+#
+# So the whole of "lat/lon mode" is the output convention plus vocabulary, which is why
+# it is a subclass rather than a flag threaded through every signature.
+# ---------------------------------------------------------------------------------------
+
+def _lonlat_coordinate_pair(ra, dec, lon, lat, ra_name:str="ra", dec_name:str="dec",
+							lon_name:str="lon", lat_name:str="lat"):
+	'''
+	Resolve a coordinate given in either the ra,dec or the lon,lat spelling.
+
+	The two spellings name the same pair (longitude is right ascension, latitude is
+	declination), so giving both is a mistake worth reporting rather than a choice to
+	make silently. A sky coordinate object or a Quantity is handled exactly as it is for
+	the ra,dec spelling; see :func:`_coordinate_pair`.
+
+	:param ra: the first angle in the astronomical spelling
+	:param dec: the second angle in the astronomical spelling
+	:param lon: the first angle in the geographic spelling
+	:param lat: the second angle in the geographic spelling
+	:param ra_name: the name of the first astronomical parameter, for error messages
+	:param dec_name: the name of the second astronomical parameter, for error messages
+	:param lon_name: the name of the first geographic parameter, for error messages
+	:param lat_name: the name of the second geographic parameter, for error messages
+	:returns: a tuple of (ra, dec) in degrees
+	'''
+	if lon is not None or lat is not None:
+		if ra is not None or dec is not None:
+			raise ValueError(f"'{lon_name}','{lat_name}' and '{ra_name}','{dec_name}' are two spellings of "
+							 f"the same coordinate pair; give one or the other, not both.")
+		return _coordinate_pair(lon, lat, lon_name, lat_name)
+
+	return _coordinate_pair(ra, dec, ra_name, dec_name)
+
+def _geographic_position(ra, dec, lat_name:str="lat"):
+	'''
+	Put a geographic coordinate into the storage convention of :py:class:`GeoQLSCIndex`:
+	longitude in [-180,180), latitude in [-90,90].
+
+	A latitude outside [-90,90] is refused. The astronomical classes reinterpret such a
+	declination as a point on the other side of a pole (with the right ascension moved by
+	180 degrees), which is a reasonable reading of an unnormalized celestial coordinate but
+	not of a latitude: a latitude of 100 is a mistake, and silently relocating the point
+	halfway around the Earth would hide it.
+
+	:param ra: a longitude, or an array of them, in degrees
+	:param dec: a latitude, or an array of them, in degrees
+	:param lat_name: how to refer to the latitude in an error message
+	:returns: a tuple of the (longitude, latitude) values in the storage convention
+	'''
+	if ra is None or dec is None:
+		return ra, dec
+
+	if np.isscalar(dec) or np.ndim(dec) == 0:
+		out_of_range = not (-90 <= float(dec) <= 90)
+	else:
+		latitudes = np.asarray(dec, dtype=np.double)
+		out_of_range = not ((-90 <= latitudes).all() and (latitudes <= 90).all())
+
+	if out_of_range:
+		raise ValueError(f"The '{lat_name}' value(s) must be in the range [-90,90]; a latitude outside it "
+						 f"is not a point on the far side of a pole, it is an error.")
+
+	return wrap_longitude(ra), dec
+
+class GeoQLSC(QLSC):
+	'''
+	A :py:class:`QLSC` that speaks geographic longitude and latitude.
+
+	The quadrilateralized spherical cube was designed for the Earth, and this class is the
+	geographic reading of it — on a perfectly spherical Earth, which is what the scheme
+	segments. **Nothing about the pixelation, the ipix numbering, or the geometry changes**;
+	this is a vocabulary and a convention, not a different index.
+
+	**The mapping, exactly**
+
+	* **Latitude is declination.** Same range [-90,90], same sign (north positive), same
+	  meaning. There is nothing to convert in either direction.
+	* **Longitude is right ascension on the way in.** Right ascension is periodic and every
+	  entry point reduces it internally, so a longitude of -74 may be given anywhere an ra
+	  can, unchanged: ``ang2ipix(-74, 40)`` and ``ang2ipix(286, 40)`` are the same pixel.
+	* **Longitude differs from right ascension on the way out.** :py:class:`QLSC` reports
+	  right ascension in [0,360); this class reports longitude in **[-180,180)**, the
+	  geographic convention. A longitude of exactly 180 is reported as -180, the same
+	  meridian (this is astropy's ``wrap_at(180 * u.deg)`` convention). The public
+	  :py:func:`qlsc.wrap_longitude` performs that mapping on its own.
+
+	The convention applies to **every** method that returns a longitude — the inherited
+	:py:func:`ipix2ang`, :py:func:`xy2ang`, and :py:func:`ipix2polygon` included — so a
+	``GeoQLSC`` never hands back a value in [0,360). The lon/lat spellings below are added
+	on top for readability; the inherited ra/dec names go on working and mean exactly the
+	same thing.
+
+	Note that ``return_skycoord`` still produces an ICRS
+	:class:`~astropy.coordinates.SkyCoord`, which keeps its own [0,360) convention for the
+	``ra`` attribute — astropy's ``coord.ra.wrap_at(180 * u.deg)`` converts it.
+
+	To index points, pair this with :py:class:`GeoQLSCIndex` rather than
+	:py:class:`QLSCIndex`. A plain index stores and returns the coordinate values it was
+	given, so it would report longitudes in whatever range they were added with while this
+	object's geometry methods reported [-180,180) — two conventions on one index.
+
+	There is one deliberate exception to the convention: :py:func:`coverage` writes its
+	vertices in [0,360). A sky-coverage document is an interchange artifact read by other
+	software and declares the ICRS frame, so its numbers follow that frame's convention
+	rather than this object's reporting preference.
+
+	.. code-block:: python
+
+		from qlsc import GeoQLSC, GeoQLSCIndex
+
+		scheme = GeoQLSC(depth=20)
+		ipix = scheme.lonlat2ipix(lon=-74.0060, lat=40.7128)
+		lon, lat = scheme.ipix2lonlat(ipix)
+
+	:param depth: number of times each bin in each face is subdivided by four
+	'''
+
+	def _longitude(self, ra:Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+		'''
+		Express a computed right ascension as a longitude in [-180,180).
+
+		:param ra: a right ascension, or an array of them, in degrees
+		:returns: the same angle(s) as a longitude
+		'''
+		return wrap_longitude(ra)
+
+	def lonlat2ipix(self, lon:Union[float,Iterable]=None, lat:Union[float,Iterable]=None,
+					points:Iterable=None) -> Union[float,np.ndarray]:
+		'''
+		Convert longitude,latitude positions to an ipix number.
+
+		This is :py:func:`QLSC.ang2ipix` under the geographic spelling and behaves
+		identically: scalars or arrays, longitudes in any range, an ``[lon,lat]`` array or
+		an astropy :class:`~astropy.coordinates.SkyCoord` as ``points``.
+
+		:param lon: longitude (degrees), any range, or a :class:`~astropy.coordinates.SkyCoord` carrying both angles
+		:param lat: latitude (degrees), in [-90,90]
+		:param points: an array of [lon,lat] points, shape=(n,2), or a :class:`~astropy.coordinates.SkyCoord`
+		:returns: the ipix integer for a single point, an array of ipix integers for an array of points
+		'''
+		return self.ang2ipix(ra=lon, dec=lat, points=points)
+
+	def ipix2lonlat(self, ipix:Union[int,Iterable], return_skycoord:bool=False):
+		'''
+		Convert an ipix number to the longitude,latitude of the center of the pixel, in degrees.
+
+		This is :py:func:`QLSC.ipix2ang` under the geographic spelling; the longitude is in
+		[-180,180), as it is from every method of this class.
+
+		:param ipix: an ipix number, or an array-like of ipix numbers
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` instead of a tuple of degrees
+		:returns: the lon,lat of the pixel center in degrees, as a tuple of floats (scalar input) or a tuple of arrays (array input)
+		'''
+		return self.ipix2ang(ipix, return_skycoord=return_skycoord)
+
+	def ipix2lonlat_center(self, ipix:Union[int,Iterable], return_skycoord:bool=False):
+		'''
+		A synonym of :py:func:`ipix2lonlat`, for callers who want the "center" semantics
+		explicit at the call site.
+
+		:param ipix: an ipix number, or an array-like of ipix numbers
+		:param return_skycoord: if set to True, return an astropy :class:`~astropy.coordinates.SkyCoord` instead of a tuple of degrees
+		:returns: the lon,lat of the pixel center in degrees
+		'''
+		return self.ipix2ang(ipix, return_skycoord=return_skycoord)
+
+	def ang2ipix(self, ra=None, dec=None, points=None, lon=None, lat=None):
+		'''
+		Convert positions to an ipix number, in either spelling.
+
+		Identical to :py:func:`QLSC.ang2ipix` except that the pair may equally be given as
+		``lon``,``lat``. See :py:func:`lonlat2ipix`.
+
+		:param ra: right ascension / longitude (degrees), or a :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude (degrees)
+		:param points: an array of [lon,lat] points, shape=(n,2), or a :class:`~astropy.coordinates.SkyCoord`
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: the ipix integer for a single point, an array of ipix integers for an array of points
+		'''
+		if points is not None and (lon is not None or lat is not None):
+			raise ValueError("The parameter 'points' was given; 'lon' or 'lat' should not also be specified.")
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().ang2ipix(ra=ra, dec=dec, points=points)
+
+	def ang2ipix_xy(self, ra=None, dec=None, points=None, lon=None, lat=None) -> dict:
+		'''
+		Convert a position to an ipix number, face number and (x,y) on the face, in either spelling.
+
+		:param ra: right ascension / longitude (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude (degrees)
+		:param points: NOT YET SUPPORTED, as in :py:func:`QLSC.ang2ipix_xy`
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: a dictionary with the keys: [`facenum`, `ipix`, `x`, `y`]
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().ang2ipix_xy(ra=ra, dec=dec, points=points)
+
+	def face_number(self, ra=None, dec=None, ipix:int=None, lon=None, lat=None) -> int:
+		'''
+		Return the cube face number for a position, in either spelling.
+
+		:param ra: right ascension / longitude (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude (degrees)
+		:param ipix: the pixel identifier number
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: the cube face number
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().face_number(ra=ra, dec=dec, ipix=ipix)
+
+	def point_in_polygon(self, ra=None, dec=None, polygon:Iterable=None, lon=None, lat=None) -> bool:
+		'''
+		Test whether a point lies inside a polygon on the sphere, in either spelling.
+
+		The polygon's vertices are ``[lon,lat]`` pairs, which are ``[ra,dec]`` pairs under
+		the mapping this class documents; longitudes in [-180,180) need no conversion, so
+		the output of :py:func:`ipix2polygon` can be handed straight back in.
+
+		:param ra: right ascension / longitude of the point (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the point (degrees)
+		:param polygon: an array of the polygon's vertices as [lon,lat] pairs, shape (n,2), or a :class:`~astropy.coordinates.SkyCoord`
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: True if the point is inside the polygon
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().point_in_polygon(ra=ra, dec=dec, polygon=polygon)
+
+	def point_in_ellipse(self, ra=None, dec=None, ra_cen=None, dec_cen=None,
+						 semi_major_axis=None, axis_ratio=None, position_angle=0.0,
+						 lon=None, lat=None, lon_cen=None, lat_cen=None) -> bool:
+		'''
+		Test whether a point lies inside an ellipse on the sphere, in either spelling.
+
+		:param ra: right ascension / longitude of the point (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the point (degrees)
+		:param ra_cen: right ascension / longitude of the center (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec_cen: declination / latitude of the center (degrees)
+		:param semi_major_axis: semi-major axis of the ellipse (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
+		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param lon: longitude of the point (degrees); the geographic spelling of ``ra``
+		:param lat: latitude of the point (degrees); the geographic spelling of ``dec``
+		:param lon_cen: longitude of the center (degrees); the geographic spelling of ``ra_cen``
+		:param lat_cen: latitude of the center (degrees); the geographic spelling of ``dec_cen``
+		:returns: True if the point is inside the ellipse
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		ra_cen, dec_cen = _lonlat_coordinate_pair(ra_cen, dec_cen, lon_cen, lat_cen,
+												  "ra_cen", "dec_cen", "lon_cen", "lat_cen")
+		return super().point_in_ellipse(ra=ra, dec=dec, ra_cen=ra_cen, dec_cen=dec_cen,
+										semi_major_axis=semi_major_axis, axis_ratio=axis_ratio,
+										position_angle=position_angle)
+
+class GeoQLSCIndex(QLSCIndex):
+	'''
+	A :py:class:`QLSCIndex` that stores and reports geographic longitude and latitude.
+
+	This is the index counterpart of :py:class:`GeoQLSC` and follows the same mapping:
+	latitude is declination, and longitude is right ascension expressed in **[-180,180)**.
+	Every method accepts the pair under either spelling — ``lon``,``lat`` or ``ra``,``dec``,
+	but not both at once — and nothing about the indexing changes.
+
+	**How coordinates are stored.** A point is stored with its longitude already wrapped
+	into [-180,180), so what a query returns is exactly what was put in, and a point added
+	as ``lon=286`` and one added as ``lon=-74`` are recognized as the same point rather
+	than stored twice. Queries return the stored values, so they follow the same
+	convention.
+
+	**Latitude is checked, not reinterpreted.** :py:class:`QLSCIndex` reads a declination
+	outside [-90,90] as a point on the far side of a pole and moves the right ascension by
+	180 degrees to match. That is a fair reading of an unnormalized celestial coordinate
+	but not of a latitude, so here a latitude outside [-90,90] raises ``ValueError``.
+
+	An index file is interchangeable between this class and :py:class:`QLSCIndex`: the
+	stored values are the same numbers either way, and only the range they are written in
+	differs. An existing file written by :py:class:`QLSCIndex` may therefore hold
+	longitudes in [0,360); those are returned as stored, and are the values to give to
+	:py:func:`remove_point`.
+
+	.. code-block:: python
+
+		from qlsc import GeoQLSC, GeoQLSCIndex
+
+		index = GeoQLSCIndex(qlsc=GeoQLSC(depth=20))
+		index.add_point(lon=-74.0060, lat=40.7128, key="New York")
+		index.add_point(lon=2.3522, lat=48.8566, key="Paris")
+		matches = index.radial_query(lon=-74.0, lat=40.7, radius=1.0)
+
+	:param qlsc: an instance of :py:class:`GeoQLSC` set to the desired segmentation level; the default is depth 30
+	:param filepath: the file path where a persistent index will be stored; the default is to create the index in memory
+	:param name: a user-provided name for the index
+	:param description: a user-provided description of the index
+	'''
+	def __init__(self, qlsc:GeoQLSC=None, filepath:Union[os.PathLike, str]=None,
+				 name:str=None, description:str=None):
+		if qlsc is None:
+			qlsc = GeoQLSC(depth=30)
+		elif not isinstance(qlsc, GeoQLSC):
+			raise ValueError(f"A GeoQLSCIndex reports longitudes in [-180,180), which is the convention "
+							 f"carried by the scheme object, so the 'qlsc' parameter must be a GeoQLSC; "
+							 f"was given a '{type(qlsc).__name__}'. Use QLSCIndex for a QLSC.")
+		super().__init__(qlsc=qlsc, filepath=filepath, name=name, description=description)
+
+	def add_point(self, ra=None, dec=None, key:str=None, lon=None, lat=None):
+		'''
+		Add a single point to the index, in either spelling.
+
+		The longitude is stored wrapped into [-180,180); see the class documentation.
+
+		:param ra: right ascension / longitude (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude (degrees), in [-90,90]
+		:param key: a string identifier for the coordinate (optional, and not required to be unique)
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		ra, dec = _geographic_position(ra, dec)
+		return super().add_point(ra=ra, dec=dec, key=key)
+
+	def add_points(self, ra:Iterable=None, dec:Iterable=None, points:Iterable=None,
+				   keys:Iterable=None, lon:Iterable=None, lat:Iterable=None):
+		'''
+		Add a collection of points to the index, in either spelling.
+
+		Longitudes are stored wrapped into [-180,180); see the class documentation.
+
+		:param ra: an Iterable of right ascension / longitude values in degrees, or a :class:`~astropy.coordinates.SkyCoord`
+		:param dec: an Iterable of declination / latitude values in degrees
+		:param points: an Iterable of [lon,lat] pairs, or a :class:`~astropy.coordinates.SkyCoord`
+		:param keys: an Iterable of string identifiers, one per point
+		:param lon: longitudes (degrees); the geographic spelling of ``ra``
+		:param lat: latitudes (degrees); the geographic spelling of ``dec``
+		'''
+		if points is not None and any(value is not None for value in (ra, dec, lon, lat)):
+			raise ValueError("Only 'ra','dec' (or 'lon','lat') OR 'points' can be specified.")
+
+		if points is not None and not _is_coordinate_object(points):
+			# split here rather than in the parent so the longitude column can be wrapped
+			values = np.asarray(points, dtype=np.double)
+			if values.ndim != 2 or values.shape[1] != 2:
+				raise ValueError(f"The 'points' array must have shape (n,2); was given shape {values.shape}.")
+			ra, dec = values[:,0], values[:,1]
+			points = None
+		elif points is not None:
+			ra, dec = _coordinate_object_degrees(points, "points")
+			ra, dec = np.atleast_1d(ra), np.atleast_1d(dec)
+			points = None
+		else:
+			ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+
+		ra, dec = _geographic_position(ra, dec)
+
+		return super().add_points(ra=ra, dec=dec, keys=keys)
+
+	def remove_point(self, ra=None, dec=None, key:str=None, lon=None, lat=None) -> int:
+		'''
+		Remove points from the index by key or by exact coordinate, in either spelling.
+
+		The coordinate given is put into the stored convention first, so a point added as
+		``lon=-74`` can be removed as ``lon=286`` and vice versa.
+
+		:param ra: right ascension / longitude of the point to remove (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the point to remove (degrees)
+		:param key: the key of the point(s) to remove
+		:param lon: longitude (degrees); the geographic spelling of ``ra``
+		:param lat: latitude (degrees); the geographic spelling of ``dec``
+		:returns: the number of points removed
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		ra, dec = _geographic_position(ra, dec)
+		return super().remove_point(ra=ra, dec=dec, key=key)
+
+	def radial_query(self, ra=None, dec=None, radius=None, return_key:bool=False,
+					 return_distance:bool=False, return_counts:bool=False,
+					 return_skycoord:bool=False, lon=None, lat=None):
+		'''
+		Cone search around a point, in either spelling.
+
+		The batch form of :py:func:`QLSCIndex.radial_query` works here too: give arrays of
+		longitudes and latitudes as a list of targets.
+
+		:param ra: right ascension / longitude of the center (degrees), an array of them for a batch query, or a :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the center (degrees), or an array of them
+		:param radius: radius (degrees) in the range [0,180], accepts a `float` value, an array of one value per target, or an `astropy.units.Quantity`
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_distance: if set to True, include the angular separation from the query center in degrees
+		:param return_counts: batch queries only; if set to True, return a tuple of (matches, counts)
+		:param return_skycoord: if set to True, return the coordinates as an astropy :class:`~astropy.coordinates.SkyCoord`
+		:param lon: longitude of the center (degrees); the geographic spelling of ``ra``
+		:param lat: latitude of the center (degrees); the geographic spelling of ``dec``
+		:returns: the matching points, in the shapes :py:func:`QLSCIndex.radial_query` documents
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().radial_query(ra=ra, dec=dec, radius=radius, return_key=return_key,
+									return_distance=return_distance, return_counts=return_counts,
+									return_skycoord=return_skycoord)
+
+	def ellipse_query(self, ra=None, dec=None, semi_major_axis=None, axis_ratio=None,
+					  position_angle=0.0, return_key:bool=False, return_distance:bool=False,
+					  return_skycoord:bool=False, lon=None, lat=None):
+		'''
+		Elliptical region search around a point, in either spelling.
+
+		:param ra: right ascension / longitude of the center (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the center (degrees)
+		:param semi_major_axis: semi-major axis of the ellipse (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param axis_ratio: ratio of the semi-minor to the semi-major axis, in the range (0,1]
+		:param position_angle: position angle of the semi-major axis (degrees), accepts a `float` value or `astropy.units.Quantity`
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_distance: if set to True, include the angular separation from the center in degrees
+		:param return_skycoord: if set to True, return the coordinates as an astropy :class:`~astropy.coordinates.SkyCoord`
+		:param lon: longitude of the center (degrees); the geographic spelling of ``ra``
+		:param lat: latitude of the center (degrees); the geographic spelling of ``dec``
+		:returns: the matching points, in the shapes :py:func:`QLSCIndex.ellipse_query` documents
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().ellipse_query(ra=ra, dec=dec, semi_major_axis=semi_major_axis,
+									 axis_ratio=axis_ratio, position_angle=position_angle,
+									 return_key=return_key, return_distance=return_distance,
+									 return_skycoord=return_skycoord)

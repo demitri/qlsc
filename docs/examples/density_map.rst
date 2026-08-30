@@ -86,7 +86,7 @@ grouping:
 		occupied, counts = np.unique(ipix, return_counts=True)
 
 		print()
-		pixel_area = q.ipix_area(0, depth) * (180./np.pi)**2
+		pixel_area = 4*np.pi / q.nbins * (180./np.pi)**2
 		print(f"depth {depth}: {q.nbins:,} pixels, {pixel_area:.4g} square degrees each")
 		print(f"  occupied pixels: {len(occupied):,} ({100*len(occupied)/q.nbins:.1f}%)")
 		print(f"  counts: min {counts.min()}, median {int(np.median(counts))}, max {counts.max()}")
@@ -230,10 +230,12 @@ From counts to densities
 ------------------------
 
 The last step, turning counts into sources per square degree, is the one that
-needs care, because :py:func:`~qlsc.QLSC.ipix_area` returns the *mean* pixel area
-and the real ones vary by up to a factor of about 5.2 (see
-:ref:`how-equal-are-the-pixels` and :ref:`pixel-area-trap`). A latitude profile
-is fine, because it compares pixels drawn from all over the sphere:
+needs care, because pixel areas vary by up to a factor of about 5.2 (see
+:ref:`how-equal-are-the-pixels` and :ref:`pixel-area-trap`). The counts above were
+divided by ``4*pi/nbins``, the *mean* area, which is the right scale for comparing
+depths but not for any one pixel; :py:func:`~qlsc.QLSC.ipix_area` gives a pixel its
+own area. A latitude profile is fine either way, because it compares pixels drawn
+from all over the sphere:
 
 .. code-block:: python
 

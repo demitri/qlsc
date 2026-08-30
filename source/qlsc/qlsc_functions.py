@@ -5,24 +5,36 @@ from .utilities import _as_float_scalar
 
 def distance(ra1, dec1, ra2, dec2) -> float:
 	'''
-	Calculates the angular distance between two points on a sphere.
+	Calculates the angular distance between two points on a sphere, in degrees.
 
 	:param ra1: right ascension, first coordinate (degrees)
 	:param dec1: declination, first coordinate (degrees)
 	:param ra2: right ascension, second coordinate (degrees)
 	:param dec2: declination, second coordinate (degrees)
+	:returns: the angular separation of the two points in degrees, in [0,180]
 	'''
 	return q3c.distance(_as_float_scalar(ra1, "ra1"), _as_float_scalar(dec1, "dec1"),
 	                    _as_float_scalar(ra2, "ra2"), _as_float_scalar(dec2, "dec2"))
 
 def sindist(ra1, dec1, ra2, dec2) -> float:
 	'''
-	Calculates the sine of the angular distance between two points on a sphere.
+	Calculates the haversine of the angular distance between two points on a sphere.
+
+	Despite the name, the value is **not** ``sin(d)``: it is ``sin²(d/2)``, the
+	haversine of the separation. Q3C computes it because it is monotonic in ``d`` over
+	the whole range [0,180] degrees and costs three trigonometric evaluations, so a
+	cone search can compare it against ``sin²(radius/2)`` without ever taking an
+	arcsine. Unlike ``sin(d)`` it increases all the way to 180 degrees rather than
+	turning over at 90, which is what makes it usable as a distance ordering.
+
+	To recover the separation in degrees: ``2 * degrees(asin(sqrt(sindist(...))))``,
+	or just call :py:func:`distance`.
 
 	:param ra1: right ascension, first coordinate (degrees)
 	:param dec1: declination, first coordinate (degrees)
 	:param ra2: right ascension, second coordinate (degrees)
 	:param dec2: declination, second coordinate (degrees)
+	:returns: sin²(d/2) for the angular separation d, a value in [0,1]
 	'''
 	return q3c.sindist(_as_float_scalar(ra1, "ra1"), _as_float_scalar(dec1, "dec1"),
 	                   _as_float_scalar(ra2, "ra2"), _as_float_scalar(dec2, "dec2"))

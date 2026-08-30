@@ -185,10 +185,52 @@ def test_integer_dtypes_accepted(method):
 	values = [3, 17, 4095]
 	expected = getattr(q, method)(np.array(values, dtype=np.int64))
 
-	for dtype in (np.int16, np.int32, np.uint16, np.uint32):
+	for dtype in (np.int16, np.int32, np.uint16, np.uint32, np.uint64):
 		result = getattr(q, method)(np.array(values, dtype=dtype))
 		for a, b in zip(result, expected):
 			assert np.array_equal(a, b)
+
+
+@pytest.mark.parametrize("method", ["ipix2ang", "ipix2ang_center", "ipix2xy"])
+def test_uint64_at_the_top_of_the_range(method):
+	'''
+	Test uint64 input at depth 30, where nbins is above the int64 range of an
+	ordinary catalog column and the last valid ipix is 6*2^60-1.
+
+	uint64 is the one integer dtype whose range does not fit in int64, so it is
+	narrowed explicitly rather than left to NumPy's promotion rules (which changed
+	in NumPy 2 and, if they landed on float64, would have a spacing of 1024 here).
+	'''
+	q = QLSC(depth=30)
+	call = getattr(q, method)
+
+	last = q.nbins - 1
+	result = call(np.array([last], dtype=np.uint64))
+	for a, b in zip(result, call(np.array([last], dtype=np.int64))):
+		assert np.array_equal(a, b)
+
+	# just past the end of the scheme, past the int64 range, and the largest uint64
+	for bad in (q.nbins, q.nbins + 1, 2**63, 2**63 + 5, 2**64 - 1):
+		with pytest.raises(ValueError):
+			call(np.array([bad], dtype=np.uint64))
+
+
+@pytest.mark.parametrize("method", ["ipix2ang", "ipix2ang_center", "ipix2xy"])
+def test_non_integer_sequences_raise(method):
+	'''
+	Test that a Python sequence of non-integers is refused rather than converted.
+
+	NumPy's "safe cast" rule refuses an existing float64 array but does not apply
+	to an array it is constructing for the first time, so a list literal is the
+	form in which [1.5, 2.5] could reach the pixel lookup as [1, 2].
+	'''
+	q = QLSC(depth=5)
+	call = getattr(q, method)
+
+	for bad in ([1.5, 2.5], (1.9, 2.9), [1.0, 2.0], [True, False], ["10", "20"],
+				[None, None], [2**70], [[1, 2], [3]]):
+		with pytest.raises((ValueError, TypeError)):
+			call(bad)
 
 
 @pytest.mark.parametrize("method", ["ipix2ang", "ipix2ang_center", "ipix2xy"])
@@ -248,6 +290,51 @@ def test_c_level_rejects_float_array():
 		q3c.ipix2ang(q._hprm, np.array([1.5, 2.5]))
 	with pytest.raises(TypeError):
 		q3c.ipix2xy(q._hprm, np.array([1.5, 2.5]))
+
+
+@pytest.mark.parametrize("bad", [
+	pytest.param([1.5, 2.5], id="list-of-floats"),
+	pytest.param((1.9, 2.9), id="tuple-of-floats"),
+	pytest.param([1.0, 2.0], id="list-of-whole-floats"),
+	pytest.param([True, False], id="list-of-bools"),
+	pytest.param(["10", "20"], id="list-of-strings"),
+	pytest.param([None], id="list-of-none"),
+	pytest.param([2**70], id="list-beyond-int64")
+])
+def test_c_level_rejects_non_integer_sequences(bad):
+	'''
+	Test that the C wrapper refuses a Python sequence of non-integers.
+
+	This is the gap a plain "give me an int64 array" conversion leaves: NumPy's
+	safe-cast rule refuses an existing float64 array, but it will happily BUILD an
+	int64 array from a list of floats, booleans or numeric strings, so
+	q3c.ipix2ang(hprm, [1.5, 2.5]) returned the centers of pixels 1 and 2 without
+	a word. The dtype of the input is now settled before anything is converted.
+	'''
+	q = QLSC(depth=5)
+	with pytest.raises(TypeError):
+		q3c.ipix2ang(q._hprm, bad)
+	with pytest.raises(TypeError):
+		q3c.ipix2xy(q._hprm, bad)
+
+
+def test_c_level_accepts_unsigned_arrays():
+	'''
+	Test that the C wrapper accepts unsigned integer arrays, uint64 included: an
+	int64 conversion refuses uint64 as an unsafe cast, but every valid ipix fits.
+	uint64 values that do not fit in int64 land in the negative half and are
+	caught by the bounds check.
+	'''
+	q = QLSC(depth=5)
+	expected = q3c.ipix2ang(q._hprm, np.array([3, 17, 4095], dtype=np.int64))
+
+	for dtype in (np.uint16, np.uint32, np.uint64): # 4095 does not fit in uint8
+		result = q3c.ipix2ang(q._hprm, np.array([3, 17, 4095], dtype=dtype))
+		for a, b in zip(result, expected):
+			assert np.array_equal(a, b)
+
+	with pytest.raises(ValueError):
+		q3c.ipix2ang(q._hprm, np.array([2**63 + 5], dtype=np.uint64))
 
 
 def test_c_level_bounds_check():

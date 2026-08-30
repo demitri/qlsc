@@ -37,7 +37,7 @@ physical scale — a beam, a seeing disc, a tile. The mean pixel side is
 	import numpy as np
 	from qlsc import QLSC
 
-	sides = {d: np.sqrt(QLSC(depth=d).ipix_area(0, d)) * 180/np.pi for d in range(31)}
+	sides = {d: np.sqrt(4*np.pi / QLSC(depth=d).nbins) * 180/np.pi for d in range(31)}
 
 	for name, scale in [("Gaia astrometric precision, 0.1 mas", 0.1/3.6e6),
 	                    ("HST/ACS pixel, 0.05 arcsec", 0.05/3600),

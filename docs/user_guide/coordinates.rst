@@ -13,7 +13,15 @@ converts between them:
 3. **Face coordinates** — a cube face number and an ``(x,y)`` position on that
    flat square face, both axes running from −1 to +1.
 
-The third is the one to reach for when a calculation gets complicated. On a face
+Angles are degrees throughout. If astropy is installed they may also be given as
+:class:`~astropy.units.Quantity` values, and wherever an ``ra,dec`` pair is taken a
+scalar :class:`~astropy.coordinates.SkyCoord` may be passed as ``ra`` alone
+instead, with ``dec`` left unset; it is transformed to ICRS first.
+:py:class:`~qlsc.GeoQLSC` and :py:class:`~qlsc.GeoQLSCIndex` are the same scheme and
+index in geographic vocabulary — latitude for declination, and longitude reported
+in [-180,180) rather than [0,360) — with :py:func:`~qlsc.wrap_longitude` to convert.
+
+The third representation is the one to reach for when a calculation gets complicated. On a face
 the geometry is a plane, not a sphere: pixel boundaries are straight lines at
 regular intervals, "adjacent" means what you expect, and there is no wrap at
 α = 360° and no pole. The source of

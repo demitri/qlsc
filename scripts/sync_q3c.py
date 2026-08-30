@@ -56,10 +56,29 @@ What it does, in order
 
 Anything this script cannot decide it refuses to guess at. After a successful run there
 is still human work to do; it prints the checklist.
+
+Test coverage, and what is NOT covered
+--------------------------------------
+
+source/tests/test_sync_q3c.py exercises the decision-making: patch detection and
+application against the real vendored sources, the C interface diff, the comment and
+string scanner, and the version handling. Two things it does not reach:
+
+  * download_upstream()'s tarball handling, including the member-type and path-escape
+    checks - it needs the network, or a fixture tarball built for the purpose;
+  * sync() and main() as a whole, i.e. the order of the steps, what --dry-run
+    suppresses, and the exit status.
+
+The eventual answer to both is an integration test driven through --upstream-dir and
+--previous-dir, which take unpacked trees and so need no network: build two small
+fixture trees, run sync() against them with --dry-run and without, and assert on the
+files written and the messages printed. Until then those paths are covered only by
+running the script for real, which the sync procedure does anyway
+(``python3 scripts/sync_q3c.py v2.0.5 --dry-run`` against the current release is the
+end-to-end smoke test).
 '''
 
 import argparse
-import dataclasses
 import difflib
 import enum
 import pathlib
@@ -111,10 +130,13 @@ class PatchState(enum.Enum):
 	ALREADY_UPSTREAM = "already upstream"  # upstream now carries the fix; drop the patch
 
 
-@dataclasses.dataclass(frozen=True)
 class Patch:
 	'''
 	One local divergence from upstream, expressed as an exact-match text substitution.
+
+	Written out rather than declared with :mod:`dataclasses`, which arrived in Python
+	3.7 while the package declares ``python_requires='>=3.6'``; the tests import this
+	script, so a dataclass here would fail the suite on a supported interpreter.
 
 	:param name: short identifier used in this script's output
 	:param filename: the vendored file the patch applies to
@@ -124,13 +146,19 @@ class Patch:
 	:param issue: the upstream issue this patch works around
 	:param guard_test: the test in source/tests/test_source_invariants.py that guards it
 	'''
-	name: str
-	filename: str
-	upstream_text: str
-	patched_text: str
-	occurrences: int
-	issue: str
-	guard_test: str
+	__slots__ = ("name", "filename", "upstream_text", "patched_text", "occurrences", "issue", "guard_test")
+
+	def __init__(self, name, filename, upstream_text, patched_text, occurrences, issue, guard_test):
+		self.name = name
+		self.filename = filename
+		self.upstream_text = upstream_text
+		self.patched_text = patched_text
+		self.occurrences = occurrences
+		self.issue = issue
+		self.guard_test = guard_test
+
+	def __repr__(self):
+		return "Patch(name={!r}, filename={!r}, occurrences={!r})".format(self.name, self.filename, self.occurrences)
 
 
 # ------------------------------------------------------------------

@@ -54,6 +54,14 @@ A cone search in ten lines
 
 :doc:`getting_started` walks through that example line by line.
 
+Beyond the cone search, the package cross-matches two catalogs
+(:py:func:`~qlsc.crossmatch`), runs a whole target list against an index in one
+call, tests membership of polygons and ellipses, exports an index's sky coverage
+(:py:func:`~qlsc.QLSCIndex.coverage`), speaks geographic longitude and latitude
+(:py:class:`~qlsc.GeoQLSC`), accepts and returns astropy
+:class:`~astropy.coordinates.SkyCoord` objects, and bridges to Starlink AST regions
+through :mod:`qlsc.cornish_interop`.
+
 Where to go from here
 ---------------------
 

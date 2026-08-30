@@ -6,7 +6,20 @@
 
 The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for segmenting a sphere into pixels with the aim of optimized spatial indexing and queries. *QLSC* is an implementation of this scheme in a Python package. Parts of it are based on code from Sergey Koposov’s [Q3C](https://github.com/segasai/q3c), a PostgreSQL extension that implements QLSC indexing. In addition to sphere segmentation, this package provides the catalog indexing functionality of Q3C without the need to install a PostgreSQL database.
 
-Note that while this package is designed for astronomical use (it focusses on right ascension and declination), it could be just as easily be used for latitude and longitude coordinates, as long as you’re ok with a perfectly spherical Earth (though QLSC was designed to be used with the real Earth). Future updates may better facilitate this, but contributions are welcome.
+Note that while this package is designed for astronomical use (it focusses on right ascension and declination), it can be just as easily be used for longitude and latitude coordinates, as long as you’re ok with a perfectly spherical Earth (though QLSC was designed to be used with the real Earth). The `GeoQLSC` and `GeoQLSCIndex` classes are exactly that: the same scheme and the same index, speaking longitude and latitude, with longitudes reported in the geographic range [-180,180) instead of the astronomical [0,360). Latitude *is* declination — same range, same sign — and a longitude may be given in any range, so the mapping is only the reporting convention plus the vocabulary. See the [`GeoQLSC` documentation](https://qlsc.readthedocs.io/en/latest/api.html) for the mapping written out in full.
+
+```python
+from qlsc import GeoQLSC, GeoQLSCIndex
+
+scheme = GeoQLSC(depth=20)
+ipix = scheme.lonlat2ipix(lon=-74.0060, lat=40.7128)  # lon,lat -> ipix number
+scheme.ipix2lonlat(ipix)                              # ipix -> lon,lat, lon in [-180,180)
+
+index = GeoQLSCIndex(qlsc=scheme)
+index.add_point(lon=-74.0060, lat=40.7128, key="New York")
+index.add_point(lon=2.3522, lat=48.8566, key="Paris")
+index.radial_query(lon=-74., lat=40.7, radius=1.)
+```
 
 Author: Demitri Muna
 Copyright © 2020 Demitri Muna, except for the embedded Q3C code which is copyright Sergey Koposov.
@@ -18,7 +31,7 @@ Copyright © 2020 Demitri Muna, except for the embedded Q3C code which is copyri
 * You have a large number of points or regions on a sphere that you want to subdivide into approximately equal area divisions.
 * You are an astronomer with a catalog that you want to perform cone searches on, but don't want to install a full database to do so.
 * You want a spherical projection scheme without all that polar singularity residue.
-* You want a scheme that divides a sphere into regions that are easy to conceptualize, draw, and work with, where you can easily control the resolution down to ~0.08 µ".
+* You want a scheme that divides a sphere into regions that are easy to conceptualize, draw, and work with, where you can easily control the resolution down to ~0.08 square milliarcseconds per pixel (about 0.28 mas, or 280 µas, on a side).
 
 ## Installation
 
@@ -79,6 +92,17 @@ index.add_point(56.59625, 78.00866, key="a catalog ID")
 matches = index.radial_query(ra=56., dec=-40., radius=0.5) # float deg or astropy.units.Quantity
 ```
 
+If [astropy](https://www.astropy.org) is installed, an `astropy.coordinates.SkyCoord` (scalar or array, in any frame — it is transformed to ICRS) may be given anywhere an ra,dec pair goes, and `return_skycoord=True` asks for one back:
+
+```python
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+
+index.add_point(SkyCoord(l=121.17*u.deg, b=-21.57*u.deg, frame="galactic"), key="M31")
+matches = index.radial_query(SkyCoord(ra=10.68*u.deg, dec=41.27*u.deg), radius=1*u.deg,
+                             return_skycoord=True)
+```
+
 Further examples are provided in the directory "examples" that show how the scheme and indexing can be used.
 
 ## The Quadrilateralized Spherical Cube
@@ -87,7 +111,7 @@ The quadrilateralized spherical cube was first devised in 1975 in a technical re
 
 ![](https://raw.githubusercontent.com/demitri/qlsc/master/figures/cube_in_sphere/cube_in_sphere.png)
 
-The six cube faces are then projected onto the sphere via transforms defined in the paper. This is the lowest resolution. Higher resolutions are achieved in steps: each step divides the bin, or pixel, into four. The first step will have four bins per face, the next will have 16, etc. The code refers to the level of subdivision as "depth" (number of times the bin has been subdivided), where the diagram above is `depth=0`. The Q3C PostgreSQL extension uses a depth of 30, which is 1,152,921,504,606,846,976 bins per cube face (six times that over the full sphere) corresponding to ~0.08 μ" square per pixel. The QLSC package supports any depth from 0 to 30.
+The six cube faces are then projected onto the sphere via transforms defined in the paper. This is the lowest resolution. Higher resolutions are achieved in steps: each step divides the bin, or pixel, into four. The first step will have four bins per face, the next will have 16, etc. The code refers to the level of subdivision as "depth" (number of times the bin has been subdivided), where the diagram above is `depth=0`. The Q3C PostgreSQL extension uses a depth of 30, which is 1,152,921,504,606,846,976 bins per cube face (six times that over the full sphere) corresponding to a mean pixel area of ~0.08 square milliarcseconds — about 0.28 mas (280 µas) on a side. The QLSC package supports any depth from 0 to 30.
 
 | Cube Face Number | RA Range | Face Center    |
 |:----------------:| :------: | :------------: |
@@ -106,7 +130,7 @@ The diagram below shows face 1 divided at `depth=2` and the projection of each p
 
 ![](https://raw.githubusercontent.com/demitri/qlsc/master/figures/cube_subdivisions/cube_subdivisions.png)
 
-The scheme is advantageous in that there are no discontinuities at the poles, and the indexing scheme is optimized for fast database queries. While not all pixels cover the same area, they are equal to within a few percent.
+The scheme is advantageous in that there are no discontinuities at the poles, and the indexing scheme is optimized for fast database queries. The pixels are not, however, equal area. The largest pixel of a cube face, at its centre, is 3√3 ≈ 5.196 times the smallest, at a cube vertex; the ratio grows with depth and has essentially reached that limit by `depth=12` (it is already a factor of 2.5 at `depth=2`). Against the mean pixel area, `4π / nbins`, individual pixels run from about 1.91× down to 0.37×. Use [`QLSC.ipix_area()`](https://qlsc.readthedocs.io/en/latest/api.html#qlsc.QLSC.ipix_area) where the area of a particular pixel matters; the areas of all the pixels of a scheme sum to 4π.
 
 
 For most users, working in ipix values and ra,dec coordinates will accomplish most anything needed. For those who might be performing more complex calculations, I recommend working in the native coordinates of the face plane. Each face (at any division level) has its 2D coordinate system origin at the cube face center. Both the *x* and *y* axes range from -1 to +1. Methods are provided to translate between *xy* coordinates, ipix value, and ra/dec coordinates. The source code for the [`ipix2polygon()`](https://qlsc.readthedocs.io/en/latest/api.html#qlsc.QLSC.ipix2polygon) method provides an illustrative example.
@@ -124,7 +148,9 @@ For most users, working in ipix values and ra,dec coordinates will accomplish mo
 
 For quick reference, the following table lists the parameters of the QLSC scheme for every available depth.
 
-| Depth | No. Bins per Cube Face | No. Bins on Sphere | Bin Area (sr) | Bin Area (square µas) | Bin Area (square deg) |
+The areas are **mean** areas — `4π / no. bins on sphere` — since the pixels are not equal area; see the note above for the spread. The middle column is square **milli**arcseconds; an earlier version of this table labelled it square microarcseconds, which is off by a factor of 10⁶. The bin counts at depths 24 and above were also rounded to 15 significant figures; they are exact powers of two and are now written out in full.
+
+| Depth | No. Bins per Cube Face | No. Bins on Sphere | Mean Bin Area (sr) | Mean Bin Area (square mas) | Mean Bin Area (square deg) |
 | ----- | -----------------------| ------------------ | --------------- | --------- | -------------- |
 |0	| 1	| 6	| 2.094395E+00	| 8.910640E+16	| 6.875494E+03|
 |1	| 4	| 24	| 5.235988E-01	| 2.227660E+16	| 1.718873E+03|
@@ -150,10 +176,10 @@ For quick reference, the following table lists the parameters of the QLSC scheme
 |21	| 4,398,046,511,104	| 26,388,279,066,624	| 4.762103E-13	| 2.026045E+04	| 1.563306E-09|
 |22	| 17,592,186,044,416	| 105,553,116,266,496	| 1.190526E-13	| 5.065112E+03	| 3.908266E-10|
 |23	| 70,368,744,177,664	| 422,212,465,065,984	| 2.976314E-14	| 1.266278E+03	| 9.770664E-11|
-|24	| 281,474,976,710,656	| 1,688,849,860,263,940	| 7.440786E-15	| 3.165695E+02	| 2.442666E-11|
-|25	| 1,125,899,906,842,620	| 6,755,399,441,055,720	| 1.860197E-15	| 7.914238E+01	| 6.106665E-12|
-|26	| 4,503,599,627,370,500	| 27,021,597,764,223,000	| 4.650491E-16	| 1.978559E+01	| 1.526666E-12|
-|27	| 18,014,398,509,482,000	| 108,086,391,056,892,000	| 1.162623E-16	| 4.946399E+00	| 3.816666E-13|
-|28	| 72,057,594,037,927,900	| 432,345,564,227,567,000	| 2.906557E-17	| 1.236600E+00	| 9.541664E-14|
-|29	| 288,230,376,151,712,000	| 1,729,382,256,910,270,000	| 7.266393E-18	| 3.091499E-01	| 2.385416E-14|
-|30	| 1,152,921,504,606,850,000	| 6,917,529,027,641,100,000	| 1.816598E-18	| 7.728748E-02	| 5.963540E-15|
+|24	| 281,474,976,710,656	| 1,688,849,860,263,936	| 7.440786E-15	| 3.165695E+02	| 2.442666E-11|
+|25	| 1,125,899,906,842,624	| 6,755,399,441,055,744	| 1.860197E-15	| 7.914238E+01	| 6.106665E-12|
+|26	| 4,503,599,627,370,496	| 27,021,597,764,222,976	| 4.650491E-16	| 1.978559E+01	| 1.526666E-12|
+|27	| 18,014,398,509,481,984	| 108,086,391,056,891,904	| 1.162623E-16	| 4.946399E+00	| 3.816666E-13|
+|28	| 72,057,594,037,927,936	| 432,345,564,227,567,616	| 2.906557E-17	| 1.236600E+00	| 9.541664E-14|
+|29	| 288,230,376,151,711,744	| 1,729,382,256,910,270,464	| 7.266393E-18	| 3.091499E-01	| 2.385416E-14|
+|30	| 1,152,921,504,606,846,976	| 6,917,529,027,641,081,856	| 1.816598E-18	| 7.728748E-02	| 5.963540E-15|

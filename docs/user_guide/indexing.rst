@@ -65,7 +65,7 @@ An index supports the context manager protocol, and can be closed explicitly:
 .. code-block:: text
 
 	inside the context manager: 3
-	file size on disk: 20480 bytes
+	file size on disk: 24576 bytes
 	reopened: 3 demo / a small demo index
 	using a closed index: RuntimeError This QLSCIndex has been closed and can no longer be used.
 
@@ -200,7 +200,7 @@ Where it differs from a dictionary, and it matters:
 
 .. code-block:: text
 
-	TypeError Index keys are strings (the underlying column has TEXT affinity); was given '42' of type 'int'.
+	TypeError Index keys are strings (the underlying column has TEXT affinity); the key is '42' of type 'int'.
 
 :py:func:`~qlsc.QLSCIndex.remove_point` deletes by key or by exact coordinate,
 returns how many rows went, and raises rather than quietly doing nothing:
@@ -311,6 +311,124 @@ meaningful.
 
 
 .. _how-a-region-query-works:
+
+Querying many positions at once
+-------------------------------
+
+:py:func:`~qlsc.QLSCIndex.radial_query` also takes **arrays** of centres — a list
+of targets to match against the index, which is what a catalog
+cross-identification needs. The result is then always a
+:class:`numpy.recarray` whose first field is ``target_index``, the position in the
+target list that each match belongs to; the matches are one flat table, grouped by
+target in the order the targets were given.
+
+A target that matches nothing contributes no rows, so ``return_counts`` exists to
+report the zeroes that the table cannot:
+
+.. code-block:: python
+
+	targets_ra  = np.array([100., 200., 300.])
+	targets_dec = np.array([10., -20., 30.])
+
+	matches, counts = index.radial_query(ra=targets_ra, dec=targets_dec, radius=2.0,
+	                                     return_counts=True, return_distance=True)
+	print("fields:", matches.dtype.names)
+	print("counts per target:", counts)
+	print("rows:", len(matches))
+	for row in matches[:4]:
+		print(f"  target {row['target_index']}  {row['ra']:9.5f} {row['dec']:+9.5f}  {row['distance']:.4f} deg")
+
+.. code-block:: text
+
+	fields: ('target_index', 'ra', 'dec', 'distance')
+	counts per target: [18 14 18]
+	rows: 50
+	  target 0   99.23592  +8.64279  1.5526 deg
+	  target 0   98.54506  +8.78621  1.8798 deg
+	  target 0   98.39569  +9.51080  1.6551 deg
+	  target 0   98.32358  +9.67745  1.6830 deg
+
+``radius`` may be one value for every target or one value per target. The batch
+form is about the bookkeeping, not about speed — it runs one query per target,
+because the pixel ranges covering a cone depend on where the cone is and cannot be
+shared. The method's own documentation gives the measured figure.
+
+Note the interaction with qlsc's usual scalar-like rule: a size-1 array is a
+scalar, so a target list with a single entry would be read as a scalar query. Set
+``return_counts`` to ask for the batch contract regardless of shape.
+
+For matching two *indices* against each other, rather than a target list against
+one index, use :py:func:`~qlsc.crossmatch`.
+
+
+Looking a point up by key
+-------------------------
+
+:py:func:`~qlsc.QLSCIndex.find_by_key` returns the coordinates carrying a key,
+without any spatial query at all — the ``key`` column is indexed:
+
+.. code-block:: python
+
+	print(index.find_by_key("S29764"))
+
+.. code-block:: text
+
+	[(99.23592352, 8.64279335)]
+
+Keys are not unique, so this returns every point carrying the key; an absent key
+returns an empty array rather than raising.
+
+
+Working with astropy
+--------------------
+
+Wherever a coordinate goes, a scalar :class:`~astropy.coordinates.SkyCoord` may be
+given instead, as the ``ra`` argument with ``dec`` left unset; it is transformed to
+ICRS first. An **array** SkyCoord is a target list, and so selects the batch form
+above exactly as arrays of degrees do.
+
+``return_skycoord`` asks for the matches back as an ICRS
+:class:`~astropy.coordinates.SkyCoord` — always of length n, never squeezed.
+Combined with any other flag the result is an :class:`~astropy.table.QTable` with a
+``coord`` column plus ``target_index``, ``key`` and/or ``distance``, because a
+SkyCoord cannot be a field of a recarray. Asking for either without astropy
+installed raises ``ImportError``.
+
+
+Exporting the coverage
+----------------------
+
+:py:func:`~qlsc.QLSCIndex.coverage` summarises which part of the sky an index
+touches, as a sky-coverage v1 document: the occupied pixels at a chosen depth, each
+as a polygon with the number of points in it.
+
+.. code-block:: python
+
+	cov = index.coverage(depth=3)
+	print("keys:   ", sorted(cov))
+	print("type:   ", cov["type"], "| version:", cov["version"], "| frame:", cov["frame"])
+	print("polygons:", len(cov["polygons"]), "| first:", sorted(cov["polygons"][0]))
+	print("meta:   ", {k: cov["meta"][k] for k in sorted(cov["meta"])})
+	print("value:  ", cov["value"])
+
+.. code-block:: text
+
+	keys:    ['edges', 'frame', 'meta', 'polygons', 'type', 'units', 'value', 'version']
+	type:    sky-coverage | version: 1 | frame: icrs
+	polygons: 384 | first: ['id', 'value', 'vertices']
+	meta:    {'depth': 3, 'producer': 'qlsc 1.1.0', 'scheme': 'qlsc'}
+	value:   {'name': 'count', 'units': 'points'}
+
+The document is plain JSON-compatible Python, so ``json.dump`` writes it straight
+out. :py:func:`~qlsc.QLSC.coverage` is the same export for a bare set of pixels and
+values, with no index behind it.
+
+.. note::
+
+	Cross-matching, coverage export, and the geographic classes are new in this
+	release and are covered here and in the :doc:`API reference <../api>` only.
+	Worked examples for them are forthcoming.
+
 
 How a region query works
 ------------------------

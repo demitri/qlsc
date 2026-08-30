@@ -36,6 +36,15 @@ uses the same seeds; none of them are hand-made.
    * - :doc:`density_map`
      - pixel counts as a sky map, and rolling counts up the quadtree
 
+.. note::
+
+	Cross-matching two catalogs (:py:func:`~qlsc.crossmatch`), exporting an index's
+	sky coverage (:py:func:`~qlsc.QLSCIndex.coverage`), the geographic
+	longitude/latitude classes, and the Starlink AST bridge
+	(:mod:`qlsc.cornish_interop`) are new in this release. They are documented in
+	the :doc:`user guide <../user_guide/indexing>` and the
+	:doc:`API reference <../api>`; worked example pages for them are forthcoming.
+
 .. toctree::
    :maxdepth: 1
 

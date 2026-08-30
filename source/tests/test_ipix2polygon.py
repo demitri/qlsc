@@ -51,3 +51,57 @@ def test_ipix2polygon(depth, ipix, polygon):
 	'''
 	q = QLSC(depth=depth)
 	assert_allclose(polygon, q.ipix2polygon(ipix))
+
+@pytest.mark.parametrize("depth, ipix, polygon", expected_results)
+def test_ipix2polygon_duplicate_endpoint(depth, ipix, polygon):
+	'''
+	Test that duplicate_endpoint closes the polygon.
+
+	It used to do nothing at all: the branch built the five row form and the line after
+	it stripped the extra row back off unconditionally, so both forms returned four
+	rows and the parameter was silently ignored.
+	'''
+	q = QLSC(depth=depth)
+
+	open_form = q.ipix2polygon(ipix)
+	closed_form = q.ipix2polygon(ipix, duplicate_endpoint=True)
+
+	assert open_form.shape == (4,2)
+	assert closed_form.shape == (5,2)
+	assert_allclose(closed_form[:-1], open_form)
+	assert_allclose(closed_form[-1], closed_form[0])
+
+def test_ipix2polygon_shapes_at_every_depth():
+	'''
+	Test the shape contract of both forms across depths, independently of the
+	coordinate values above.
+	'''
+	for depth in (0, 1, 5, 17, 30):
+		q = QLSC(depth=depth)
+		ipix = q.ang2ipix(123.4, -45.6)
+		assert q.ipix2polygon(ipix).shape == (4,2)
+		assert q.ipix2polygon(ipix, duplicate_endpoint=False).shape == (4,2)
+		assert q.ipix2polygon(ipix, duplicate_endpoint=True).shape == (5,2)
+
+def test_a_closed_polygon_is_accepted_by_the_polygon_functions():
+	'''
+	Test that the closed form can still be handed to the containment test and the index
+	query, as the docstring promises: the repeated vertex makes a zero-length edge,
+	which the crossing test never counts.
+	'''
+	from qlsc import QLSCIndex
+
+	q = QLSC(depth=10)
+	ipix = q.ang2ipix(41., 17.)
+	open_form = q.ipix2polygon(ipix)
+	closed_form = q.ipix2polygon(ipix, duplicate_endpoint=True)
+	centre_ra, centre_dec = q.ipix2ang_center(ipix)
+
+	assert q.point_in_polygon(ra=centre_ra, dec=centre_dec, polygon=closed_form) is True
+	assert q.point_in_polygon(ra=centre_ra, dec=centre_dec, polygon=open_form) is True
+
+	index = QLSCIndex(qlsc=q)
+	index.add_point(ra=centre_ra, dec=centre_dec, key="centre")
+	index.add_point(ra=180., dec=0., key="elsewhere")
+	assert set(index.polygon_query(polygon=closed_form, return_key=True).key) == {"centre"}
+	assert set(index.polygon_query(polygon=open_form, return_key=True).key) == {"centre"}

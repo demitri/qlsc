@@ -84,7 +84,9 @@ equatorial band, and face 5 is the south cap.
 The boundary between the caps and the equatorial band is not a line of constant
 declination: it is the edge of the cube, which reaches δ = ±45° at the middle
 of each face edge and δ = ±35.264° (= arctan 1/√2) at the cube's vertices.
-:py:func:`~qlsc.QLSC.face_number` answers the question for any position:
+:py:func:`~qlsc.QLSC.face_number` answers the question for any position, taking
+either a coordinate or an ipix; :py:func:`~qlsc.QLSC.ipix2face` takes an ipix
+only:
 
 .. code-block:: python
 
@@ -116,20 +118,19 @@ block: the first ``nside**2`` pixel numbers are on face 0, the next
 
 .. code-block:: python
 
-	print(f"  a face holds nside*nside = {q.nside**2} pixels at depth {q.depth}")
+	print("a face holds nside*nside =", q.nside**2, "pixels at depth", q.depth)
 	for ipix in (0, 15, 16, 42, 95):
-		ra_c, dec_c = q.ipix2ang_center(ipix)
-		print(f"  ipix {ipix:3d}: ipix // nside**2 -> {ipix // q.nside**2}"
-		      f"   face_number(centre) -> {q.face_number(ra_c, dec_c)}")
+		print(f"  ipix {ipix:3d}: ipix2face -> {q.ipix2face(ipix)}"
+		      f"   face_number(ipix=...) -> {q.face_number(ipix=ipix)}")
 
 .. code-block:: text
 
-	  a face holds nside*nside = 16 pixels at depth 2
-	  ipix   0: ipix // nside**2 -> 0   face_number(centre) -> 0
-	  ipix  15: ipix // nside**2 -> 0   face_number(centre) -> 0
-	  ipix  16: ipix // nside**2 -> 1   face_number(centre) -> 1
-	  ipix  42: ipix // nside**2 -> 2   face_number(centre) -> 2
-	  ipix  95: ipix // nside**2 -> 5   face_number(centre) -> 5
+	a face holds nside*nside = 16 pixels at depth 2
+	  ipix   0: ipix2face -> 0   face_number(ipix=...) -> 0
+	  ipix  15: ipix2face -> 0   face_number(ipix=...) -> 0
+	  ipix  16: ipix2face -> 1   face_number(ipix=...) -> 1
+	  ipix  42: ipix2face -> 2   face_number(ipix=...) -> 2
+	  ipix  95: ipix2face -> 5   face_number(ipix=...) -> 5
 
 The pixel number
 ----------------
@@ -301,48 +302,67 @@ What this means in practice:
   exactly, so pixel sizes affect only how many candidates are considered.
 * For **anything that treats a pixel as a unit of area** — a density map, a
   completeness correction, a coverage fraction — it matters a great deal, and you
-  should divide counts by a real per-pixel area rather than by the mean.
-  :py:func:`~qlsc.QLSC.ipix_area` currently returns the mean, ``4π/nbins``, for
-  every pixel and says so in its own documentation; the expression above is the
-  correction factor if you need it, using the ``x,y`` of the pixel from
-  :py:func:`~qlsc.QLSC.ipix2xy`.
+  should use the pixel's own area rather than the mean.
+
+:py:func:`~qlsc.QLSC.ipix_area` returns the area of the pixel you ask about, in
+steradians. Summed over a scheme the areas come to 4π, and the extremes reproduce
+the table above:
 
 .. code-block:: python
 
-	print(q.ipix_area(0, 3), q.ipix_area(q.nbins-1, 3))
+	import numpy as np
+	from qlsc import QLSC
+
+	q = QLSC(depth=3)
+	areas = np.array([q.ipix_area(i) for i in range(q.nbins)])
+	mean = 4 * np.pi / q.nbins
+
+	print(f"sum over the sphere: {areas.sum()}   4*pi = {4*np.pi}")
+	print(f"mean (4*pi/nbins):   {mean:.8f}")
+	print(f"smallest pixel: {areas.min():.8f} ({areas.min()/mean:.4f} x mean)")
+	print(f"largest pixel:  {areas.max():.8f} ({areas.max()/mean:.4f} x mean)")
+	print(f"ratio: {areas.max()/areas.min():.4f}")
 
 .. code-block:: text
 
-	0.032724923474893676 0.032724923474893676
+	sum over the sphere: 12.566370614359169   4*pi = 12.566370614359172
+	mean (4*pi/nbins):   0.03272492
+	smallest pixel: 0.01556861 (0.4757 x mean)
+	largest pixel:  0.05885751 (1.7986 x mean)
+	ratio: 3.7805
 
-.. tip::
+The values agree to eight significant figures with the independent numerical
+integration used for the table, which is the check that both are right.
 
-	The embedded Q3C code can compute a pixel's exact area, and it is reachable —
-	although only through the compiled extension module and the private handle
-	that :py:class:`~qlsc.QLSC` keeps to Q3C's internal structure, so treat this
-	as an implementation detail rather than a stable interface:
+The optional second argument measures an **ancestor** of the pixel, at a coarser
+depth of the same scheme — it is an absolute depth, not an offset, so ``depth=0``
+is the whole cube face and the default is the scheme's own depth. A finer depth is
+refused rather than answered with a meaningless number:
 
-	.. code-block:: python
+.. code-block:: python
 
-		import numpy as np
-		from qlsc import QLSC, q3c
+	print("pixel 0 (a cube vertex):   ", q.ipix_area(0))
+	print("pixel 15 (a face centre):  ", q.ipix_area(15))
+	print("their depth-0 ancestor:    ", q.ipix_area(0, depth=0), "(4*pi/6 =", 4*np.pi/6, ")")
 
-		q = QLSC(depth=3)
-		areas = np.array([q3c.pixarea(q._hprm, i, 0) for i in range(q.nbins)])
+	try:
+		q.ipix_area(0, depth=4)
+	except ValueError as e:
+		print("a finer depth ->", type(e).__name__ + ":", str(e)[:90])
 
-		print(f"sum over the sphere: {areas.sum()}   4*pi = {4*np.pi}")
-		print(f"mean: {areas.mean():.8f}   ipix_area: {q.ipix_area(0, 3):.8f}")
-		print(f"smallest pixel: {areas.min():.8f} ({areas.min()/areas.mean():.4f} x mean)")
-		print(f"largest pixel:  {areas.max():.8f} ({areas.max()/areas.mean():.4f} x mean)")
-		print(f"ratio: {areas.max()/areas.min():.4f}")
+.. code-block:: text
 
-	.. code-block:: text
+	pixel 0 (a cube vertex):    0.015568607866598194
+	pixel 15 (a face centre):   0.05885750594708128
+	their depth-0 ancestor:     2.094395102393195 (4*pi/6 = 2.0943951023931953 )
+	a finer depth -> ValueError: The value for 'depth' must be in the range [0,3] for this scheme; was given '4'. A depth f
 
-		sum over the sphere: 12.566370614359169   4*pi = 12.566370614359172
-		mean: 0.03272492   ipix_area: 0.03272492
-		smallest pixel: 0.01556861 (0.4757 x mean)
-		largest pixel:  0.05885751 (1.7986 x mean)
-		ratio: 3.7805
+Because ``ipix_area`` answers per pixel, ``4 * math.pi / qlsc.nbins`` is the thing
+to write when you deliberately want the *mean* — for a resolution estimate, say, as
+:doc:`depth` does.
+
+The project README carries the same caution and a table of mean pixel areas at
+every depth; the figures here and there are the same numbers.
 
 	The areas sum to 4π and reproduce the table above to four decimal places, so
 	this really is the exact per-pixel solid angle. The third argument is *not* the

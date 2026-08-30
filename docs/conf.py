@@ -72,6 +72,15 @@ intersphinx_mapping = {
 
 todo_include_todos = True
 
+# "qlsc.cornish_interop" annotates its return types as ASTPolygon, ASTMoc and
+# ASTRegion, which live in "cornish" - an optional dependency that is deliberately
+# NOT installed for the documentation build (it needs Starlink AST). The module
+# imports cornish lazily, so those names are string annotations that autodoc cannot
+# resolve here, and it says so once per function. The types are named in the prose
+# and linked to the cornish project, so the only thing lost is a hyperlink that
+# could not be made anyway. Nothing else is suppressed.
+suppress_warnings = ['sphinx_autodoc_typehints.forward_reference']
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 

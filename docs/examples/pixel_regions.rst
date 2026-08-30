@@ -94,7 +94,8 @@ at a time. This is breadth-first search on the pixel grid:
 
 	region = {seed}
 	frontier = {seed}
-	pixel_side = np.sqrt(q8.ipix_area(0, 8)) * 180. / np.pi
+	mean_area = 4 * np.pi / q8.nbins
+	pixel_side = np.sqrt(mean_area) * 180. / np.pi
 	print(f"  mean pixel side {pixel_side:.4f} deg")
 	print("  ring   pixels   area/deg^2   max radius/deg")
 
@@ -106,7 +107,7 @@ at a time. This is breadth-first search on the pixel grid:
 		region |= frontier
 		ra_r, dec_r = q8.ipix2ang_center(np.array(sorted(region)))
 		radius = max(distance(centre_ra, centre_dec, a, b) for a, b in zip(ra_r, dec_r))
-		area = len(region) * q8.ipix_area(0, 8) * (180./np.pi)**2
+		area = len(region) * mean_area * (180./np.pi)**2
 		print(f"  {ring:4d}   {len(region):6d}   {area:10.4f}   {radius:12.4f}")
 
 .. code-block:: text
@@ -191,25 +192,17 @@ region happens to sit close to the centre of face 2:
 
 	seed pixel (face, x, y): (2, -0.109375, -0.1015625)
 
-Integrating the true solid angle over each of the 49 pixels
-(:math:`d\Omega = dx\,dy\,(1+x^2+y^2)^{-3/2}`) gives:
+:py:func:`~qlsc.QLSC.ipix_area` gives each pixel's true solid angle, so summing it
+over the 49 pixels is a one-liner:
 
 .. code-block:: python
 
-	side = 2. / q8.nside
-
-	def pixel_area(x0, y0, n=201):
-		'''The exact solid angle, in steradians, of the pixel whose lower-left corner is (x0,y0).'''
-		x = np.linspace(x0, x0 + side, n)
-		y = np.linspace(y0, y0 + side, n)
-		xx, yy = np.meshgrid(x, y)
-		return np.trapezoid(np.trapezoid((1 + xx**2 + yy**2)**-1.5, x, axis=1), y)
-
-	total = sum(pixel_area(*q8.ipix2xy(p)[1:]) for p in sorted(region))
+	total = sum(q8.ipix_area(p) for p in sorted(region))
 	deg2 = (180./np.pi)**2
+
 	print(f"true region area:   {total*deg2:.4f} sq deg")
-	print(f"mean-area estimate: {len(region)*q8.ipix_area(0,8)*deg2:.4f} sq deg")
-	print(f"ratio: {total/(len(region)*q8.ipix_area(0,8)):.4f}")
+	print(f"mean-area estimate: {len(region)*mean_area*deg2:.4f} sq deg")
+	print(f"ratio: {total/(len(region)*mean_area):.4f}")
 	print(f"expected objects:   {total*deg2*n/41252.96:.0f}")
 
 .. code-block:: text
@@ -223,10 +216,6 @@ Integrating the true solid angle over each of the 49 pixels
 number of that size, and a factor of 1.85 away from what the mean pixel area
 would have told you.
 
-The integral above is written out because it uses nothing but the public API. The
-same numbers can be had from Q3C's own routine, at the cost of reaching into the
-compiled extension and the private handle to its internal structure — see the tip
-in :ref:`how-equal-are-the-pixels`.
 
 The lesson is narrow but sharp: **counting objects in pixels is exact; converting
 those counts to a surface density is not, unless you use the pixel's own area.**

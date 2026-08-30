@@ -105,6 +105,12 @@ the aperture boundary is a real boundary.
 ``ellipse_query`` supports ``return_distance``, and it means the angular
 separation from the **centre** of the ellipse — not a distance to the boundary.
 
+The semi-major axis is capped at ``qlsc.q3c.ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS``
+(90 degrees), beyond which the tangent-plane conic the test evaluates stops
+describing the region asked for; a larger value raises ``ValueError`` rather than
+answering about the wrong shape. An ``axis_ratio`` of 1 is a circle, is answered by
+the cone filter directly, and is not subject to the limit.
+
 
 What a circle would have cost
 -----------------------------
