@@ -579,8 +579,10 @@ void ipix_to_xy(struct q3c_prm *hprm, q3c_ipix_t ipix, q3c_coord_t *x, q3c_coord
 	//
 	q3c_ipix_t ipix1;
 	q3c_ipix_t i2, i3, x0, y0;
-	q3c_ipix_t *xbits1;
-	q3c_ipix_t *ybits1;
+	// the bit tables are declared const in the q3c_prm struct (q3c v2.0.1+);
+	// they are read-only here, so the pointers keep the qualifier
+	const q3c_ipix_t *xbits1;
+	const q3c_ipix_t *ybits1;
 	const q3c_ipix_t ii1 = 1 << (Q3C_INTERLEAVED_NBITS / 2);
 
 	q3c_ipix_t nside = hprm->nside;

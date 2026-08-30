@@ -1448,7 +1448,9 @@ class QLSCIndex:
 			if return_distance:
 				arrays.append(match_distance)
 				names.append("distance")
-			return np.core.records.fromarrays(arrays, names=",".join(names))
+			# np.rec is the public spelling of this module; np.core.records is
+			# deprecated in NumPy 1.25+ and gone from the NumPy 2 namespace.
+			return np.rec.fromarrays(arrays, names=",".join(names))
 		else:
 			return np.squeeze(np.dstack((match_ra,match_dec)))
 

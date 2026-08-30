@@ -47,6 +47,15 @@
 * `QLSC.ipix2xy` did not bounds check its ipix value and silently returned the
   coordinates of no pixel at all for out-of-range input; it now raises `ValueError`,
   as `ipix2ang` already did. The check is also enforced in the C extension.
+* `QLSCIndex.radial_query` built its record array through `np.core.records`, which
+  NumPy 1.25 deprecated and NumPy 2 removed; it now uses the public `np.rec`
+  spelling, which has been available since long before the declared NumPy floor.
+* Removed three build warnings: the C extension discarded the `const` qualifier on
+  the `q3c_prm` bit tables in `ipix_to_xy`, and setuptools warned that the
+  C source directories `qlsc/c_code` and `qlsc/c_code/q3c` were absent from the
+  `packages` configuration. They are data files of the `qlsc` package, not
+  importable packages, and are now declared as such; the sdist and wheel contain
+  exactly the same files as before.
 
 ## 1.1.0 (2026-08-30)
 

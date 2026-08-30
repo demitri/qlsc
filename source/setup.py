@@ -114,7 +114,13 @@ setup(
     ext_modules=[c_extension], # alternative: cythonize(etc), needs "from Cython.Build import cythonize"
     include_dirs=['q3c'],
     packages=setuptools.find_packages(), #['qlsc'],
-    include_package_data = True, # add files specified in MANIFEST.in, specifically header files
+    # The C sources are data files of the "qlsc" package, not packages of their own:
+    # "qlsc/c_code" and "qlsc/c_code/q3c" hold no Python and must never be importable.
+    # Listing them here (rather than letting include_package_data sweep them out of
+    # MANIFEST.in) ships exactly the same files while telling setuptools they are data,
+    # which is what its "Package would be ignored" warning about 'qlsc.c_code' asked for.
+    include_package_data=False,
+    package_data={"qlsc" : ["c_code/*.c", "c_code/q3c/*.c", "c_code/q3c/*.h"]},
     python_requires='>=3.6'
 )
 #    cmdclass={"build_ext": build_ext_subclass}
