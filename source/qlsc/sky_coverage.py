@@ -11,7 +11,9 @@ This module holds the format's fixed vocabulary and the document assembly shared
 :py:func:`qlsc.QLSC.coverage` and :py:func:`qlsc.QLSCIndex.coverage`. Nothing here is
 part of the public API: the public entry points are those two methods, which return a
 plain Python ``dict`` that :py:func:`json.dumps` serializes with the standard library
-encoder alone (no NumPy scalars survive into the document).
+encoder alone, ``allow_nan=False`` included (no NumPy scalars and no non-finite numbers
+survive into the document). Caller-supplied ``meta`` is rebuilt to that standard rather
+than trusted; see :py:func:`_json_native`.
 
 Two properties of the format matter to callers and are guaranteed here:
 
@@ -120,6 +122,72 @@ def _value_descriptor(name:str=None, units:str=None, domain:Iterable=None) -> di
 
 	return descriptor if descriptor else None
 
+def _json_native(value, description:str, _seen:tuple=()):
+	'''
+	Return a value rebuilt out of JSON-native Python types, refusing anything that has no
+	JSON form.
+
+	This is what keeps the module's guarantee true of caller-supplied ``meta``. The rest
+	of the document is built from values this module produces, so it is JSON-native by
+	construction; ``meta`` is free-form and comes from outside, and it was previously
+	copied in unexamined. The natural things a producer puts there are exactly the things
+	that break the guarantee: a ``np.int64`` count out of ``np.unique`` is not
+	serializable at all, and a NaN serializes as ``NaN``, which is not valid JSON and
+	which ``json.dumps(..., allow_nan=False)`` refuses. Both failed at
+	:py:func:`json.dumps`, one call after the document was handed back, with a message
+	naming a type rather than the entry that carried it.
+
+	NumPy scalars are converted rather than refused: they are what a producer naturally
+	has, and their Python equivalents are exact. Arrays and tuples become lists. A
+	boolean stays a boolean — unlike a per-polygon *value*, where a boolean means a flag
+	has been mixed up with a measurement, ``meta`` is free-form and ``True`` is a
+	perfectly good thing to record.
+
+	:param value: the value to rebuild
+	:param description: how to refer to the value in an error message; nested entries extend it
+	:param _seen: the ids of the containers enclosing this value, to catch a cycle
+	:returns: the value as JSON-native Python types
+	'''
+	if value is None or isinstance(value, str):
+		return value
+
+	if isinstance(value, (bool, np.bool_)):
+		return bool(value)
+
+	if isinstance(value, (int, np.integer)):
+		return int(value)
+
+	if isinstance(value, (float, np.floating)):
+		result = float(value)
+		if not math.isfinite(result):
+			raise ValueError(f"The {description} must be finite; was given '{value!r}'. "
+							 f"NaN and infinity have no JSON representation, and a consumer "
+							 f"reading this document with a strict parser would reject it.")
+		return result
+
+	if isinstance(value, (dict, list, tuple, np.ndarray)):
+		if id(value) in _seen:
+			raise ValueError(f"The {description} contains itself; a circular structure has no "
+							 f"JSON representation.")
+		nested = _seen + (id(value),)
+
+		if isinstance(value, dict):
+			rebuilt = dict()
+			for key, item in value.items():
+				if not isinstance(key, str):
+					raise TypeError(f"The keys of {description} must be strings; was given "
+									f"'{key!r}' of type '{type(key).__name__}'. A JSON object has "
+									f"no other kind of key, so this one would change on the way out.")
+				rebuilt[key] = _json_native(item, f"{description}[{key!r}]", nested)
+			return rebuilt
+
+		return [_json_native(item, f"{description}[{n}]", nested)
+				for n, item in enumerate(value)]
+
+	raise TypeError(f"The {description} has no JSON representation; was given '{value!r}' of "
+					f"type '{type(value).__name__}'. Record it as a string, a number, a "
+					f"boolean, or a list or object of those.")
+
 def _coverage_meta(depth:int, meta:dict=None) -> dict:
 	'''
 	Build the document's "meta" object.
@@ -129,6 +197,11 @@ def _coverage_meta(depth:int, meta:dict=None) -> dict:
 	produced by something other than the qlsc version that actually produced it is
 	worse than no provenance at all, so the collision raises rather than one value
 	quietly winning.
+
+	It is also rebuilt out of JSON-native types rather than copied in as it stands; see
+	:py:func:`_json_native` for what that admits and why. This is the one part of the
+	document that comes from outside the module, and so the one place its "serializes
+	with the standard library encoder" guarantee could be broken.
 
 	:param depth: the QLSC depth the polygons were generated at
 	:param meta: additional producer metadata to record
@@ -146,7 +219,7 @@ def _coverage_meta(depth:int, meta:dict=None) -> dict:
 		collisions = sorted(set(meta) & set(_RESERVED_META_KEYS))
 		if collisions:
 			raise ValueError(f"These 'meta' keys are written by qlsc itself and cannot be replaced: {collisions}.")
-		document_meta.update(meta)
+		document_meta.update(_json_native(meta, "'meta' entry"))
 
 	return document_meta
 

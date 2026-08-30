@@ -306,6 +306,16 @@
   so a geographic method added later that takes a latitude fails the gate until it is
   covered. `QLSC` is unchanged: an unnormalized declination is a legitimate celestial
   coordinate and is still read as the point past the pole.
+* `QLSC.coverage` and `QLSCIndex.coverage` validate a caller's `meta` instead of copying
+  it in unexamined, restoring the guarantee the module advertises: a dictionary
+  `json.dumps` serializes with the standard library encoder alone, `allow_nan=False`
+  included. The values a producer naturally records there were exactly the ones that
+  broke it — a `np.int64` count out of `np.unique` is not serializable at all, and a NaN
+  is not valid JSON — and both failed at `json.dumps`, a call after the document was
+  handed back, naming a type rather than the entry that carried it. NumPy scalars and
+  arrays are now converted (their Python equivalents are exact), non-finite numbers,
+  non-string keys, circular structures and values with no JSON form raise, and the
+  message names the offending entry. The caller's own dictionary is left untouched.
 * The documentation's two density figures showed densities about 2.55 times too high.
   Both divided every pixel's count by `ipix_area(0, depth)` — pixel 0 sits at a cube
   vertex, which makes it the *smallest* pixel in the scheme, not a representative one —

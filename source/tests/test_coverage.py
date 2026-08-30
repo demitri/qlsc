@@ -383,6 +383,145 @@ def test_extra_meta_is_carried_through():
 
 
 # ---------------------------------------------------------------------------
+# meta and the JSON guarantee
+#
+# The module promises a dict that json.dumps serializes with the standard library
+# encoder alone, allow_nan=False included. Everything else in the document is built
+# from values the module produces itself; meta is free-form and comes from outside,
+# so it is the one place that promise could be broken - and it was, because meta was
+# copied in unexamined.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("meta,expected", [
+	({"count": np.int64(5)}, {"count": 5}),
+	({"scale": np.float64(1.5)}, {"scale": 1.5}),
+	({"flag": np.bool_(True)}, {"flag": True}),
+	({"ids": np.array([1, 2, 3])}, {"ids": [1, 2, 3]}),
+	({"corner": (1, "a", 2.5)}, {"corner": [1, "a", 2.5]}),
+	({"nested": {"inner": np.int32(3)}}, {"nested": {"inner": 3}}),
+	({"deep": [{"n": np.int16(1)}, [np.float32(0.5)]]}, {"deep": [{"n": 1}, [0.5]]}),
+	({"nothing": None, "text": "x", "flag": False}, {"nothing": None, "text": "x", "flag": False}),
+])
+def test_meta_is_rebuilt_out_of_json_native_types(meta, expected):
+	'''
+	Test that the values a producer naturally has — NumPy scalars out of np.unique, an
+	array of ids, a nested dict — are converted rather than refused, and that the result
+	really does serialize.
+	'''
+	q = QLSC(depth=3)
+	document = q.coverage(ipix=[1], meta=meta)
+
+	validate_sky_coverage(document)
+	for key, value in expected.items():
+		assert document["meta"][key] == value
+		assert type(document["meta"][key]) is type(value)
+
+	# the guarantee itself: the standard library encoder, strictly
+	json.dumps(document, allow_nan=False)
+
+
+@pytest.mark.parametrize("meta", [
+	{"x": float("nan")},
+	{"x": float("inf")},
+	{"x": -float("inf")},
+	{"x": np.float64("nan")},
+	{"nested": {"x": float("nan")}},
+	{"list": [1.0, float("nan")]},
+])
+def test_meta_refuses_a_non_finite_number(meta):
+	'''
+	Test that NaN and infinity are refused where the entry holding them can still be
+	named, rather than surviving into a document that json.dumps then rejects.
+	'''
+	q = QLSC(depth=3)
+	with pytest.raises(ValueError, match="must be finite"):
+		q.coverage(ipix=[1], meta=meta)
+
+
+@pytest.mark.parametrize("meta", [
+	{"s": {1, 2}},
+	{"b": b"bytes"},
+	{"o": object()},
+	{"nested": {"o": object()}},
+	{"c": 1 + 2j},
+])
+def test_meta_refuses_a_value_with_no_json_form(meta):
+	'''
+	Test that a value JSON cannot express raises here, naming the entry, rather than at
+	json.dumps a call later naming only a type.
+	'''
+	q = QLSC(depth=3)
+	with pytest.raises(TypeError, match="no JSON representation"):
+		q.coverage(ipix=[1], meta=meta)
+
+
+def test_meta_refuses_a_non_string_key():
+	'''
+	Test that a key JSON cannot express is refused rather than changed on the way out:
+	json.dumps would write the integer 5 as the string "5", so the key that went in
+	would not be the key that came back.
+	'''
+	q = QLSC(depth=3)
+	with pytest.raises(TypeError, match="must be strings"):
+		q.coverage(ipix=[1], meta={5: "five"})
+
+
+def test_meta_refuses_a_circular_structure():
+	'''
+	Test that a structure containing itself raises rather than recursing until the
+	interpreter stops it.
+	'''
+	q = QLSC(depth=3)
+	circular = {}
+	circular["self"] = circular
+
+	with pytest.raises(ValueError, match="contains itself"):
+		q.coverage(ipix=[1], meta=circular)
+
+
+def test_meta_error_names_the_offending_entry():
+	'''
+	Test that the message points at the entry, which is the whole reason for checking
+	here instead of leaving it to json.dumps.
+	'''
+	q = QLSC(depth=3)
+	with pytest.raises(ValueError, match=r"\['readings'\]\[1\]"):
+		q.coverage(ipix=[1], meta={"readings": [1.0, float("nan")]})
+
+
+def test_the_caller_s_meta_dictionary_is_not_modified():
+	'''
+	Test that rebuilding the metadata leaves the caller's own dictionary alone; it is
+	theirs, and may well be reused for the next document.
+	'''
+	q = QLSC(depth=3)
+	original = {"ids": np.array([1, 2]), "nested": {"n": np.int64(7)}}
+
+	q.coverage(ipix=[1], meta=original)
+
+	assert isinstance(original["ids"], np.ndarray)
+	assert isinstance(original["nested"]["n"], np.int64)
+
+
+def test_index_coverage_meta_is_validated_too():
+	'''
+	Test that the index entry point applies the same rule; it takes 'meta' as well and
+	hands it to the same assembly.
+	'''
+	points = sunflower_points_on_sphere(50)
+	index = QLSCIndex(qlsc=QLSC(depth=8))
+	index.add_points(points=points)
+
+	document = index.coverage(depth=4, meta={"rows": np.int64(len(points))})
+	validate_sky_coverage(document)
+	assert document["meta"]["rows"] == 50
+	json.dumps(document, allow_nan=False)
+
+	with pytest.raises(ValueError, match="must be finite"):
+		index.coverage(depth=4, meta={"x": float("nan")})
+
+
+# ---------------------------------------------------------------------------
 # QLSCIndex.coverage
 # ---------------------------------------------------------------------------
 
