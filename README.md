@@ -9,7 +9,7 @@ The quadrilateralized spherical cube (QLSC) is a geospatial indexing scheme for 
 Note that while this package is designed for astronomical use (it focusses on right ascension and declination), it could be just as easily be used for latitude and longitude coordinates, as long as you’re ok with a perfectly spherical Earth (though QLSC was designed to be used with the real Earth). Future updates may better facilitate this, but contributions are welcome.
 
 Author: Demitri Muna
-Copyright © 2020 Demitri Muna, except for the embedded Q3C code which is copyright Sergey Koposov.
+Copyright © 2020-2026 Demitri Muna, except for the embedded Q3C code which is copyright Sergey Koposov.
 
 > **Note for v1.1:** `QLSC.ipix2ang` now returns the **center** of the pixel rather than the "lower left" corner, matching the Q3C PostgreSQL extension v2.0.1 and later. This is a breaking change that returns different values without raising an error; code depending on the corner should use `ipix2xy`/`xy2ang` or `ipix2polygon`. (`ipix2ang_center` is now a synonym of `ipix2ang`.) See the [CHANGELOG](https://github.com/demitri/qlsc/blob/master/CHANGELOG.md) for all changes.
 
