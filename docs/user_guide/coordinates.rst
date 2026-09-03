@@ -207,6 +207,58 @@ the face:
 	xy2ang past the edge: ValueError: Values of 'x' and 'y' must be in the range [-1,1]; was given (1.4,0.0).
 
 
+The integer grid
+----------------
+
+Underneath the face plane is the grid the scheme is actually built from: an ipix
+value is the bit interleaving of a face number and a pair of **integers** in
+``[0, nside)``. :py:func:`~qlsc.QLSC.ipix2xiyi` and
+:py:func:`~qlsc.QLSC.xiyi2ipix` are that layer, and they are exact inverses of
+each other — no trigonometry, no tolerance:
+
+.. code-block:: python
+
+	facenum, xi, yi = q.ipix2xiyi(9200)
+	print("ipix2xiyi(9200):  ", (facenum, xi, yi), "  nside =", q.nside)
+	print("ipix2xy(9200):    ", q.ipix2xy(9200))
+	print("xiyi2ipix back:   ", q.xiyi2ipix(facenum, xi, yi))
+	print("one pixel along x:", q.xiyi2ipix(facenum, xi + 1, yi))
+
+	ipix = q30.ang2ipix(83.822083, -5.391111)
+	print("depth 30:", ipix, "->", q30.ipix2xiyi(ipix))
+	print("round trip is exact:", q30.xiyi2ipix(*q30.ipix2xiyi(ipix)) == ipix)
+
+.. code-block:: text
+
+	ipix2xiyi(9200):   (0, 28, 92)   nside = 256
+	ipix2xy(9200):     (0, -0.78125, -0.28125)
+	xiyi2ipix back:    9200
+	one pixel along x: 9201
+	depth 30: 2589827523372428891 -> (2, 478757421, 485909747)
+	round trip is exact: True
+
+``x`` and ``xi`` are the same position written two ways —
+``x == (xi / nside) * 2 - 1`` exactly — but the integers are what to reach for
+when a calculation walks the grid. Stepping ``xi`` or ``yi`` by one is an exact
+move to the next pixel at any depth; nudging ``x`` or ``y`` and going back
+around through ``(ra,dec)`` is an approximation, and it is least reliable
+precisely where a grid walk spends its time, on a pixel boundary. The two
+methods take one pixel at a time, and refuse a grid coordinate outside
+``[0, nside)`` — that is a position on a *neighbouring* face, whose axes are
+rotated with respect to this one, not a wrapped position on this one. Crossing a
+face is what :py:func:`~qlsc.QLSC.ipix_neighbors` is for.
+
+.. note::
+
+	:py:func:`~qlsc.QLSC.xy2ipix` now uses this path itself. It used to
+	project the position back onto the sphere and call
+	:py:func:`~qlsc.QLSC.ang2ipix`, which put a boundary position on whichever
+	side the last few bits of two trigonometric round trips landed on: at
+	``depth=30``, ``xy2ipix(ipix2xy(ipix))`` returned a *neighbouring* pixel for
+	about 40% of the scheme. It now returns the pixel it was asked for at every
+	depth. Positions inside a pixel were never in doubt and are unchanged.
+
+
 Moving between depths, and between neighbours
 ---------------------------------------------
 

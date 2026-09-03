@@ -124,4 +124,11 @@ invalid arguments, the compiled extension module ``qlsc.q3c`` provides:
 	answering about a region that is not the one asked for. An ``axis_ratio`` of 1
 	is a circle and is not subject to the limit.
 
+``qlsc.q3c.Q3C_MAXRAD``
+	The largest region size, in degrees, for which the embedded Q3C code computes
+	coverage geometry (35). Past it the region queries stop refining and answer with
+	the whole sphere, which is why growing a search beyond this value cannot widen
+	its coverage any further, and why :py:func:`QLSC.nearby_ipix_ranges` returns a
+	single whole-sky range there.
+
 A closed :py:class:`QLSCIndex` raises ``RuntimeError`` on any further use.

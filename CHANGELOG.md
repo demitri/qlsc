@@ -193,6 +193,33 @@
   anything in it then raises an `ImportError` naming the package and chaining the
   original import error.
 
+* `QLSC.ipix2xiyi()` and `QLSC.xiyi2ipix()` expose the integer grid the scheme is
+  built from: an ipix value is the bit interleaving of a face number and a pair of
+  integers in `[0,nside)`, and these two convert between them in both directions,
+  exactly. The decode half already existed inside the C extension but only as an
+  intermediate step of `ipix2xy`, which threw the integers away in favour of the
+  rescaled floats; the encode half is the vendored `q3c_xiyi2ipix`, previously
+  unbridged. The round trip reproduces every pixel of every depth, with no
+  trigonometry and no tolerance, which makes stepping the grid — the natural way to
+  walk from a pixel to its neighbour — exact where nudging `x`,`y` and going back
+  around through `(ra,dec)` is not. A grid coordinate outside `[0,nside)` is refused
+  rather than reduced modulo `nside`: it is a position on a *neighbouring* face,
+  whose axes are rotated with respect to this one. Both are also available at the
+  extension level as `qlsc.q3c.ipix2xiyi` / `qlsc.q3c.xiyi2ipix`.
+* `QLSC.nearby_ipix_ranges()` (and the `lon`/`lat` spelling on `GeoQLSC`) exposes
+  Q3C's cheap neighbourhood calculation, `q3c_get_nearby` — the one its PostgreSQL
+  extension uses to seed a positional join, previously unbridged. It skips the
+  quadtree refinement of a cone search and returns at most four ranges, each a single
+  quadtree square just coarse enough to hold the cone's bounding box on a cube face:
+  a first cheap cut at "which pixels should I even look at?", not an answer. Its
+  contract is documented as measured rather than as hoped — Q3C emits one square per
+  neighbouring cube face and nothing in its code bounds the rest of that face's
+  bounding box to that square, so the ranges are **not** a guaranteed cover, and both
+  the docstring and `test_nearby_ranges.py` say so plainly. A negative radius raises
+  instead of returning the empty result Q3C answers it with, and the whole-sky
+  sentinel Q3C uses past `Q3C_MAXRAD` is reported as the pixels it means. Also
+  available as `qlsc.q3c.nearby_query`.
+
 ### Documentation
 
 * The documentation is now a structured site rather than an API dump: a landing
@@ -296,6 +323,17 @@
 
 ### Fixed
 
+* `QLSC.xy2ipix()` returns the pixel containing the position it is given, at every
+  depth. It computed its answer by projecting the position back onto the sphere with
+  `xy2ang` and handing that to `ang2ipix` — two trips through trigonometry, whose last
+  bits decided the answer for a position sitting on a pixel boundary. The corners
+  `ipix2xy` returns are exactly such positions, so the two methods were not inverses:
+  at `depth=30`, `xy2ipix(ipix2xy(ipix))` came back with a *neighbouring* pixel for
+  1206 of a 3000-pixel sample, 40% of the scheme. It now scales the position to the
+  face's integer grid and truncates — the same arithmetic Q3C applies once it has
+  projected a sky position — and converts that with the new `xiyi2ipix`. Positions in
+  the interior of a pixel were never in doubt and are unchanged; a test pins that they
+  still agree with the route through the sky.
 * `GeoQLSC.ang2ipix`, `lonlat2ipix`, `point_in_polygon` and `point_in_ellipse` refuse a
   latitude outside [-90,90] instead of quietly answering for somewhere else.
   `GeoQLSCIndex`, `face_number` and `ang2ipix_xy` already refused one; these delegated to

@@ -468,6 +468,56 @@ Two things can go wrong in step 1, and both are handled:
   handle this the same way, by widening. A polygon has no size to widen, so this
   one can reach you; see :doc:`../examples/survey_footprint`.
 
+A cheaper, coarser cut
+----------------------
+
+Q3C also has a much cheaper calculation for the same shape of question, the one
+its PostgreSQL extension uses to seed a positional join:
+:py:func:`~qlsc.QLSC.nearby_ipix_ranges`. It skips step 1's quadtree refinement
+entirely and returns **at most four** ranges, each a single square of the
+quadtree at the level just coarse enough to hold the cone's bounding box on a
+cube face:
+
+.. code-block:: python
+
+	import numpy as np
+	from qlsc import QLSC, q3c
+
+	q = QLSC(depth=20)
+	nearby = q.nearby_ipix_ranges(83.822083, -5.391111, 0.5)
+	print("nearby ranges:", nearby.tolist())
+	print("pixels covered:", int(sum(e - s + 1 for s, e in nearby)))
+
+	fulls, partials = q3c.radial_query(q._hprm, 83.822083, -5.391111, 0.5)
+	refined = int(sum(e - s + 1 for s, e in np.vstack([fulls, partials])))
+	print("radial_query ranges:", len(fulls) + len(partials), " pixels covered:", refined)
+	print("whole sky past 35 deg:", q.nearby_ipix_ranges(83.822083, -5.391111, 40.).tolist(), "of", q.nbins, "pixels")
+
+.. code-block:: text
+
+	nearby ranges: [[2469606195200, 2469874630655], [2470143066112, 2470411501567]]
+	pixels covered: 536870912
+	radial_query ranges: 24  pixels covered: 100663320
+	whole sky past 35 deg: [[0, 6597069766655]] of 6597069766656 pixels
+
+Two ranges instead of twenty-four, covering five times as much sky. That is the
+trade: it is a first cheap cut at "which pixels should I even look at?", not an
+answer. Past ``qlsc.q3c.Q3C_MAXRAD`` (35 degrees) it stops doing geometry
+altogether and hands back the whole sky.
+
+.. warning::
+
+	These ranges are not a *guaranteed* cover of the cone. Where the cone spills
+	onto a neighbouring cube face, Q3C emits one square for that face, chosen at a
+	corner of the face's bounding box, and nothing in its code bounds the rest of
+	that box to the same square. No case where a point inside the cone fell
+	outside the ranges has been found, and the package's tests pin that over a
+	grid of centres, radii and depths — but that is a measurement, not a proof.
+	Anything that must not miss a point belongs in
+	:py:func:`~qlsc.QLSCIndex.radial_query`, which is built on the refined ranges
+	of step 1 and finishes with the exact test of step 4.
+
+
 If the range computation ever produces nothing usable, the query falls back to
 scanning every row rather than silently returning an empty result, and says so
 through the logger:
