@@ -35,15 +35,22 @@ uses the same seeds; none of them are hand-made.
      - ``ipix_neighbors``, region growing, and the pixel-area correction
    * - :doc:`density_map`
      - pixel counts as a sky map, and rolling counts up the quadtree
+   * - :doc:`cross_match`
+     - :py:func:`~qlsc.crossmatch` between two catalogs; ``nearest_only``,
+       self-matches, and the join's direction-independence
+   * - :doc:`coverage_export`
+     - exporting an index's sky coverage (:py:func:`~qlsc.QLSCIndex.coverage`)
+       as a portable JSON document
+   * - :doc:`geographic_classes`
+     - the geographic longitude/latitude classes
+       (:py:class:`~qlsc.GeoQLSC`/:py:class:`~qlsc.GeoQLSCIndex`) and their one
+       stricter rule
 
 .. note::
 
-	Cross-matching two catalogs (:py:func:`~qlsc.crossmatch`), exporting an index's
-	sky coverage (:py:func:`~qlsc.QLSCIndex.coverage`), the geographic
-	longitude/latitude classes, and the Starlink AST bridge
-	(:mod:`qlsc.cornish_interop`) are new in this release. They are documented in
-	the :doc:`user guide <../user_guide/indexing>` and the
-	:doc:`API reference <../api>`; worked example pages for them are forthcoming.
+	The Starlink AST bridge (:mod:`qlsc.cornish_interop`) is also new in this
+	release. It is documented in the :doc:`API reference <../api>`; a worked
+	example page for it is forthcoming.
 
 .. toctree::
    :maxdepth: 1
@@ -54,3 +61,6 @@ uses the same seeds; none of them are hand-made.
    galaxy_aperture
    pixel_regions
    density_map
+   cross_match
+   coverage_export
+   geographic_classes

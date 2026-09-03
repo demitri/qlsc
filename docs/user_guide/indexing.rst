@@ -426,8 +426,9 @@ values, with no index behind it.
 .. note::
 
 	Cross-matching, coverage export, and the geographic classes are new in this
-	release and are covered here and in the :doc:`API reference <../api>` only.
-	Worked examples for them are forthcoming.
+	release. Beyond this page and the :doc:`API reference <../api>`, they now have
+	worked examples: :doc:`../examples/cross_match`, :doc:`../examples/coverage_export`,
+	and :doc:`../examples/geographic_classes`.
 
 
 How a region query works
