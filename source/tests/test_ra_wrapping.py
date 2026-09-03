@@ -319,6 +319,21 @@ def test_c_level_facenum_rejects_non_finite():
 			q3c.facenum(q30._hprm, 20., bad)
 
 
+@pytest.mark.parametrize("ra", RA_VALUES)
+def test_c_level_nearby_query_is_periodic(ra):
+	'''
+	Test the exported neighbourhood-range function directly. q3c_get_nearby selects
+	the cube face through q3c_get_region_facenum, which calls q3c_get_facenum - the
+	function this whole module exists for - so the wrapper reduces ra before the
+	call and the ranges must not depend on how the right ascension was written.
+	'''
+	for dec in [-89.9, -44., 0., 44., 89.9]:
+		for radius in [0.01, 1., 20.]:
+			expected = q3c.nearby_query(q30._hprm, ra, dec, radius).tolist()
+			for shift in SHIFTS:
+				assert q3c.nearby_query(q30._hprm, ra + shift, dec, radius).tolist() == expected
+
+
 @pytest.mark.parametrize("centre", [10., 100., 265., 350.])
 def test_c_level_polygon_functions_are_periodic(centre):
 	'''

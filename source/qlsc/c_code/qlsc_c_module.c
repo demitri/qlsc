@@ -36,12 +36,16 @@
 //   SAFE, periodic in ra with period 360:
 //     q3c_dist, q3c_sindist  - ra enters only as sin((ra1-ra2)/2)^2
 //     q3c_in_ellipse         - ra enters only as cos/sin of (alpha1-alpha)
-//     q3c_xy2ang, q3c_xy2facenum, q3c_ipix2ang, q3c_ipix2xy, q3c_pixarea
+//     q3c_xy2ang, q3c_xy2facenum, q3c_ipix2ang, q3c_ipix2xy, q3c_pixarea,
+//     q3c_xiyi2ipix, ipix_to_xiyi
 //                            - take no ra at all
 //   NEEDS UNWRAPPING BY THIS WRAPPER:
 //     q3c_get_facenum        - unwrapped in qlsc_q3c_facenum
 //     q3c_radial_query       - unwrapped in qlsc_q3c_radial_query
 //     q3c_ellipse_query      - unwrapped in qlsc_q3c_ellipse_query
+//     q3c_get_nearby         - reaches q3c_get_facenum through
+//                              q3c_get_region_facenum; unwrapped in
+//                              qlsc_q3c_nearby_query
 //     q3c_check_sphere_point_in_poly, q3c_poly_query
 //                            - both reach q3c_get_facenum through
 //                              q3c_get_facenum_poly, which reads the FIRST
@@ -634,7 +638,18 @@ qlsc_q3c_ipix2ang(PyObject *module, PyObject *args, PyObject *kwargs) // -> cast
 	return Py_BuildValue("dd", ra, dec);
 }
 
-void ipix_to_xy(struct q3c_prm *hprm, q3c_ipix_t ipix, q3c_coord_t *x, q3c_coord_t *y)
+// Decode an ipix value into the integer grid coordinates (xi,yi) of its pixel on
+// its own cube face: xi and yi are in [0,nside) and count pixels from the face's
+// lower-left corner.
+//
+// This is the bit de-interleaving half of q3c_ipix2ang, taken from q3cube.c and
+// stopped before the rescaling to the [-1,1] face plane; there is no separate
+// entry point for it in the vendored library. It is the exact inverse of the
+// vendored q3c_xiyi2ipix (which interleaves with the xbits/ybits tables, while
+// this de-interleaves with xbits1/ybits1), so ipix -> (xi,yi) -> ipix reproduces
+// the original value for every pixel of the scheme, with no floating point
+// anywhere in the loop.
+void ipix_to_xiyi(struct q3c_prm *hprm, q3c_ipix_t ipix, q3c_ipix_t *xi, q3c_ipix_t *yi)
 {
 	// taken from q3c_ipix2ang in q3cube.c
 	//
@@ -668,7 +683,18 @@ void ipix_to_xy(struct q3c_prm *hprm, q3c_ipix_t ipix, q3c_coord_t *x, q3c_coord
 	i2 = i2 / Q3C_I1;
 	x0 += xbits1[i3] * ii1 * ii1 * ii1;
 	y0 += ybits1[i3] * ii1 * ii1 * ii1;
-	
+
+	*xi = x0;
+	*yi = y0;
+}
+
+void ipix_to_xy(struct q3c_prm *hprm, q3c_ipix_t ipix, q3c_coord_t *x, q3c_coord_t *y)
+{
+	q3c_ipix_t x0, y0;
+	const q3c_ipix_t nside = hprm->nside;
+
+	ipix_to_xiyi(hprm, ipix, &x0, &y0);
+
 	*x = (((q3c_coord_t)x0) / nside) * 2 - 1;
 	*y = (((q3c_coord_t)y0) / nside) * 2 - 1;
 	/* Now -1<x<1 and -1<y<1 */
@@ -777,6 +803,103 @@ qlsc_q3c_ipix2xy(PyObject *module, PyObject *args, PyObject *kwargs)
 	ipix_to_xy(hprm, ipix, &x, &y);
 
 	return Py_BuildValue("ldd", face_num, x, y);
+}
+
+static PyObject *
+qlsc_q3c_ipix2xiyi(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	PyObject *hprm_capsule;
+	PyObject *ipix_obj;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	q3c_ipix_t ipix, xi, yi;
+
+	static char *kwlist[] = {"hprm", "ipix", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "OO",						// object + object
+									 kwlist,
+									 &hprm_capsule, &ipix_obj))
+	{
+		return NULL;
+	}
+
+	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
+	// Unlike ipix2xy this takes one value only. An array form would have to be
+	// added deliberately (three int64 output arrays), not fall out of a silent
+	// element-zero read, so array-like input is refused rather than truncated.
+	if (is_ipix_array_input(ipix_obj)) {
+		PyErr_SetString(PyExc_TypeError,
+						"ipix2xiyi takes a single ipix value, not an array of them.");
+		return NULL;
+	}
+
+	if (ipix_from_object(ipix_obj, &ipix) != 0)
+		return NULL;
+	if (ipix_bounds_check(hprm, ipix) != 0)
+		return NULL;
+
+	// integer arithmetic - see the note in qlsc_q3c_ipix2xy
+	q3c_ipix_t face_num = ipix / (hprm->nside * hprm->nside);
+
+	ipix_to_xiyi(hprm, ipix, &xi, &yi);
+
+	return Py_BuildValue("LLL", (long long)face_num, (long long)xi, (long long)yi);
+}
+
+static PyObject *
+qlsc_q3c_xiyi2ipix(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	PyObject *hprm_capsule;
+	long long face_num, xi, yi;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	q3c_ipix_t ipix;
+
+	static char *kwlist[] = {"hprm", "facenum", "xi", "yi", NULL};
+
+	// "L" accepts Python and NumPy integers (via __index__) and rejects floats,
+	// so a fractional grid coordinate fails loudly rather than truncating.
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "OLLL",					// object + 3 long longs
+									 kwlist,
+									 &hprm_capsule, &face_num, &xi, &yi))
+	{
+		return NULL;
+	}
+
+	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
+	// q3c_xiyi2ipix indexes the xbits/ybits tables with (xi % Q3C_I1), which for a
+	// negative xi is a negative index - a read before the start of the table - and
+	// it multiplies face_num by nside^2 without checking it, so an out-of-range
+	// face silently returns an ipix belonging to no pixel of the scheme. Neither
+	// is clamped here; both are refused.
+	if (face_num < 0 || face_num > 5) {
+		PyErr_Format(PyExc_ValueError,
+					 "The cube face number must be in [0,5]; was given %lld.", face_num);
+		return NULL;
+	}
+	if (xi < 0 || xi >= hprm->nside || yi < 0 || yi >= hprm->nside) {
+		PyErr_Format(PyExc_ValueError,
+					 "The grid coordinates must be in [0,%lld) for this scheme; was given (%lld,%lld).",
+					 (long long)hprm->nside, xi, yi);
+		return NULL;
+	}
+
+	ipix = q3c_xiyi2ipix(hprm->nside, hprm->xbits, hprm->ybits, (char)face_num,
+						 (q3c_ipix_t)xi, (q3c_ipix_t)yi);
+
+	return PyLong_FromLongLong((long long)ipix);
 }
 
 static PyObject *
@@ -1225,6 +1348,122 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 
 	return ipix_range_arrays(fulls_padded, partials_padded);
+}
+
+// Build an (n,2) int64 array from q3c_get_nearby's fixed-length output, stopping
+// at the first (1,-1) filler pair - q3c's "no more ranges" marker, the same
+// convention the fulls/partials arrays use. Only the exact (1,-1) pair is filler;
+// a legitimate range can begin or end at 1.
+static PyObject *
+nearby_range_array(const q3c_ipix_t *ranges)
+{
+	int n = 0;
+	npy_intp dims[2];
+	PyObject *array;
+
+	while (n < Q3C_NNEARBY / 2 && !(ranges[2*n] == 1 && ranges[2*n+1] == -1))
+		n++;
+
+	// Every range being filler means q3c answered "nothing is nearby" for a region it
+	// was asked about, which it has no legitimate way to do: the only path that fills
+	// all four is a negative radius, refused before the call. An empty array here would
+	// reach the caller as a perfectly ordinary "no candidates" answer, so it is raised.
+	if (n == 0) {
+		PyErr_SetString(PyExc_RuntimeError,
+						"q3c_get_nearby returned no ipix ranges at all. This is an internal error in the "
+						"embedded Q3C code (version " Q3C_VERSION "); please report it at "
+						"https://github.com/segasai/q3c/issues .");
+		return NULL;
+	}
+
+	dims[0] = n;
+	dims[1] = 2;
+	array = PyArray_SimpleNew(2, dims, NPY_INT64);
+	if (array == NULL)
+		return NULL;
+	if (n > 0)
+		memcpy(PyArray_DATA((PyArrayObject *)array), ranges, 2 * n * sizeof(q3c_ipix_t));
+	return array;
+}
+
+static PyObject *
+qlsc_q3c_nearby_query(PyObject *module, PyObject *args, PyObject *kwargs)
+{
+	// external parameters
+	PyObject *hprm_capsule;
+	q3c_coord_t ra_cen, dec_cen, radius;
+
+	// internal variables
+	struct q3c_prm *hprm;
+	q3c_circle_region circle;
+	q3c_ipix_t ranges[Q3C_NNEARBY];
+
+	static char *kwlist[] = {"hprm", "ra", "dec", "radius", NULL};
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs,
+									 "Oddd", // object + 3 doubles
+									 kwlist,
+									 &hprm_capsule, &ra_cen, &dec_cen, &radius))
+	{
+		return NULL;
+	}
+
+	hprm = (struct q3c_prm*)PyCapsule_GetPointer(hprm_capsule, Q3C_STRUCT_POINTER_BUFFER);
+	if (hprm == NULL)
+		return NULL; // not a valid hprm capsule; PyCapsule_GetPointer has set the exception
+
+	// Non-finite values pass the checks below (NaN > 90 is false) and reach
+	// undefined float->int conversions (upstream q3c issue #52).
+	if (!isfinite(ra_cen) || !isfinite(dec_cen) || !isfinite(radius))
+	{
+		PyErr_SetString(PyExc_ValueError, "The 'ra', 'dec', and 'radius' values must be finite.");
+		return NULL;
+	}
+
+	ra_cen = UNWRAP_RA(ra_cen);
+	if (q3c_fabs(dec_cen) > 90)
+	{
+		// PyErr_Format does not support float conversions, hence snprintf
+		char msg[128];
+		snprintf(msg, sizeof msg, "The 'dec' value must be in the range [-90,90] (was given %.17g).", dec_cen);
+		PyErr_SetString(PyExc_ValueError, msg);
+		return NULL;
+	}
+	// A negative radius makes q3c_get_nearby return four filler pairs, i.e. an
+	// empty answer that looks exactly like "nothing is nearby". That is a caller
+	// error, not an empty region, so it is refused here rather than returned.
+	if (radius < 0)
+	{
+		char msg[128];
+		snprintf(msg, sizeof msg, "The 'radius' value must not be negative (was given %.17g).", radius);
+		PyErr_SetString(PyExc_ValueError, msg);
+		return NULL;
+	}
+
+	circle.ra = ra_cen;
+	circle.dec = dec_cen;
+	circle.rad = radius;
+
+	// Initialize to q3c's own filler so a path that returns without writing every
+	// range cannot leave the caller reading uninitialized stack memory.
+	for (int i = 0; i < Q3C_NNEARBY; i += 2) {
+		ranges[i] = 1;
+		ranges[i+1] = -1;
+	}
+
+	// A nonzero return means the region touches more cube faces than the four
+	// output ranges can encode. The vendored code argues at the return site that
+	// this is unreachable for circles within Q3C_MAXRAD; if it ever happens the
+	// answer would be a silently truncated cover, so it is raised, not returned.
+	if (q3c_get_nearby(hprm, Q3C_CIRCLE, &circle, ranges))
+	{
+		char query[256];
+		snprintf(query, sizeof query, "ra=%.17g, dec=%.17g, radius=%.17g "
+				 "(degrees; the ra value is normalized to [0,360])", ra_cen, dec_cen, radius);
+		raise_query_overflow("q3c_get_nearby", query);
+		return NULL;
+	}
+
+	return nearby_range_array(ranges);
 }
 
 static PyObject *
@@ -1706,6 +1945,8 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"ang2ipix_xy", (PyCFunction)qlsc_q3c_ang2ipix_xy, METH_VARARGS|METH_KEYWORDS, "Convert ra,dec to ipix value, also returning (x,y) and the face number in a dictionary."},
 	{"ipix2ang", (PyCFunction)qlsc_q3c_ipix2ang, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value (or an array of them) to a ra,dec tuple (or a tuple of ra,dec arrays)."},
 	{"ipix2xy", (PyCFunction)qlsc_q3c_ipix2xy, METH_VARARGS|METH_KEYWORDS, "Convert an ipix value (or an array of them) to the (x,y) coordinate on the square face with the face number as a tuple: (facenum,x,y); array input returns a tuple of three arrays."},
+	{"ipix2xiyi", (PyCFunction)qlsc_q3c_ipix2xiyi, METH_VARARGS|METH_KEYWORDS, "Convert a single ipix value to its integer grid position on the cube face: (facenum,xi,yi), with xi,yi in [0,nside)."},
+	{"xiyi2ipix", (PyCFunction)qlsc_q3c_xiyi2ipix, METH_VARARGS|METH_KEYWORDS, "Convert an integer grid position (facenum,xi,yi) on a cube face to its ipix value; the exact inverse of ipix2xiyi."},
 	{"facenum", (PyCFunction)qlsc_q3c_facenum, METH_VARARGS|METH_KEYWORDS, "Return the cube face number for the given coordinates."},
 	{"pixarea", (PyCFunction)qlsc_q3c_pixarea, METH_VARARGS|METH_KEYWORDS, "Return the area of a given Q3C pixel for a given ipix and depth."},
 	{"distance", (PyCFunction)qlsc_q3c_dist, METH_VARARGS|METH_KEYWORDS, "Calculates the angular distance between two points on a sphere, in degrees."},
@@ -1716,6 +1957,7 @@ static PyMethodDef qlsc_methods[] = { // METH_VARARGS _or_ METH_VARARGS | METH_K
 	{"check_sphere_points_in_poly", (PyCFunction)qlsc_q3c_check_sphere_points_in_poly, METH_VARARGS|METH_KEYWORDS, "Test an array of ra,dec points against a spherical polygon, projecting the polygon once; returns a boolean array."},
 	{"in_ellipse", (PyCFunction)qlsc_q3c_in_ellipse, METH_VARARGS|METH_KEYWORDS, "Test whether an ra,dec point lies inside an ellipse on the sphere."},
 	{"radial_query", (PyCFunction)qlsc_q3c_radial_query, METH_VARARGS|METH_KEYWORDS, "Return the (fulls,partials) ipix ranges covering a cone."},
+	{"nearby_query", (PyCFunction)qlsc_q3c_nearby_query, METH_VARARGS|METH_KEYWORDS, "Return up to four coarse ipix ranges covering the neighbourhood of a cone; see QLSC.nearby_ipix_ranges for what is and is not guaranteed."},
 	{"poly_query", (PyCFunction)qlsc_q3c_poly_query, METH_VARARGS|METH_KEYWORDS, "Return the (fulls,partials) ipix ranges covering a spherical polygon."},
 	{"ellipse_query", (PyCFunction)qlsc_q3c_ellipse_query, METH_VARARGS|METH_KEYWORDS, "Return the (fulls,partials) ipix ranges covering an ellipse on the sphere."},
 	{NULL, NULL, 0, NULL}	// sentinel

@@ -62,6 +62,7 @@ def geo_scheme_calls(latitude:float) -> dict:
 		"ang2ipix_at_depth"  : lambda: scheme.ang2ipix_at_depth(10., latitude, depth=5),
 		"lonlat2ipix"        : lambda: scheme.lonlat2ipix(lon=10., lat=latitude),
 		"face_number"        : lambda: scheme.face_number(lon=10., lat=latitude),
+		"nearby_ipix_ranges" : lambda: scheme.nearby_ipix_ranges(lon=10., lat=latitude, radius=1.),
 		"point_in_polygon"   : lambda: scheme.point_in_polygon(lon=10., lat=latitude, polygon=polygon),
 		"point_in_ellipse"   : lambda: scheme.point_in_ellipse(lon=10., lat=latitude, lon_cen=10., lat_cen=80.,
 															   semi_major_axis=1., axis_ratio=0.5),

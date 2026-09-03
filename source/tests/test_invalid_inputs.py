@@ -17,8 +17,11 @@ capsule_functions = [
 	lambda c: q3c.ang2ipix_xy(c, 10., 20.),
 	lambda c: q3c.ipix2ang(c, 42),
 	lambda c: q3c.ipix2xy(c, 42),
+	lambda c: q3c.ipix2xiyi(c, 42),
+	lambda c: q3c.xiyi2ipix(c, 0, 1, 1),
 	lambda c: q3c.pixarea(c, 42, 1),
 	lambda c: q3c.radial_query(c, 10., 20., 1.),
+	lambda c: q3c.nearby_query(c, 10., 20., 1.),
 	lambda c: q3c.check_sphere_point_in_poly(c, 0., 0., poly_ra, poly_dec)
 ]
 

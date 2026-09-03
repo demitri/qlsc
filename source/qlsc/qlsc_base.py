@@ -766,6 +766,60 @@ class QLSC:
 		'''
 		return q3c.ipix2xy(self._hprm, self._validated_ipix(ipix))
 
+	def ipix2xiyi(self, ipix:int) -> Tuple[int,int,int]:
+		'''
+		Convert an ipix value to its integer position on the cube face's pixel grid; returns (facenum,xi,yi).
+
+		Where :py:func:`ipix2xy` gives the pixel's lower left corner as a floating point
+		position on the [-1,1] face plane, this gives the same pixel's position as a pair
+		of **integers**: ``xi`` and ``yi`` count pixels from the lower left corner of the
+		face and run over [0, :py:attr:`nside`). The two agree exactly —
+		``x == (xi / nside) * 2 - 1`` — but the integers are the exact quantity the scheme
+		is built from, and they are what :py:func:`xiyi2ipix` converts back.
+
+		Together the two methods are the arithmetic route between neighbouring pixels:
+		stepping ``xi`` or ``yi`` by one and converting back is exact at every depth,
+		where nudging ``x`` or ``y`` and going around through (ra,dec) is a floating
+		point approximation that is least reliable exactly where it matters, at a pixel
+		boundary. ``ipix -> (facenum,xi,yi) -> ipix`` reproduces the original value for
+		every pixel of every depth.
+
+		Stepping off the edge of a face is *not* handled here: ``xi = -1`` or
+		``xi = nside`` is not a pixel of this face and :py:func:`xiyi2ipix` refuses it.
+		The face-crossing cases are what :py:func:`ipix_neighbors` is for.
+
+		This method takes a single ipix value; it is not vectorized.
+
+		:param ipix: the pixel identifier number
+		:returns: (facenum,xi,yi) as three integers
+		'''
+		return q3c.ipix2xiyi(self._hprm, int(self._validated_ipix(ipix)))
+
+	def xiyi2ipix(self, facenum:int=None, xi:int=None, yi:int=None) -> int:
+		'''
+		Convert an integer grid position on a cube face to its ipix value.
+
+		This is the exact inverse of :py:func:`ipix2xiyi`: it is the bit-interleaving step
+		of the scheme itself, with no trigonometry and no floating point anywhere in it.
+		``xi`` and ``yi`` count pixels from the lower left corner of the face and must be
+		in [0, :py:attr:`nside`); a value outside that is a position on some other face,
+		not a wrapped position on this one, and is refused rather than silently reduced.
+
+		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
+		:param xi: the pixel's x position on the face's grid, an integer in [0,nside)
+		:param yi: the pixel's y position on the face's grid, an integer in [0,nside)
+		:returns: the ipix value of that pixel
+		'''
+		if facenum is None or xi is None or yi is None:
+			raise ValueError(f"Values for 'facenum', 'xi' and 'yi' must all be specified; "
+							 f"was given facenum={facenum}, xi={xi}, yi={yi}.")
+		# bool is a subclass of int; a True here is a mistake, not the pixel 1
+		for name, value in (("facenum", facenum), ("xi", xi), ("yi", yi)):
+			if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+				raise ValueError(f"The value for '{name}' must be an integer; was given '{value!r}'.")
+
+		return q3c.xiyi2ipix(self._hprm, int(facenum), int(xi), int(yi))
+
 	def xy2ang(self, facenum:int=None, x:float=None, y:float=None, points:collections.abc.Iterable=None,
 			   return_skycoord:bool=False): # -> Tuple[float,float]:
 		'''
@@ -838,12 +892,57 @@ class QLSC:
 		:py:func:`ang2ipix_xy` are on [-0.5,0.5] and must be doubled first, as its
 		warning explains.
 
+		The pixel containing the position is found on the face's own integer grid: the
+		position is scaled to the grid and truncated, and the resulting ``(xi,yi)`` is
+		converted by :py:func:`xiyi2ipix`. This is the same arithmetic Q3C itself applies
+		once it has projected a sky position onto a face, so a face-plane position and the
+		sky position it stands for land on the same pixel.
+
+		It used to be computed the long way round, by projecting the position back onto
+		the sphere with :py:func:`xy2ang` and asking :py:func:`ang2ipix` — two trips
+		through trigonometry, whose last few bits decided the answer for a position on a
+		pixel boundary. That is exactly where the corners :py:func:`ipix2xy` returns sit:
+		at ``depth=30``, ``xy2ipix(ipix2xy(ipix))`` came back with a *neighbouring* pixel
+		for 40% of the pixels of the scheme. It now returns the pixel asked for, at every
+		depth. Positions in the interior of a pixel were never in doubt and are unchanged.
+
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
 		:param x: x coordinate on cube face, in [-1,1]
 		:param y: y coordinate on cube face, in [-1,1]
+		:returns: the ipix value of the pixel containing that position
 		'''
-		ra,dec = self.xy2ang(x=x, y=y, facenum=facenum)
-		return self.ang2ipix(ra, dec)
+		# The same validation xy2ang applies, which this no longer goes through.
+		if facenum is None:
+			raise ValueError("The cube face number ('facenum') must be provided.")
+		if not isinstance(facenum, int) or isinstance(facenum, bool):
+			# normally would be ok to cast the value, but this is a safety net to catch 'x' values passed to facenum
+			raise ValueError("The value of facenum is expected to be an integer.")
+		if not (0 <= facenum <= 5):
+			raise ValueError(f"Values of 'facenum' must be an integer between 0 and 5; was given '{facenum}'.")
+		if x is None or y is None:
+			raise ValueError(f"Values for 'x' and 'y' must be specified together; missing one (x={x}, y={y}).")
+
+		x = _as_float_scalar(x, "x")
+		y = _as_float_scalar(y, "y")
+		# "or", not "and": either coordinate out of range is an error
+		if not (-1 <= x <= 1) or not (-1 <= y <= 1):
+			raise ValueError(f"Values of 'x' and 'y' must be in the range [-1,1]; was given ({x},{y}).")
+
+		nside = self.nside
+
+		# (x+1)/2 is in [0,1]; the multiplication is exact for a position that came from
+		# ipix2xy, since nside is a power of two, so a pixel's own corner cannot fall a
+		# bit short and truncate onto the pixel below it.
+		xi = int((x + 1.) / 2. * nside)
+		yi = int((y + 1.) / 2. * nside)
+
+		# x == 1 (or y == 1) is the far edge of the face, which belongs to the last pixel
+		# rather than to a pixel one past the end - the same adjustment q3c_ang2ipix_xy
+		# makes for the upper right corner of a face.
+		xi = min(xi, nside - 1)
+		yi = min(yi, nside - 1)
+
+		return self.xiyi2ipix(facenum, xi, yi)
 
 	def ipix_down(self, ipix:int) -> Iterable[int]:
 		'''
@@ -966,6 +1065,87 @@ class QLSC:
 		neighbors.discard(value) # a pixel is not its own neighbor
 
 		return np.array(sorted(neighbors), dtype=np.int64)
+
+	def nearby_ipix_ranges(self, ra=None, dec=None, radius=None) -> np.ndarray:
+		'''
+		Return the coarse ipix ranges Q3C considers "nearby" a cone, as an (n,2) array.
+
+		This is Q3C's own cheap neighbourhood calculation (``q3c_get_nearby``), the one
+		its PostgreSQL extension uses to seed a positional join. It is **not** the cone
+		search: it does no quadtree refinement and emits **at most four** ranges, each one
+		a single square of the quadtree at the level just coarse enough to hold the cone's
+		bounding box on a cube face. That makes it cheap and makes the ranges very coarse —
+		typically far more sky than the cone covers. Each range is inclusive at both ends,
+		``[start, end]``, and the ranges are in Q3C's own order, neither sorted nor merged.
+
+		What this is for: a first, cheap cut at "which pixels should I even look at?" — for
+		instance ordering a cross-match, or a coarse pre-filter ahead of an exact test.
+		What it is not for: an answer. Use :py:func:`QLSCIndex.radial_query` to search an
+		index, or ``qlsc.q3c.radial_query`` for the refined ranges it is built on.
+
+		.. warning::
+
+			These ranges are not a *guaranteed* cover of the cone. When the cone spills
+			onto neighbouring cube faces, Q3C emits only one square per neighbouring face,
+			chosen at the corner of that face's bounding box; nothing in the code bounds
+			the rest of that box to the same square. No case where a point inside the cone
+			fell outside the ranges has been found — the guard test in
+			``test_nearby_ranges.py`` pins that over a deterministic grid of centres,
+			radii and depths — but that is a measurement, not a proof, and this method is
+			documented accordingly. Anything that must not miss a point belongs in
+			:py:func:`QLSCIndex.radial_query`, whose coverage the index's own tests pin.
+
+		A radius larger than ``qlsc.q3c.Q3C_MAXRAD`` (35 degrees) makes Q3C stop doing
+		geometry and answer with the whole sky; this returns that as the single range
+		``[0, nbins-1]``. (The C function spells the same answer ``[-1, 6*nside**2]``,
+		using values just outside the scheme at both ends; they are clamped here so that
+		every value returned is a pixel of this scheme.)
+
+		The center may be given as a scalar astropy :class:`~astropy.coordinates.SkyCoord`
+		(as ``ra``, with ``dec`` left unset), and the radius as an astropy
+		:class:`~astropy.units.Quantity`.
+
+		:param ra: right ascension of the center of the cone (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination of the center of the cone (degrees)
+		:param radius: radius of the cone (degrees); must not be negative
+		:returns: an (n,2) array of inclusive [start,end] ipix ranges, n in [1,4]
+		'''
+		ra, dec = _coordinate_pair(ra, dec)
+
+		if ra is None or dec is None or radius is None:
+			raise ValueError(f"Values for 'ra', 'dec' and 'radius' must all be specified "
+							 f"(or a single SkyCoord as 'ra'); was given ra={ra}, dec={dec}, radius={radius}.")
+
+		# _as_float_scalar and _degrees also reject non-finite values
+		ra = _as_float_scalar(ra, "ra")
+		dec = _as_float_scalar(dec, "dec")
+		radius = _degrees(radius, "radius")
+
+		if not (-90 <= dec <= 90):
+			ra, dec = _normalize_ang(ra, dec)
+		if radius < 0:
+			raise ValueError(f"The 'radius' value must not be negative; was given '{radius}'.")
+
+		ranges = q3c.nearby_query(self._hprm, ra, dec, radius)
+
+		# The whole-sky answer is spelled [-1, 6*nside**2]: one below the first pixel and
+		# one above the last. That one range is rewritten as the pixels it means, so that
+		# every value returned is a pixel of this scheme.
+		if ranges.shape == (1,2) and ranges[0,0] == -1 and ranges[0,1] == 6 * self.nside * self.nside:
+			return np.array([[0, self.nbins - 1]], dtype=np.int64)
+
+		# Every other range q3c produces here is built from a face number and a pair of
+		# grid coordinates, so it cannot leave the scheme. If one ever does, the range
+		# calculation is wrong and the answer is unusable; clamping it into looking
+		# reasonable would hide that, so it is raised instead.
+		if (ranges < 0).any() or (ranges >= self.nbins).any():
+			raise RuntimeError(f"The embedded Q3C code returned ipix ranges outside this scheme "
+							   f"([0,{self.nbins}) at depth {self.depth}) for a cone at "
+							   f"(ra={ra}, dec={dec}) with radius={radius} deg: {ranges.tolist()}. "
+							   f"This is an internal error; please report it at "
+							   f"https://github.com/segasai/q3c/issues .")
+
+		return ranges
 
 	def ipix2face(self, ipix:int) -> int:
 		'''
@@ -3373,6 +3553,25 @@ class GeoQLSC(QLSC):
 		'''
 		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
 		return super().point_in_polygon(ra=ra, dec=dec, polygon=polygon)
+
+	def nearby_ipix_ranges(self, ra=None, dec=None, radius=None, lon=None, lat=None) -> np.ndarray:
+		'''
+		Return the coarse ipix ranges Q3C considers "nearby" a cone, in either spelling.
+
+		Identical to :py:func:`QLSC.nearby_ipix_ranges`, including its warning about what
+		the ranges do and do not guarantee, except that the centre may equally be given as
+		``lon``,``lat``. The result is a set of pixel numbers, which carry no longitude
+		convention of their own.
+
+		:param ra: right ascension / longitude of the centre of the cone (degrees), or a scalar :class:`~astropy.coordinates.SkyCoord`
+		:param dec: declination / latitude of the centre of the cone (degrees)
+		:param radius: radius of the cone (degrees); must not be negative
+		:param lon: longitude of the centre (degrees); the geographic spelling of ``ra``
+		:param lat: latitude of the centre (degrees); the geographic spelling of ``dec``
+		:returns: an (n,2) array of inclusive [start,end] ipix ranges, n in [1,4]
+		'''
+		ra, dec = _lonlat_coordinate_pair(ra, dec, lon, lat)
+		return super().nearby_ipix_ranges(ra=ra, dec=dec, radius=radius)
 
 	def point_in_ellipse(self, ra=None, dec=None, ra_cen=None, dec_cen=None,
 						 semi_major_axis=None, axis_ratio=None, position_angle=0.0,
