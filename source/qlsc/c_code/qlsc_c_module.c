@@ -2022,6 +2022,17 @@ PyInit_q3c(void) // must be named "PyInit_" + name of extension (without package
 		}
 	}
 
+	// The largest number of vertices the polygon functions accept: q3c carries them in
+	// fixed-size buffers of this length, and a longer polygon is refused by
+	// polygon_vertex_views. Published so that the Python layer can decide whether a
+	// polygon is one q3c can be asked about without keeping a second copy of the number.
+	// An integer constant, unlike the two above: it is a count of array elements and
+	// could never become fractional.
+	if (PyModule_AddIntConstant(module, "Q3C_MAX_N_POLY_VERTEX", Q3C_MAX_N_POLY_VERTEX) < 0) {
+		Py_DECREF(module);
+		return NULL;
+	}
+
 	return module;
 }
 

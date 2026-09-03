@@ -3160,6 +3160,107 @@ class QLSCIndex:
 		return _match_result(match_ra, match_dec, match_key, match_distance, return_key, return_distance,
 							 MatchArrayShape.STABLE, return_skycoord=return_skycoord)
 
+	def region_query(self, region=None, return_key:bool=False, return_skycoord:bool=False,
+					 all_sky:bool=False, frame:Union[str,None]=None, skip_frame_check:bool=False,
+					 fast_path:bool=True) -> np.ndarray:
+		'''
+		Return the points of the index that fall inside a `cornish <https://github.com/demitri/cornish>`_
+		region — any region the Starlink AST library can describe.
+
+		Where the three built-in region queries offer Q3C's three shapes, this one accepts
+		an :class:`~cornish.ASTRegion`: circles, boxes, polygons, MOCs, and the boolean
+		combinations of them an :class:`~cornish.ASTCompoundRegion` builds ("this survey
+		footprint minus that bad-seeing field"). Membership is decided by AST itself, so
+		the answer is exactly the set of indexed points AST considers inside the region.
+
+		.. code-block:: python
+
+			from cornish import ASTCircle, ASTICRSFrame
+
+			region = ASTCircle(frame=ASTICRSFrame(), center=[45., 12.], radius=0.5)
+			matches = index.region_query(region)
+
+		The query works the way every region query in this class does: a coarse step over
+		ipix ranges that is guaranteed to be a superset — here a cone over the region's
+		bounding circle — followed by an exact test on each candidate. For an
+		:class:`~cornish.ASTCircle` and a small :class:`~cornish.ASTPolygon` the whole
+		query is handed to :py:func:`radial_query` and :py:func:`polygon_query` instead,
+		since qlsc defines those two shapes identically to AST; the answer is the same, and
+		``fast_path=False`` forces the generic path either way. A region whose bounding
+		circle does not bound it — a negated region, or a compound region with a negated
+		component — is refused rather than silently under-searched, and ``all_sky=True``
+		answers those by testing every point in the index.
+
+		``cornish`` is an optional dependency and is not installed with qlsc. It is
+		imported when this method is called, not when qlsc is imported, and its absence
+		raises an :class:`ImportError` naming the package and how to install it.
+
+		See :py:func:`qlsc.cornish_interop.region_query`, which this method calls, for the
+		full description of the coarse step, the fast paths, and the frame check.
+
+		:param region: a cornish :class:`~cornish.ASTRegion` defined in a sky frame
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_skycoord: if set to True, return the coordinates as an :class:`~astropy.coordinates.SkyCoord`
+		:param all_sky: if set to True, consider every point in the index instead of using the region's bounding circle
+		:param frame: name of the frame the index coordinates are in, compared against the region's frame; None means the default (ICRS)
+		:param skip_frame_check: if set to True, waive that comparison and take responsibility for the frames matching
+		:param fast_path: if set to False, always use the generic bounding-circle path, whatever the region's type
+		:returns: an array of matches with shape (n,2), a :class:`numpy.recarray` with the fields ``ra,dec,key``, a :class:`~astropy.coordinates.SkyCoord`, or an :class:`~astropy.table.QTable`
+		'''
+		# Imported here rather than at the top of the module: cornish_interop imports this
+		# module, and cornish itself is optional - qlsc must import without it.
+		from . import cornish_interop
+
+		return cornish_interop.region_query(self, region, return_key=return_key,
+											return_skycoord=return_skycoord, all_sky=all_sky,
+											frame=frame, skip_frame_check=skip_frame_check,
+											fast_path=fast_path)
+
+	def image_query(self, fits_header=None, return_key:bool=False, return_skycoord:bool=False,
+					frame:Union[str,None]=None, skip_frame_check:bool=False,
+					maxerr=None, maxvert:int=None, fast_path:bool=True) -> np.ndarray:
+		'''
+		Return the points of the index that fall on the field described by a FITS header —
+		"which of my sources land on this image?".
+
+		.. code-block:: python
+
+			from astropy.io import fits
+
+			with fits.open("image.fits") as hdulist:
+				matches = index.image_query(hdulist[0].header)
+
+		The header's WCS is read by `cornish <https://github.com/demitri/cornish>`_ and
+		the Starlink AST library, which return the sky region bounding the image's field;
+		that region is then queried with :py:func:`region_query`. qlsc does no WCS
+		arithmetic of its own: AST does the world coordinate system, qlsc does the index.
+
+		The region comes back in whatever frame the header declares, so a header with
+		``RADESYS = 'FK5'`` searched against an index of ICRS coordinates raises rather
+		than mixing the two; pass ``frame`` naming the index's own frame, or
+		``skip_frame_check``, as :py:func:`region_query` describes.
+
+		``cornish`` is an optional dependency and is not installed with qlsc; its absence
+		raises an :class:`ImportError` naming the package and how to install it.
+
+		:param fits_header: a FITS header — an astropy :class:`~astropy.io.fits.Header`, a fitsio header, an array of cards, a dict, or a string
+		:param return_key: if set to True, include the key value as provided when added to the index
+		:param return_skycoord: if set to True, return the coordinates as an :class:`~astropy.coordinates.SkyCoord`
+		:param frame: name of the frame the index coordinates are in, compared against the header's frame; None means the default (ICRS)
+		:param skip_frame_check: if set to True, waive that comparison and take responsibility for the frames matching
+		:param maxerr: maximum deviation of the field polygon from the true field outline, as an astropy :class:`~astropy.units.Quantity`; None uses cornish's default
+		:param maxvert: maximum number of vertices in the field polygon; None uses cornish's default
+		:param fast_path: if set to False, always use the generic bounding-circle path
+		:returns: an array of matches with shape (n,2), a :class:`numpy.recarray` with the fields ``ra,dec,key``, a :class:`~astropy.coordinates.SkyCoord`, or an :class:`~astropy.table.QTable`
+		'''
+		# see the note in region_query on why this import is here
+		from . import cornish_interop
+
+		return cornish_interop.image_query(self, fits_header, return_key=return_key,
+										   return_skycoord=return_skycoord, frame=frame,
+										   skip_frame_check=skip_frame_check, maxerr=maxerr,
+										   maxvert=maxvert, fast_path=fast_path)
+
 	def coverage(self, depth:int=None, value_domain:Iterable=None, meta:dict=None) -> dict:
 		'''
 		Describe the sky coverage of this index as a "sky-coverage" version 1 document.
