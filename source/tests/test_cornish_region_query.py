@@ -582,18 +582,27 @@ def test_the_fast_path_returns_the_built_in_query_result_unchanged(index, frame)
 		assert len(plain) == len(keyed)
 
 @requires_cornish
-def test_a_polygon_with_too_few_vertices_would_take_the_generic_path():
+def test_a_polygon_with_too_few_vertices_takes_the_generic_path(frame, monkeypatch):
 	'''
-	Q3C's polygon routines take at least three vertices. AST does not build a polygon
-	with fewer, so the guard is latent - it is checked here at the level it is written,
-	against the constant the extension enforces, so that the dispatch is total rather
-	than total only because another library happens to hold the line.
+	Q3C's polygon routines take at least three vertices, and polygon_query raises below
+	that. AST will not build a polygon with fewer, so the guard in the dispatch cannot
+	be reached through the public API - which is exactly why it is worth having, and why
+	the branch is entered here directly with the vertex list replaced, rather than
+	asserted about from the outside and left unexecuted.
 	'''
 	assert cornish_interop.MINIMUM_POLYGON_VERTICES == 3
+
 	index = QLSCIndex(qlsc=QLSC(depth=8))
 	try:
+		# what polygon_query does with two vertices, which is what the guard prevents
 		with pytest.raises(ValueError) as e:
 			index.polygon_query(polygon=np.array([[10., 10.], [11., 10.]]))
 		assert "3" in str(e.value)
+
+		region = ASTPolygon(frame=frame, points=[[44.,13.],[46.,13.],[46.,11.],[44.,11.]])
+		monkeypatch.setattr(type(region), "points",
+							property(lambda self: np.array([[44., 13.], [46., 13.]])))
+		assert cornish_interop._fast_path_matches(index, region, 1.0, False, False) \
+			is cornish_interop._NO_FAST_PATH
 	finally:
 		index.close()

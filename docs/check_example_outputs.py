@@ -125,10 +125,11 @@ PAGE_MODES = ("skip",) + tuple(OPTIONAL_PAGE_MODES)
 
 def _option_destination(flag:str) -> str:
 	'''
-	Return the attribute argparse stores a long option under, derived the way argparse
-	derives it: the leading dashes are dropped and any remaining dash becomes an
-	underscore. Written out rather than assumed so that a mode whose flag has a dash
-	inside it cannot silently look up an attribute that is not there.
+	Return the attribute a long option is stored under: the leading dashes are dropped
+	and any remaining dash becomes an underscore. This is what argparse would derive on
+	its own, but main() passes it as the option's ``dest`` as well as reading it back,
+	so the two are the same string by construction and a mode whose flag has a dash
+	inside it cannot look up an attribute that is not there.
 
 	:param flag: the long option, e.g. "--needs-network"
 	'''
@@ -367,7 +368,11 @@ def main():
 	parser.add_argument("--list", action="store_true", help="report coverage and skips, run nothing")
 	parser.add_argument("-v", "--verbose", action="store_true", help="report every block")
 	for flag, help_text in OPTIONAL_PAGE_MODES.values():
-		parser.add_argument(flag, action="store_true", help=help_text)
+		# dest is given rather than left to argparse to derive: the name the option is
+		# stored under and the name read back below are then the same string by
+		# construction, not two derivations that happen to agree.
+		parser.add_argument(flag, dest=_option_destination(flag), action="store_true",
+							help=help_text)
 	args = parser.parse_args()
 
 	enabled_modes = tuple(mode for mode, (flag, _) in OPTIONAL_PAGE_MODES.items()
