@@ -44,7 +44,10 @@ instance; it is executed and nothing is compared. A whole page carries::
 
 ``skip`` never runs the page. ``needs-network`` runs it only when ``--network`` is
 given, so the default run stays hermetic and offline while the page can still be
-verified deliberately.
+verified deliberately; ``needs-cornish`` does the same for ``--cornish`` and the
+optional ``cornish`` package, which is not installed with qlsc. Both are listed in
+``OPTIONAL_PAGE_MODES``; a page carrying one is *reported* as skipped, with its
+reason, rather than passing silently.
 
 Every marker must carry a reason after ``--``; the script refuses a marker
 without one. The reasons live in the page source, where a reader editing the page
@@ -102,7 +105,13 @@ PAGE_MARKER_RE = re.compile(r'^\s*\.\.\s+check-outputs-page:\s*(\S+)\s*(?:--\s*(
 ADDRESS_RE = re.compile(r'0x[0-9a-fA-F]+')
 
 MODES = ("skip", "run-only", "setup")
-PAGE_MODES = ("skip", "needs-network")
+
+#: Page modes that run the page only when the matching command line flag is given,
+#: mapped to the flag that enables them. A page whose every block needs something the
+#: default run does not have - a network service, an optional package - carries one of
+#: these, and is reported as skipped with its reason rather than passing quietly.
+OPTIONAL_PAGE_MODES = {"needs-network": "--network", "needs-cornish": "--cornish"}
+PAGE_MODES = ("skip",) + tuple(OPTIONAL_PAGE_MODES)
 
 
 class Block:
@@ -225,15 +234,19 @@ def normalize(text):
 	return "\n".join(_dedent(lines))
 
 
-def check_page(path, verbose=False, network=False):
+def check_page(path, verbose=False, enabled_modes=()):
 	'''
 	Run one page. Returns (failures, checked, run_only, skipped, unpaired).
+
+	:param path: the reST file to run
+	:param verbose: report every block, not only the failures
+	:param enabled_modes: the :py:data:`OPTIONAL_PAGE_MODES` the caller asked for; a page carrying one that is not here is skipped with its reason
 	'''
 	relative = os.path.relpath(path, DOCS_ROOT)
 	blocks, (page_mode, page_skip) = parse_page(path)
 
-	if page_mode == "skip" or (page_mode == "needs-network" and not network):
-		suffix = " (pass --network to run it)" if page_mode == "needs-network" else ""
+	if page_mode == "skip" or (page_mode in OPTIONAL_PAGE_MODES and page_mode not in enabled_modes):
+		suffix = f" (pass {OPTIONAL_PAGE_MODES[page_mode]} to run it)" if page_mode in OPTIONAL_PAGE_MODES else ""
 		print(f"SKIP  {relative}: {page_skip}{suffix}")
 		return 0, 0, 0, len(blocks), 0
 
@@ -334,7 +347,13 @@ def main():
 	parser.add_argument("-v", "--verbose", action="store_true", help="report every block")
 	parser.add_argument("--network", action="store_true",
 						help="also run pages marked 'needs-network'")
+	parser.add_argument("--cornish", action="store_true",
+						help="also run pages marked 'needs-cornish' (they need the optional "
+							 "'cornish' package, which is not installed with qlsc)")
 	args = parser.parse_args()
+
+	enabled_modes = tuple(mode for mode, flag in OPTIONAL_PAGE_MODES.items()
+						  if getattr(args, flag.lstrip("-")))
 
 	paths = rst_files(args.pages)
 	if args.list:
@@ -343,7 +362,7 @@ def main():
 
 	totals = [0, 0, 0, 0, 0]
 	for path in paths:
-		result = check_page(path, verbose=args.verbose, network=args.network)
+		result = check_page(path, verbose=args.verbose, enabled_modes=enabled_modes)
 		totals = [t + r for t, r in zip(totals, result)]
 
 	failures, checked, run_only, skipped, unpaired = totals

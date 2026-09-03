@@ -14,9 +14,13 @@ name: Docs
 # workflow this runs on every push and pull request that touches the docs, the
 # package they document, or this file.
 #
-# The network-dependent example (the Bright Star Catalogue, fetched from
-# VizieR) is skipped: --network is deliberately not passed, so a VizieR outage
-# cannot fail an unrelated pull request. That block remains a human-review duty.
+# Two pages are skipped, each reported by name and reason when the checker runs:
+# the network-dependent example (the Bright Star Catalogue, fetched from VizieR),
+# because --network is deliberately not passed and a VizieR outage must not fail
+# an unrelated pull request; and the Starlink AST page, because --cornish is not
+# passed and cornish is an optional dependency this job does not install. Both
+# remain human-review duties, run locally with
+# 'python check_example_outputs.py --network --cornish'.
 #
 # Third-party actions are pinned to commit SHAs (a tag is mutable); the
 # human-readable version is in the comment beside each.

@@ -16,4 +16,5 @@ here for the ideas it uses.
    depth
    coordinates
    indexing
+   ast_regions
    ../generate_sample_points

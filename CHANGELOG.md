@@ -193,6 +193,28 @@
   anything in it then raises an `ImportError` naming the package and chaining the
   original import error.
 
+* `QLSCIndex.region_query(region)` is that bridge as a method on the index, and it
+  recognizes the shapes qlsc already defines: an `ASTCircle` is a geodesic disc, so the
+  query is handed to `radial_query`, and an `ASTPolygon` joins its vertices with great
+  circles exactly as Q3C does, so it is handed to `polygon_query`. The exact test then
+  runs as one batched call into the C layer instead of one `pointInRegion` call per
+  candidate. The answer is the same set of points either way; `fast_path=False` forces
+  the general path. An `ASTBox` deliberately keeps the general path: its sides are
+  parallel to the axes of its frame, so on the sky they are parallels of declination
+  rather than great circles, and the polygon through its corners is neither inside it
+  nor around it. A polygon takes its fast path only under `qlsc.q3c.Q3C_MAX_N_POLY_VERTEX`
+  vertices and inside `cornish_interop.POLYGON_FAST_PATH_MAXIMUM_RADIUS`; a larger one
+  is not refused, it takes the general path.
+* `QLSCIndex.image_query(fits_header)` answers "which of my sources land on this
+  image?" from a FITS header alone: AST reads the world coordinate system and returns
+  the sky region bounding the field, the index prefilters by ipix ranges and tests each
+  candidate exactly. qlsc does no WCS arithmetic of its own. The region carries the
+  frame the header declares, so an `FK5` header searched against an index declared ICRS
+  raises rather than mixing the two.
+* `qlsc.q3c.Q3C_MAX_N_POLY_VERTEX` is published by the extension module: the largest
+  number of vertices Q3C's polygon routines accept (100). It was already enforced in C;
+  now the Python layer can read it rather than keeping a second copy of the number.
+
 * `QLSC.ipix2xiyi()` and `QLSC.xiyi2ipix()` expose the integer grid the scheme is
   built from: an ipix value is the bit interleaving of a face number and a pair of
   integers in `[0,nside)`, and these two convert between them in both directions,

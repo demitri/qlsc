@@ -78,6 +78,12 @@ Starlink AST regions, via cornish
 Bridges a QLSC scheme and index to `cornish <https://github.com/demitri/cornish>`_,
 a Python interface to the Starlink AST library: a pixel becomes an ``ASTPolygon``,
 a set of pixels becomes a MOC, and any ``ASTRegion`` becomes a query over an index.
+See :doc:`user_guide/ast_regions`.
+
+The two functions most callers want are reached as methods on the index —
+:py:func:`QLSCIndex.region_query` and :py:func:`QLSCIndex.image_query`, documented
+with the rest of the class above — and delegate to the module functions of the same
+name below.
 
 .. note::
 
@@ -91,6 +97,12 @@ a set of pixels becomes a MOC, and any ``ASTRegion`` becomes a query over an ind
 .. autofunction:: qlsc.cornish_interop.ipix2moc
 
 .. autofunction:: qlsc.cornish_interop.region_query
+
+.. autofunction:: qlsc.cornish_interop.image_query
+
+.. autodata:: qlsc.cornish_interop.POLYGON_FAST_PATH_MAXIMUM_RADIUS
+
+.. autodata:: qlsc.cornish_interop.MAXIMUM_POLYGON_VERTICES
 
 
 Point Generation
@@ -116,6 +128,12 @@ invalid arguments, the compiled extension module ``qlsc.q3c`` provides:
 	the search region and retrying, so it does not normally reach the caller;
 	:py:func:`QLSCIndex.polygon_query` has no size to widen and lets it through.
 	See :doc:`examples/survey_footprint`.
+
+``qlsc.q3c.Q3C_MAX_N_POLY_VERTEX``
+	The largest number of vertices a polygon may have (100). Q3C carries them in
+	fixed-size buffers, and :py:func:`QLSCIndex.polygon_query` raises ``ValueError``
+	for a longer one; :py:func:`QLSCIndex.region_query` reads this to decide whether
+	an AST polygon can take its fast path.
 
 ``qlsc.q3c.ELLIPSE_MAXIMUM_SEMI_MAJOR_AXIS``
 	The largest semi-major axis, in degrees, for which the elliptical region
