@@ -352,8 +352,11 @@ def main():
 							 "'cornish' package, which is not installed with qlsc)")
 	args = parser.parse_args()
 
+	# argparse turns "--needs-foo" into args.needs_foo, so the flag name is translated
+	# the way argparse does it rather than merely stripped of its dashes: the two agree
+	# for every flag here today, and would stop agreeing the moment one has a dash in it.
 	enabled_modes = tuple(mode for mode, flag in OPTIONAL_PAGE_MODES.items()
-						  if getattr(args, flag.lstrip("-")))
+						  if getattr(args, flag.lstrip("-").replace("-", "_")))
 
 	paths = rst_files(args.pages)
 	if args.list:
