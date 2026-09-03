@@ -210,7 +210,10 @@
   the sky region bounding the field, the index prefilters by ipix ranges and tests each
   candidate exactly. qlsc does no WCS arithmetic of its own. The region carries the
   frame the header declares, so an `FK5` header searched against an index declared ICRS
-  raises rather than mixing the two.
+  raises rather than mixing the two. One upstream caveat is documented on the method: a
+  field 180 degrees across segmentation-faults inside AST's own header handling (a
+  cornish/starlink-pyast defect, reproducible without qlsc), which nothing on this side
+  can catch. Ordinary images are nowhere near it.
 * `qlsc.q3c.Q3C_MAX_N_POLY_VERTEX` is published by the extension module: the largest
   number of vertices Q3C's polygon routines accept (100). It was already enforced in C;
   now the Python layer can read it rather than keeping a second copy of the number.

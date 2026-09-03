@@ -3217,7 +3217,7 @@ class QLSCIndex:
 											fast_path=fast_path)
 
 	def image_query(self, fits_header=None, return_key:bool=False, return_skycoord:bool=False,
-					frame:Union[str,None]=None, skip_frame_check:bool=False,
+					all_sky:bool=False, frame:Union[str,None]=None, skip_frame_check:bool=False,
 					maxerr=None, maxvert:int=None, fast_path:bool=True) -> np.ndarray:
 		'''
 		Return the points of the index that fall on the field described by a FITS header —
@@ -3243,9 +3243,14 @@ class QLSCIndex:
 		``cornish`` is an optional dependency and is not installed with qlsc; its absence
 		raises an :class:`ImportError` naming the package and how to install it.
 
+		See :py:func:`qlsc.cornish_interop.image_query`, which this method calls, for the
+		full description — including the upstream segmentation fault a field 180 degrees
+		across triggers inside AST's own header handling.
+
 		:param fits_header: a FITS header — an astropy :class:`~astropy.io.fits.Header`, a fitsio header, an array of cards, a dict, or a string
 		:param return_key: if set to True, include the key value as provided when added to the index
 		:param return_skycoord: if set to True, return the coordinates as an :class:`~astropy.coordinates.SkyCoord`
+		:param all_sky: if set to True, consider every point in the index instead of using the field's bounding circle
 		:param frame: name of the frame the index coordinates are in, compared against the header's frame; None means the default (ICRS)
 		:param skip_frame_check: if set to True, waive that comparison and take responsibility for the frames matching
 		:param maxerr: maximum deviation of the field polygon from the true field outline, as an astropy :class:`~astropy.units.Quantity`; None uses cornish's default
@@ -3257,9 +3262,9 @@ class QLSCIndex:
 		from . import cornish_interop
 
 		return cornish_interop.image_query(self, fits_header, return_key=return_key,
-										   return_skycoord=return_skycoord, frame=frame,
-										   skip_frame_check=skip_frame_check, maxerr=maxerr,
-										   maxvert=maxvert, fast_path=fast_path)
+										   return_skycoord=return_skycoord, all_sky=all_sky,
+										   frame=frame, skip_frame_check=skip_frame_check,
+										   maxerr=maxerr, maxvert=maxvert, fast_path=fast_path)
 
 	def coverage(self, depth:int=None, value_domain:Iterable=None, meta:dict=None) -> dict:
 		'''

@@ -107,11 +107,32 @@ ADDRESS_RE = re.compile(r'0x[0-9a-fA-F]+')
 MODES = ("skip", "run-only", "setup")
 
 #: Page modes that run the page only when the matching command line flag is given,
-#: mapped to the flag that enables them. A page whose every block needs something the
+#: mapped to that flag and its help text. A page whose every block needs something the
 #: default run does not have - a network service, an optional package - carries one of
 #: these, and is reported as skipped with its reason rather than passing quietly.
-OPTIONAL_PAGE_MODES = {"needs-network": "--network", "needs-cornish": "--cornish"}
+#:
+#: This table is the only place a mode is declared: main() builds the command line
+#: options from it and reads the results back out of it, so adding a third mode is one
+#: entry here and a marker in the page, never a second edit somewhere that has to agree
+#: with the first.
+OPTIONAL_PAGE_MODES = {
+	"needs-network": ("--network", "also run pages marked 'needs-network' (they fetch from "
+								   "a remote service)"),
+	"needs-cornish": ("--cornish", "also run pages marked 'needs-cornish' (they need the "
+								   "optional 'cornish' package, which is not installed with qlsc)"),
+	}
 PAGE_MODES = ("skip",) + tuple(OPTIONAL_PAGE_MODES)
+
+def _option_destination(flag:str) -> str:
+	'''
+	Return the attribute argparse stores a long option under, derived the way argparse
+	derives it: the leading dashes are dropped and any remaining dash becomes an
+	underscore. Written out rather than assumed so that a mode whose flag has a dash
+	inside it cannot silently look up an attribute that is not there.
+
+	:param flag: the long option, e.g. "--needs-network"
+	'''
+	return flag.lstrip("-").replace("-", "_")
 
 
 class Block:
@@ -246,7 +267,7 @@ def check_page(path, verbose=False, enabled_modes=()):
 	blocks, (page_mode, page_skip) = parse_page(path)
 
 	if page_mode == "skip" or (page_mode in OPTIONAL_PAGE_MODES and page_mode not in enabled_modes):
-		suffix = f" (pass {OPTIONAL_PAGE_MODES[page_mode]} to run it)" if page_mode in OPTIONAL_PAGE_MODES else ""
+		suffix = f" (pass {OPTIONAL_PAGE_MODES[page_mode][0]} to run it)" if page_mode in OPTIONAL_PAGE_MODES else ""
 		print(f"SKIP  {relative}: {page_skip}{suffix}")
 		return 0, 0, 0, len(blocks), 0
 
@@ -345,18 +366,12 @@ def main():
 												"the default is all of them")
 	parser.add_argument("--list", action="store_true", help="report coverage and skips, run nothing")
 	parser.add_argument("-v", "--verbose", action="store_true", help="report every block")
-	parser.add_argument("--network", action="store_true",
-						help="also run pages marked 'needs-network'")
-	parser.add_argument("--cornish", action="store_true",
-						help="also run pages marked 'needs-cornish' (they need the optional "
-							 "'cornish' package, which is not installed with qlsc)")
+	for flag, help_text in OPTIONAL_PAGE_MODES.values():
+		parser.add_argument(flag, action="store_true", help=help_text)
 	args = parser.parse_args()
 
-	# argparse turns "--needs-foo" into args.needs_foo, so the flag name is translated
-	# the way argparse does it rather than merely stripped of its dashes: the two agree
-	# for every flag here today, and would stop agreeing the moment one has a dash in it.
-	enabled_modes = tuple(mode for mode, flag in OPTIONAL_PAGE_MODES.items()
-						  if getattr(args, flag.lstrip("-").replace("-", "_")))
+	enabled_modes = tuple(mode for mode, (flag, _) in OPTIONAL_PAGE_MODES.items()
+						  if getattr(args, _option_destination(flag)))
 
 	paths = rst_files(args.pages)
 	if args.list:

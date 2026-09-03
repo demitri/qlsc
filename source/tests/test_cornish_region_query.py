@@ -544,3 +544,56 @@ def test_image_query_method_matches_the_module_function():
 									  cornish_interop.image_query(index, header))
 	finally:
 		index.close()
+
+@requires_cornish
+@requires_astropy
+def test_image_query_forwards_all_sky():
+	'''
+	Both of region_query's refusals recommend all_sky=True, so image_query has to be
+	able to take that advice. The field region is an ordinary bounded polygon, so the
+	two answers are the same; what is checked is that the option reaches the query at
+	all rather than being swallowed by the signature.
+	'''
+	index = QLSCIndex(qlsc=QLSC(depth=14))
+	try:
+		index.add_points(points=sunflower_points_on_sphere(n=200000))
+		header = tan_header(31., 44., size=1024, scale=0.002)
+		np.testing.assert_array_equal(sorted_pairs(index.image_query(header)),
+									  sorted_pairs(index.image_query(header, all_sky=True)))
+	finally:
+		index.close()
+
+@requires_cornish
+def test_the_fast_path_returns_the_built_in_query_result_unchanged(index, frame):
+	'''
+	The fast path exists to avoid per-candidate Python work, so it returns what the
+	built-in query built rather than taking it apart and reassembling it. Only
+	radial_query's plain array needs anything done to it - its historical squeeze - and
+	the shapes below are what says so.
+	'''
+	circle = ASTCircle(frame=frame, center=[45., 12.], radius=2.0)
+	polygon = ASTPolygon(frame=frame, points=[[44.,13.],[46.,13.],[46.,11.],[44.,11.]])
+
+	for region in (circle, polygon):
+		plain = index.region_query(region)
+		keyed = index.region_query(region, return_key=True)
+		assert plain.ndim == 2 and plain.shape[1] == 2
+		assert keyed.dtype.names == ("ra", "dec", "key")
+		assert len(plain) == len(keyed)
+
+@requires_cornish
+def test_a_polygon_with_too_few_vertices_would_take_the_generic_path():
+	'''
+	Q3C's polygon routines take at least three vertices. AST does not build a polygon
+	with fewer, so the guard is latent - it is checked here at the level it is written,
+	against the constant the extension enforces, so that the dispatch is total rather
+	than total only because another library happens to hold the line.
+	'''
+	assert cornish_interop.MINIMUM_POLYGON_VERTICES == 3
+	index = QLSCIndex(qlsc=QLSC(depth=8))
+	try:
+		with pytest.raises(ValueError) as e:
+			index.polygon_query(polygon=np.array([[10., 10.], [11., 10.]]))
+		assert "3" in str(e.value)
+	finally:
+		index.close()

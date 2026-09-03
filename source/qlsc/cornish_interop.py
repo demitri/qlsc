@@ -82,6 +82,11 @@ DEFAULT_FRAME = "ICRS"
 #: number are two chances to disagree.
 MAXIMUM_POLYGON_VERTICES = q3c.Q3C_MAX_N_POLY_VERTEX
 
+#: The fewest vertices a polygon may have and still be a polygon. AST does not build
+#: one with fewer, so this bound is latent; the dispatch checks it anyway rather than
+#: relying on another library's constructor to hold it.
+MINIMUM_POLYGON_VERTICES = 3
+
 #: The largest bounding-circle radius, in degrees, for which an
 #: :class:`~cornish.ASTPolygon` is answered with :py:func:`QLSCIndex.polygon_query`
 #: rather than the generic path.
@@ -283,39 +288,36 @@ def ipix2moc(qlsc:QLSC, ipix:Iterable[int], max_order:int=None, frame=None) -> "
 
 	return moc
 
-def _match_lists(matches, return_key:bool):
+#: Returned by :py:func:`_fast_path_matches` when the region has no fast path, so that
+#: "there is no fast path for this region" cannot be confused with a query result. No
+#: query returns this object, and nothing outside this module sees it.
+_NO_FAST_PATH = object()
+
+def _candidate_rows(candidates, return_key:bool):
 	'''
-	Unpack the result of a built-in region query into the three parallel lists
-	:py:func:`_match_result` assembles a result from.
+	Yield the (ra, dec, key) of every row of a coarse-step result.
 
-	The plain array results of the built-in queries do not all have the same shape —
-	:py:func:`QLSCIndex.radial_query` squeezes a single match to (2,) while every
-	other query is (n,2) — so every plain result is put through
-	:py:func:`_as_stable_pairs`, which is a no-op for the ones that are already (n,2).
+	The coarse step is :py:func:`QLSCIndex.radial_query`, whose plain array result is
+	``MatchArrayShape.SQUEEZED`` - a single candidate arrives with shape (2,) rather than
+	(1,2) - so the plain form is put through :py:func:`_as_stable_pairs` first. The rows
+	are yielded rather than collected: the caller keeps only the ones the region contains,
+	and a whole-sky coarse step over a large index can have a great many it does not.
 
-	:param matches: the return value of a query run with ``return_key`` and nothing else
-	:param return_key: whether that query was asked for the "key" field
-	:returns: a tuple of the (ra, dec, key) lists; the key list is empty when ``return_key`` is False
+	:param candidates: the return value of the coarse step, asked for as plain values or with ``return_key``
+	:param return_key: whether the coarse step was asked for the "key" field
+	:returns: a generator of (ra, dec, key) tuples; the key is None when it was not asked for
 	'''
-	match_ra = list()
-	match_dec = list()
-	match_key = list()
-
 	if return_key:
 		# a recarray with the fields ra,dec,key; atleast_1d because an empty or
 		# single-row recarray can arrive as a 0-dimensional array
-		for row in np.atleast_1d(matches):
-			match_ra.append(row["ra"])
-			match_dec.append(row["dec"])
-			match_key.append(row["key"])
+		for row in np.atleast_1d(candidates):
+			yield row["ra"], row["dec"], row["key"]
 	else:
-		for row in _as_stable_pairs(matches):
-			match_ra.append(row[0])
-			match_dec.append(row[1])
+		for row in _as_stable_pairs(candidates):
+			yield row[0], row[1], None
 
-	return match_ra, match_dec, match_key
-
-def _fast_path_matches(index:QLSCIndex, region:"ASTRegion", disc_radius:float, return_key:bool):
+def _fast_path_matches(index:QLSCIndex, region:"ASTRegion", disc_radius:float,
+					   return_key:bool, return_skycoord:bool):
 	'''
 	Answer a region query with one of qlsc's own exact region queries, when the region
 	is a shape qlsc defines identically to AST.
@@ -344,27 +346,43 @@ def _fast_path_matches(index:QLSCIndex, region:"ASTRegion", disc_radius:float, r
 	Anything else — MOCs, compound regions, region types cornish gains later — also
 	takes the generic path, which is correct for every region AST can describe.
 
+	The built-in query's result is returned as it comes, not rebuilt: both of them
+	already honour ``return_key`` and ``return_skycoord`` and assemble the result with
+	the same helper the generic path uses. The one difference is
+	:py:func:`radial_query`'s historical squeeze of its *plain* array, which
+	:py:func:`_as_stable_pairs` undoes; its keyed, SkyCoord and QTable results are not
+	squeezed and need nothing done to them.
+
 	:param index: the :class:`~qlsc.QLSCIndex` to search
 	:param region: the region, already checked to be a bounded, non-negated sky region
 	:param disc_radius: the radius in degrees of the region's bounding circle
 	:param return_key: whether the caller asked for the "key" field
-	:returns: the (ra, dec, key) match lists, or None when there is no fast path for this region
+	:param return_skycoord: whether the caller asked for the coordinates as a SkyCoord
+	:returns: the query result, or :py:data:`_NO_FAST_PATH` when there is no fast path for this region
 	'''
 	if isinstance(region, ASTCircle):
 		centre = region.centre
 		radius = _as_float_scalar(region.radius.to("deg").value, "circle radius")
-		matches = index.radial_query(float(centre[0]), float(centre[1]), radius, return_key=return_key)
-		return _match_lists(matches, return_key)
+		matches = index.radial_query(float(centre[0]), float(centre[1]), radius,
+									 return_key=return_key, return_skycoord=return_skycoord)
+		# radial_query is the one query whose plain array is squeezed
+		if return_key or return_skycoord:
+			return matches
+		return _as_stable_pairs(matches)
 
 	if isinstance(region, ASTPolygon):
 		vertices = np.asarray(region.points, dtype=np.double)
 
-		# Q3C's polygon routines carry the vertices in fixed-size buffers; the limit is
-		# read from the extension module rather than repeated here.
-		if len(vertices) > MAXIMUM_POLYGON_VERTICES:
-			logger.debug(f"The polygon has {len(vertices)} vertices, more than the {MAXIMUM_POLYGON_VERTICES} "
-						 "Q3C's polygon query accepts; the region query will use its generic path instead.")
-			return None
+		# Q3C's polygon routines take between 3 and Q3C_MAX_N_POLY_VERTEX vertices, and
+		# the limits are read from the extension module rather than repeated here. AST
+		# does not build a polygon with fewer than three, so the lower bound is a
+		# latent case; it is checked anyway so that the dispatch is total rather than
+		# total-by-coincidence.
+		if not (MINIMUM_POLYGON_VERTICES <= len(vertices) <= MAXIMUM_POLYGON_VERTICES):
+			logger.debug(f"The polygon has {len(vertices)} vertices, outside the "
+						 f"{MINIMUM_POLYGON_VERTICES}..{MAXIMUM_POLYGON_VERTICES} Q3C's polygon "
+						 "query accepts; the region query will use its generic path instead.")
+			return _NO_FAST_PATH
 
 		# Q3C projects a polygon onto a single cube face, so a large one is refused
 		# outright (ValueError). The size at which that happens depends on where the
@@ -378,14 +396,15 @@ def _fast_path_matches(index:QLSCIndex, region:"ASTRegion", disc_radius:float, r
 			logger.debug(f"The polygon's bounding circle has a radius of {disc_radius} deg, beyond the "
 						 f"{POLYGON_FAST_PATH_MAXIMUM_RADIUS} deg for which Q3C's polygon query is known to "
 						 "project at any position on the sky; the region query will use its generic path instead.")
-			return None
+			return _NO_FAST_PATH
 
 		# The winding order is not reversed on the way in, unlike ipix2region on the way
 		# out: AST reads the interior as the left of the vertex path, but Q3C's polygon
 		# test is winding-agnostic and answers about the same (small) side either way.
 		# test_polygon_query_is_winding_agnostic pins that.
 		try:
-			matches = index.polygon_query(polygon=vertices, return_key=return_key)
+			return index.polygon_query(polygon=vertices, return_key=return_key,
+									   return_skycoord=return_skycoord)
 		except q3c.RangeOverflowError:
 			# The coverage step wanted more ipix ranges than it has room for. A cone has a
 			# size to grow on a retry and a polygon does not, so polygon_query lets this
@@ -395,10 +414,9 @@ def _fast_path_matches(index:QLSCIndex, region:"ASTRegion", disc_radius:float, r
 			logger.warning("The polygon query for this region overflowed Q3C's ipix range capacity; "
 						   "the region query is falling back to its generic bounding-circle path, which "
 						   "returns the same matches.")
-			return None
-		return _match_lists(matches, return_key)
+			return _NO_FAST_PATH
 
-	return None
+	return _NO_FAST_PATH
 
 def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
 				 return_skycoord:bool=False, all_sky:bool=False,
@@ -455,9 +473,22 @@ def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
 	is documented to work anywhere on the sky. Every other region — a
 	:class:`~cornish.ASTBox`, whose sky edges are parallels of declination rather than
 	great circles, a MOC, a compound region — takes the generic path, and so does every
-	region when ``all_sky`` is set. The results are the same either way, and
+	region when ``all_sky`` is set. The matches are the same either way, and
 	``fast_path=False`` forces the generic path for a caller who wants AST to be the sole
 	arbiter of membership (the test suite uses it to check the two agree).
+
+	One asymmetry is deliberate and worth knowing about. Q3C decides for itself whether a
+	polygon will project onto a single cube face, and raises ``ValueError`` when it will
+	not; the size guard above is set far enough inside the documented limit that this is
+	not expected to happen, but if it ever does the error is **raised rather than
+	answered by the generic path**, because a guard that has been proved wrong should say
+	so rather than route around itself. Q3C's other refusal, a
+	``qlsc.q3c.RangeOverflowError`` from the coverage step, *is* answered by the generic
+	path — a cone has a size to grow and retry with where a polygon has none — with a
+	warning logged and the same matches returned. (Telling the two apart without matching
+	on the message text needs a dedicated exception class in the extension module, the
+	way ``RangeOverflowError`` already has one; until then, the projection failure is
+	simply not caught.)
 
 	The result is assembled by the same helper the built-in region queries use, and like
 	every query added since :py:func:`radial_query` it is ``MatchArrayShape.STABLE``: the
@@ -511,33 +542,30 @@ def region_query(index:QLSCIndex, region:"ASTRegion", return_key:bool=False,
 		if fast_path:
 			# The bound has been checked above, so a fast path answers about the same region
 			# the generic path would have.
-			fast = _fast_path_matches(index, region, radius, return_key)
-			if fast is not None:
-				match_ra, match_dec, match_key = fast
-				return _match_result(match_ra, match_dec, match_key, None, return_key, False,
-									 MatchArrayShape.STABLE, return_skycoord=return_skycoord)
+			fast = _fast_path_matches(index, region, radius, return_key, return_skycoord)
+			if fast is not _NO_FAST_PATH:
+				return fast
 
 	# the coarse step is always asked for as plain values: its rows are candidates to be
 	# filtered here, not the result, and return_skycoord is applied to the matches below
 	candidates = index.radial_query(center_ra, center_dec, radius, return_key=return_key)
-	candidate_ra, candidate_dec, candidate_key = _match_lists(candidates, return_key)
 
 	match_ra = list()
 	match_dec = list()
 	match_key = list()
 
-	for i, (row_ra, row_dec) in enumerate(zip(candidate_ra, candidate_dec)):
+	for row_ra, row_dec, row_key in _candidate_rows(candidates, return_key):
 		if region.pointInRegion([float(row_ra), float(row_dec)]):
 			match_ra.append(row_ra)
 			match_dec.append(row_dec)
 			if return_key:
-				match_key.append(candidate_key[i])
+				match_key.append(row_key)
 
 	return _match_result(match_ra, match_dec, match_key, None, return_key, False,
 						 MatchArrayShape.STABLE, return_skycoord=return_skycoord)
 
 def image_query(index:QLSCIndex, fits_header=None, return_key:bool=False,
-				return_skycoord:bool=False, frame:Union[str,None]=None,
+				return_skycoord:bool=False, all_sky:bool=False, frame:Union[str,None]=None,
 				skip_frame_check:bool=False, maxerr=None, maxvert:int=None,
 				fast_path:bool=True) -> np.ndarray:
 	'''
@@ -557,12 +585,27 @@ def image_query(index:QLSCIndex, fits_header=None, return_key:bool=False,
 	The region comes back in whatever frame the header declares, so a header with
 	``RADESYS = 'FK5'`` searched against an index of ICRS coordinates raises rather than
 	mixing the two; pass ``frame`` naming the index's own frame, or ``skip_frame_check``,
-	exactly as :py:func:`region_query` describes.
+	exactly as :py:func:`region_query` describes. ``all_sky`` is forwarded for the same
+	reason: :py:func:`region_query`'s two refusals both recommend it, and a caller who
+	reaches one of them from here must be able to take the advice.
+
+	.. warning::
+
+		**A very wide field can crash the interpreter, and the fault is upstream.**
+		``ASTRegion.fromFITSHeader`` segmentation-faults (SIGSEGV, exit 139) on a header
+		describing a field 180 degrees across — reproduced on AST 9.3.0 /
+		starlink-pyast 4.0.1 with cornish alone and qlsc not imported, using a 180x180
+		``RA---CAR``/``DEC--CAR`` header at 1 degree per pixel. A 90-degree field is
+		fine, and 180 degrees in right ascension by 90 in declination raises ``Ast.NODEF``
+		rather than crashing. Nothing qlsc can do catches a segmentation fault; the note
+		is here so the crash is not read as a qlsc defect. Ordinary images are nowhere
+		near this.
 
 	:param index: the :class:`~qlsc.QLSCIndex` to search
 	:param fits_header: a FITS header — an astropy :class:`~astropy.io.fits.Header`, a fitsio header, an array of cards, a dict, or a string
 	:param return_key: if set to True, include the key value as provided when added to the index
 	:param return_skycoord: if set to True, return the coordinates as an :class:`~astropy.coordinates.SkyCoord`
+	:param all_sky: if set to True, consider every point in the index instead of using the field's bounding circle
 	:param frame: name of the frame the index coordinates are in, compared against the header's frame; None means the default (ICRS)
 	:param skip_frame_check: if set to True, waive that comparison and take responsibility for the frames matching
 	:param maxerr: maximum deviation of the field polygon from the true field outline, as an astropy :class:`~astropy.units.Quantity`; None uses cornish's default
@@ -586,4 +629,5 @@ def image_query(index:QLSCIndex, fits_header=None, return_key:bool=False,
 	region = ASTRegion.fromFITSHeader(fits_header, **region_parameters)
 
 	return region_query(index, region, return_key=return_key, return_skycoord=return_skycoord,
-						frame=frame, skip_frame_check=skip_frame_check, fast_path=fast_path)
+						all_sky=all_sky, frame=frame, skip_frame_check=skip_frame_check,
+						fast_path=fast_path)
