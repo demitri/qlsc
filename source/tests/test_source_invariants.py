@@ -5,11 +5,12 @@ import re
 # Mechanical guards over the C source itself, for invariants that the runtime
 # tests cannot see failing.
 #
-# The vendored q3c files carry no local patches (q3c v2.0.6 fixed upstream the
-# two bugs qlsc used to patch, #50 and #51), so there is no patch guard here:
-# scripts/sync_q3c.py's divergence check refuses any vendored difference not
-# registered in its PATCHES, and the runtime regressions for both bugs live in
-# test_point_in_polygon.py and test_radial_query_center_coverage.py.
+# Local patches to the vendored q3c files are not guarded here by their text:
+# each is registered in scripts/sync_q3c.py's PATCHES, whose presence in the
+# vendored sources test_sync_q3c.py checks, and each has a runtime guard named in
+# CLAUDE.md. (The two v2.0.5 patches, #50 and #51, were fixed upstream in v2.0.6;
+# their runtime regressions live in test_point_in_polygon.py and
+# test_radial_query_center_coverage.py.)
 
 C_CODE_DIR = pathlib.Path(__file__).parent.parent / "qlsc" / "c_code"
 

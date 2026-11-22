@@ -1,4 +1,7 @@
 
+import subprocess
+import sys
+
 import pytest
 import numpy as np
 
@@ -83,6 +86,72 @@ def test_nearby_ranges_cover_the_cone(depth, centre):
 		assert missed == 0, (f"{missed} of {int(inside.sum())} points inside a cone at "
 							 f"(ra={ra0}, dec={dec0}) with radius={radius} deg fell outside the "
 							 f"{len(ranges)} nearby range(s) at depth {depth}")
+
+
+# Cones whose bounding box, on a second neighbouring face, touches the far edge of
+# that face, found by bisecting the radius at which the box crosses a second edge.
+# Upstream q3c v2.0.6 loops forever on them in q3c_get_nearby (see the local patch
+# in CLAUDE.md). Which inputs land exactly on the edge depends on the platform's
+# math library, so there are cases from both machines they were searched on; each
+# hangs an unpatched build on its own platform and is ordinary on the other.
+FAR_EDGE_CONES = [
+	# Linux x86_64 (glibc)
+	(219.27811033058825, 22.634103768334768, 13.478208875278737),
+	(229.59754876308028, 46.159599160384204, 11.102508312962319),
+	(148.49373479769272, 19.932568534711635, 19.007358406707613),
+	(323.67100605912088, 47.528433313839344, 13.810775324203529),
+	(216.51362790563778, 48.182086700192684, 14.267534193781106),
+	# macOS arm64
+	(45.616377184920189, 26.923165993729214, 7.4928631702840676),
+	(312.93494563220764, 38.384335587445804, 3.5266124672562063),
+	(138.87699590012292, 22.581323941974588, 12.726753852645579),
+	(55.193439840894861, 47.537572927092015, 14.427760962184578),
+	(51.891283975863495, 18.200392378121791, 17.919845126707909),
+]
+
+_FAR_EDGE_CHILD = """
+import sys
+import numpy as np
+from qlsc import QLSC
+from qlsc.generate import sunflower_points_on_sphere
+ra0, dec0, radius = map(float, sys.argv[1:4])
+q = QLSC(depth=30)
+ranges = q.nearby_ipix_ranges(ra0, dec0, radius)
+points = sunflower_points_on_sphere(n=50000)
+r0, d0 = np.radians(ra0), np.radians(dec0)
+r, d = np.radians(points[:,0]), np.radians(points[:,1])
+cosine = np.sin(d0) * np.sin(d) + np.cos(d0) * np.cos(d) * np.cos(r - r0)
+inside = np.degrees(np.arccos(np.clip(cosine, -1., 1.))) <= radius
+ipix = q.ang2ipix(points[inside,0], points[inside,1])
+covered = np.zeros(len(ipix), dtype=bool)
+for start, end in ranges:
+	assert 0 <= start <= end < q.nbins, ranges
+	covered |= (ipix >= start) & (ipix <= end)
+print(int((~covered).sum()), int(inside.sum()))
+"""
+
+@pytest.mark.parametrize("cone", FAR_EDGE_CONES)
+def test_nearby_ranges_terminate_on_a_far_face_edge(cone):
+	'''
+	Test that a cone whose box touches the far edge of a neighbouring face gets an
+	answer, and one that covers it.
+
+	The call runs in a child process with a timeout: the failure this guards against
+	is an infinite loop in C that holds the GIL, which would otherwise hang the
+	whole suite rather than fail one test.
+	'''
+	ra0, dec0, radius = cone
+	try:
+		result = subprocess.run([sys.executable, "-c", _FAR_EDGE_CHILD, repr(ra0), repr(dec0), repr(radius)],
+								stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+								universal_newlines=True, timeout=60) # 3.6-compatible spellings
+	except subprocess.TimeoutExpired:
+		pytest.fail(f"nearby_ipix_ranges(ra={ra0}, dec={dec0}, radius={radius}) did not return "
+					f"within 60 s: the q3c_get_nearby far-edge loop is not terminating")
+	assert result.returncode == 0, result.stderr
+	missed, inside = map(int, result.stdout.split())
+	assert inside > 0
+	assert missed == 0, f"{missed} of {inside} points inside the cone fell outside the nearby ranges"
 
 
 @pytest.mark.parametrize("depth", [0, 1, 5, 20, 30])

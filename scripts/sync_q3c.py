@@ -144,7 +144,7 @@ class Patch:
 	:param patched_text: the text as this repository ships it (the "after" side)
 	:param occurrences: how many times the text appears in the file; any other count is an error
 	:param issue: the upstream issue this patch works around
-	:param guard_test: the test in source/tests/test_source_invariants.py that guards it
+	:param guard_test: the name of the test in source/tests/ that guards it
 	'''
 	__slots__ = ("name", "filename", "upstream_text", "patched_text", "occurrences", "issue", "guard_test")
 
@@ -168,10 +168,12 @@ class Patch:
 # ------------------------------------------------------------------
 # The local patches. Every entry is documented in CLAUDE.md; keep the two in step.
 #
-# There are none as of q3c v2.0.6. The two patches carried against v2.0.5 were
-# retired by the v2.0.6 sync because upstream fixed both bugs itself, in each case
-# with different text from qlsc's (so patch_state() could not recognize the fix
-# and stopped, as it should; the decision to drop them was made by hand):
+# One, against v2.0.6: a hang upstream introduced in q3c_get_nearby (below).
+#
+# The two patches carried against v2.0.5 were retired by the v2.0.6 sync because
+# upstream fixed both bugs itself, in each case with different text from qlsc's
+# (so patch_state() could not recognize the fix and stopped, as it should; the
+# decision to drop them was made by hand):
 #
 #   q3c_poly.c points[8] (upstream issue #50): upstream declares the same
 #     points[8] buffer, with a trailing comment.
@@ -183,7 +185,33 @@ class Patch:
 # document it in CLAUDE.md.
 # ------------------------------------------------------------------
 
-PATCHES = ()
+NEARBY_LOWER_CLAMP_PATCH = Patch(
+	name="q3cube.c get_nearby lower index clamp",
+	filename="q3cube.c",
+	upstream_text=(
+		'                    ixmax = (ixmax == n0 ? n0 - 1 : ixmax);\n'
+		'                    iymax = (iymax == n0 ? n0 - 1 : iymax);\n'
+		'                    if (ixmin == ixmax && iymin == iymax)\n'
+	),
+	patched_text=(
+		'                    ixmax = (ixmax == n0 ? n0 - 1 : ixmax);\n'
+		'                    iymax = (iymax == n0 ? n0 - 1 : iymax);\n'
+		'                    /* Local qlsc patch (not yet reported upstream): a box touching the\n'
+		'                     * far edge of the face (xmin or ymin at 0.5, or within rounding of\n'
+		'                     * it) puts the lower index at n0, one past the last cell. It then\n'
+		'                     * never equals the clamped upper index, n0 halves to 0, and this loop\n'
+		'                     * never ends. Clamp the lower index as the upper one is; with both\n'
+		'                     * clamped the loop always stops by n0 == 1.\n'
+		'                     */\n'
+		'                    ixmin = (ixmin == n0 ? n0 - 1 : ixmin);\n'
+		'                    iymin = (iymin == n0 ? n0 - 1 : iymin);\n'
+		'                    if (ixmin == ixmax && iymin == iymax)\n'
+	),
+	occurrences=1,
+	issue="not yet filed upstream (introduced in v2.0.6; see CLAUDE.md)",
+	guard_test="test_nearby_ranges_terminate_on_a_far_face_edge")
+
+PATCHES = (NEARBY_LOWER_CLAMP_PATCH,)
 
 
 # ------------------------------------------------------------------
@@ -222,7 +250,7 @@ def patch_state(patch:Patch, source:str) -> PatchState:
 		f"v2.0.6); exact matching cannot recognize that.\n"
 		f"WHAT TO DO: read {patch.issue} and the new '{patch.filename}', decide by hand whether the\n"
 		f"bug is still present, re-apply or drop the patch, and update both CLAUDE.md and the guard\n"
-		f"test '{patch.guard_test}' in source/tests/test_source_invariants.py.")
+		f"test '{patch.guard_test}' in source/tests/.")
 
 
 def apply_patch(patch:Patch, source:str) -> tuple:
@@ -873,7 +901,7 @@ def _print_checklist(tag:str, patch_states:dict, changed:bool):
 		if state is PatchState.ALREADY_UPSTREAM:
 			patch = next(p for p in PATCHES if p.name == name)
 			print(f"  * The patch '{name}' is now upstream. Remove it from PATCHES in this script, remove")
-			print(f"    the guard test '{patch.guard_test}' from source/tests/test_source_invariants.py")
+			print(f"    the guard test '{patch.guard_test}' from source/tests/")
 			print("    (which will FAIL until you do), and update the CLAUDE.md sync section.")
 	print(f"  * Update CLAUDE.md (the vendored Q3C version is stated there) and CHANGELOG.md for {tag}.")
 	print("=" * 78)

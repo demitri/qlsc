@@ -28,9 +28,9 @@ SETUP_PATH = pathlib.Path(__file__).resolve().parent.parent / "setup.py"
 # ------------------------------------------------------------------
 # Patch detection and application.
 #
-# The vendored files carry no local patches as of q3c v2.0.6 (see PATCHES in the
-# script), so the machinery is exercised on a synthetic patch with two sites: the
-# next reachable upstream bug will need it, and it must still refuse to guess.
+# The decision machinery is exercised on a synthetic patch with two sites, so that
+# its refusals stay covered however many real patches PATCHES holds (it held none
+# for a while after the v2.0.6 sync dropped both v2.0.5 patches).
 # ------------------------------------------------------------------
 
 FIXTURE_PATCH = sync_q3c.Patch(
@@ -46,14 +46,29 @@ FIXTURE_UPSTREAM = ("void f(void)\n{\n    int buf[4];\n}\n"
 					"void g(void)\n{\n    int buf[4];\n}\n")
 FIXTURE_PATCHED = FIXTURE_UPSTREAM.replace("buf[4]", "buf[8]")
 
-def test_no_local_patches_are_carried():
+def test_registered_patches_are_in_the_vendored_sources():
 	'''
-	Test that the script registers exactly the local divergences CLAUDE.md documents,
-	which since the v2.0.6 sync is none. A local patch added to the vendored files
-	without being registered here would make the next sync's divergence check stop,
-	and one registered without being documented would be invisible to a reader.
+	Test that every patch the script registers is actually in its vendored file, and
+	that reversing and re-applying it reproduces the file byte for byte - i.e. that
+	the script's idea of the local divergences matches the C sources.
 	'''
-	assert sync_q3c.PATCHES == ()
+	for patch in sync_q3c.PATCHES:
+		vendored = (VENDOR_DIR / patch.filename).read_text()
+		assert sync_q3c.patch_state(patch, vendored) is sync_q3c.PatchState.ALREADY_UPSTREAM, patch.name
+		upstream_form = sync_q3c.unapply_patch(patch, vendored)
+		assert sync_q3c.apply_patch(patch, upstream_form) == (vendored, sync_q3c.PatchState.NEEDED), patch.name
+
+def test_registered_patches_are_documented_and_guarded():
+	'''
+	Test that every registered patch names its guard test in CLAUDE.md, the other
+	copy of the divergence list, and that the guard test exists. A patch registered
+	without either would be invisible to a reader or unguarded.
+	'''
+	claude_md = (SCRIPT_PATH.parent.parent / "CLAUDE.md").read_text()
+	test_sources = "".join(path.read_text() for path in pathlib.Path(__file__).parent.glob("test_*.py"))
+	for patch in sync_q3c.PATCHES:
+		assert patch.guard_test in claude_md, f"CLAUDE.md does not mention the guard test of '{patch.name}'"
+		assert f"def {patch.guard_test}(" in test_sources, f"no test named '{patch.guard_test}' guards '{patch.name}'"
 
 def test_patch_round_trip():
 	'''

@@ -354,7 +354,7 @@
   qlsc had been patching locally since 1.1.0 — the undersized buffer in `q3c_poly.c`
   reachable through `point_in_polygon` (q3c issue #50) and the integer overflow in
   the quadtree decomposition of tiny query regions (#51) — so both patches are
-  dropped and the embedded files are now byte-for-byte upstream's. Pixel numbering
+  dropped. The embedded files carry one new local patch instead, below. Pixel numbering
   is unchanged: `ang2ipix` and everything that encodes or decodes an ipix give the
   same answers, and existing index files remain valid. What changes:
   * `point_in_ellipse`, and so `ellipse_query`, now give the right answer for small
@@ -376,6 +376,11 @@
     box, rather than sitting at one corner of it. Upstream found thin ellipses
     crossing a cube corner that the old square missed. The ranges can be coarser
     in those cases; the method is still documented as a measured, not proven, cover.
+  * v2.0.6's new code for that case could also loop forever: for a box touching the
+    far edge of a neighbouring face it clamped only one end of the cell range, so
+    `nearby_ipix_ranges` hung, uninterruptibly, for about 1-2% of cones whose radius
+    puts them just across a second face edge. qlsc patches the embedded copy to
+    clamp both ends; the patch is documented in CLAUDE.md and guarded by a test.
   * Region queries near cube corners that produced more ipix ranges than Q3C's
     output arrays hold are now retried by Q3C itself with fewer, coarser ranges.
     qlsc's own handling of that case (`RangeOverflowError`, and the index widening
