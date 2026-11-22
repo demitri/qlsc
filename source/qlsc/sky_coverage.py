@@ -129,13 +129,13 @@ def _json_native(value, description:str, _seen:tuple=()):
 
 	This is what keeps the module's guarantee true of caller-supplied ``meta``. The rest
 	of the document is built from values this module produces, so it is JSON-native by
-	construction; ``meta`` is free-form and comes from outside, and it was previously
-	copied in unexamined. The natural things a producer puts there are exactly the things
-	that break the guarantee: a ``np.int64`` count out of ``np.unique`` is not
-	serializable at all, and a NaN serializes as ``NaN``, which is not valid JSON and
-	which ``json.dumps(..., allow_nan=False)`` refuses. Both failed at
-	:py:func:`json.dumps`, one call after the document was handed back, with a message
-	naming a type rather than the entry that carried it.
+	construction; ``meta`` is free-form and comes from outside. The natural things a
+	producer puts there are exactly the things that break the guarantee: a ``np.int64``
+	count out of ``np.unique`` is not serializable at all, and a NaN serializes as
+	``NaN``, which is not valid JSON and which ``json.dumps(..., allow_nan=False)``
+	refuses. Unchecked, both would fail at :py:func:`json.dumps`, one call after the
+	document was handed back, with a message naming a type rather than the entry that
+	carried it.
 
 	NumPy scalars are converted rather than refused: they are what a producer naturally
 	has, and their Python equivalents are exact. Arrays and tuples become lists. A

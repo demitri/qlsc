@@ -250,13 +250,11 @@ face is what :py:func:`~qlsc.QLSC.ipix_neighbors` is for.
 
 .. note::
 
-	:py:func:`~qlsc.QLSC.xy2ipix` now uses this path itself. It used to
-	project the position back onto the sphere and call
-	:py:func:`~qlsc.QLSC.ang2ipix`, which put a boundary position on whichever
-	side the last few bits of two trigonometric round trips landed on: at
-	``depth=30``, ``xy2ipix(ipix2xy(ipix))`` returned a *neighbouring* pixel for
-	about 40% of the scheme. It now returns the pixel it was asked for at every
-	depth. Positions inside a pixel were never in doubt and are unchanged.
+	:py:func:`~qlsc.QLSC.xy2ipix` uses this path itself, rather than projecting
+	the position back onto the sphere and calling :py:func:`~qlsc.QLSC.ang2ipix`,
+	which would put a boundary position on whichever side the last few bits of
+	two trigonometric round trips land on. ``xy2ipix(ipix2xy(ipix))`` returns
+	``ipix`` at every depth.
 
 
 Moving between depths, and between neighbours

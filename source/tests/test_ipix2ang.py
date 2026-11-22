@@ -4,8 +4,8 @@ from numpy.testing import assert_approx_equal
 
 from qlsc import QLSC
 
-# As of qlsc v1.1 (following the Q3C PostgreSQL plugin v2.0.1+),
-# ipix2ang returns the center of the pixel, not the lower left corner.
+# ipix2ang returns the center of the pixel (as the Q3C PostgreSQL plugin does),
+# not a corner.
 
 # depth, ipix, ra, dec
 # The center values were computed independently from the pixel corner (ipix2xy)

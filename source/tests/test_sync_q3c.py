@@ -29,8 +29,7 @@ SETUP_PATH = pathlib.Path(__file__).resolve().parent.parent / "setup.py"
 # Patch detection and application.
 #
 # The decision machinery is exercised on a synthetic patch with two sites, so that
-# its refusals stay covered however many real patches PATCHES holds (it held none
-# for a while after the v2.0.6 sync dropped both v2.0.5 patches).
+# its refusals stay covered however many real patches PATCHES holds, including none.
 # ------------------------------------------------------------------
 
 FIXTURE_PATCH = sync_q3c.Patch(
@@ -95,7 +94,7 @@ def test_patch_refuses_an_unrecognized_source():
 	'''
 	Test that a file in which the patch anchor cannot be found raises rather than being
 	silently skipped. This is the case where upstream reworked the surrounding code, or
-	fixed the bug with different text, as it did for both v2.0.5 patches in v2.0.6.
+	fixed the bug with different text.
 	'''
 	with pytest.raises(sync_q3c.SyncError) as excinfo:
 		sync_q3c.patch_state(FIXTURE_PATCH, "int main(void) { return 0; }\n")

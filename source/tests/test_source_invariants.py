@@ -8,9 +8,7 @@ import re
 # Local patches to the vendored q3c files are not guarded here by their text:
 # each is registered in scripts/sync_q3c.py's PATCHES, whose presence in the
 # vendored sources test_sync_q3c.py checks, and each has a runtime guard named in
-# CLAUDE.md. (The two v2.0.5 patches, #50 and #51, were fixed upstream in v2.0.6;
-# their runtime regressions live in test_point_in_polygon.py and
-# test_radial_query_center_coverage.py.)
+# CLAUDE.md.
 
 C_CODE_DIR = pathlib.Path(__file__).parent.parent / "qlsc" / "c_code"
 

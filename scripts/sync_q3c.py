@@ -134,9 +134,8 @@ class Patch:
 	'''
 	One local divergence from upstream, expressed as an exact-match text substitution.
 
-	Written out rather than declared with :mod:`dataclasses` because it predates the
-	3.7 floor, when dataclasses were not yet available to it; the tests import this
-	script, so it must stay within ``python_requires`` (see test_python_version_floor.py).
+	The tests import this script, so it must stay within ``python_requires`` (see
+	test_python_version_floor.py).
 
 	:param name: short identifier used in this script's output
 	:param filename: the vendored file the patch applies to
@@ -167,19 +166,6 @@ class Patch:
 
 # ------------------------------------------------------------------
 # The local patches. Every entry is documented in CLAUDE.md; keep the two in step.
-#
-# One, against v2.0.6: a hang upstream introduced in q3c_get_nearby (below).
-#
-# The two patches carried against v2.0.5 were retired by the v2.0.6 sync because
-# upstream fixed both bugs itself, in each case with different text from qlsc's
-# (so patch_state() could not recognize the fix and stopped, as it should; the
-# decision to drop them was made by hand):
-#
-#   q3c_poly.c points[8] (upstream issue #50): upstream declares the same
-#     points[8] buffer, with a trailing comment.
-#   q3cube.c res_depth log2 (upstream issue #51): upstream's new q3c_res_depth()
-#     computes 1 + log2(nside/n0), capped at the maximum depth - the same value as
-#     qlsc's loop, which started at 1 and counted the halvings of nside/n0.
 #
 # To add a patch, define a Patch below and list it here, add its guard test, and
 # document it in CLAUDE.md.
@@ -246,8 +232,8 @@ def patch_state(patch:Patch, source:str) -> PatchState:
 		f"Expected either {patch.occurrences} occurrence(s) of the upstream text and none of the\n"
 		f"patched text, or the reverse; found {n_upstream} upstream and {n_patched} patched.\n"
 		f"The surrounding code has changed, so this script will not guess where the patch belongs.\n"
-		f"Upstream may have fixed the bug itself with different text (as both v2.0.5 patches were in\n"
-		f"v2.0.6); exact matching cannot recognize that.\n"
+		f"Upstream may have fixed the bug itself with different text, which exact matching cannot\n"
+		f"recognize.\n"
 		f"WHAT TO DO: read {patch.issue} and the new '{patch.filename}', decide by hand whether the\n"
 		f"bug is still present, re-apply or drop the patch, and update both CLAUDE.md and the guard\n"
 		f"test '{patch.guard_test}' in source/tests/.")

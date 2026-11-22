@@ -50,10 +50,10 @@ def test_point_in_polygon_too_large():
 	Test that oversized polygons raise ValueError rather than returning wrong results.
 
 	These polygons overflow the projected face bounding box on three or four sides,
-	which is the geometry that overflowed q3c's undersized internal buffers (the
-	points[4] stack buffer of upstream issue #50, patched locally against q3c
-	v2.0.5 and fixed upstream in v2.0.6); the projection loop runs before the
-	polygon is rejected, so these cases exercise that code path.
+	which is the geometry that overflows an undersized projection buffer (q3c's
+	points[] in q3c_check_sphere_point_in_poly must hold four (x,y) pairs); the
+	projection loop runs before the polygon is rejected, so these cases exercise
+	that code path.
 	'''
 	# the shape that reproduced the q3c stack overflow under ASan
 	huge = np.array([[80.,0.],[0.,80.],[280.,0.],[0.,-80.]])

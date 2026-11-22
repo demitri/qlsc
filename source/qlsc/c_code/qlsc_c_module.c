@@ -38,7 +38,6 @@
 //     q3c_dist, q3c_sindist  - ra enters only as sin((ra1-ra2)/2)^2
 //     q3c_in_ellipse         - ra enters only through d_alpha = alpha1-alpha, as
 //                              sin^2(d_alpha/2) and sin(d_alpha/2)cos(d_alpha/2)
-//                              (re-audited for the v2.0.6 rewrite)
 //     q3c_xy2ang, q3c_xy2facenum, q3c_ipix2ang, q3c_ipix2xy, q3c_pixarea,
 //     q3c_xiyi2ipix, ipix_to_xiyi
 //                            - take no ra at all
@@ -74,7 +73,7 @@ void *get_item_pointer(int ndim, void *buf, Py_ssize_t *strides,
 // TODO: submit this as a pull request to include in q3cube.c ?
 void free_q3c1(struct q3c_prm *hprm)
 {
-	// the struct members are declared const in q3c v2.0.1+; they were malloc'd via init_q3c1
+	// the struct members are declared const in q3c; they are malloc'd by init_q3c1
 	free((void *)hprm->xbits);
 	free((void *)hprm->ybits);
 	free((void *)hprm->xbits1);
@@ -101,7 +100,7 @@ qlsc_init_q3c1(PyObject *self, PyObject *args, PyObject *kwargs)
 	PyObject *returnValue = NULL;
 	
 	// dynamically allocate memory for this as it will be kept around
-	// (q3c v2.0.1+ initializes into a q3c_prm_write, which has the same
+	// (q3c initializes into a q3c_prm_write, which has the same
 	// layout as q3c_prm without the const qualifiers)
 	struct q3c_prm_write *hprm = malloc(sizeof (struct q3c_prm_write));
 	q3c_ipix_t nside = 0; // no default value
@@ -658,7 +657,7 @@ void ipix_to_xiyi(struct q3c_prm *hprm, q3c_ipix_t ipix, q3c_ipix_t *xi, q3c_ipi
 	//
 	q3c_ipix_t ipix1;
 	q3c_ipix_t i2, i3, x0, y0;
-	// the bit tables are declared const in the q3c_prm struct (q3c v2.0.1+);
+	// the bit tables are declared const in the q3c_prm struct;
 	// they are read-only here, so the pointers keep the qualifier
 	const q3c_ipix_t *xbits1;
 	const q3c_ipix_t *ybits1;
@@ -1338,8 +1337,8 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 
 	// generate the full, partials arrays
-	// a nonzero return value means the ipix range arrays overflowed; since q3c v2.0.6
-	// q3c retries with coarser ranges itself, so this is a guard that should not fire
+	// a nonzero return value means the ipix range arrays overflowed; q3c retries with
+	// coarser ranges itself before returning one, so this is a guard that should not fire
 	init_padded_ranges(fulls_padded, partials_padded);
 	if (q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls_padded, partials_padded))
 	{
@@ -1490,9 +1489,8 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	// internal variables
 	struct q3c_prm *hprm;
 	// per-face projection buffers: the main face plus up to four secondary faces.
-	// q3c proper (q3c.c) sized these [3][...] before v2.0.6, which overflows for
-	// polygons whose bounding box crosses onto three or four extra faces
-	// (multi_flag >= 3; upstream issue #50, fixed upstream in v2.0.6).
+	// Fewer than 5 rows overflow for polygons whose bounding box crosses onto three
+	// or four extra faces (multi_flag >= 3).
 	q3c_coord_t xpj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ypj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t poly_ra_unwrapped[Q3C_MAX_N_POLY_VERTEX]; // vertex ra reduced to [0,360)
@@ -1557,7 +1555,7 @@ qlsc_q3c_check_sphere_points_in_poly(PyObject *module, PyObject *args, PyObject 
 	// internal variables
 	struct q3c_prm *hprm;
 	// per-face projection buffers; see the note in the scalar version above for why
-	// there are five rows rather than q3c's three
+	// there are five rows
 	q3c_coord_t xpj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ypj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t axpj[5][Q3C_MAX_N_POLY_VERTEX];
@@ -1869,8 +1867,8 @@ qlsc_q3c_ellipse_query(PyObject *module, PyObject *args, PyObject *kwargs)
 
 	ra_cen = UNWRAP_RA(ra_cen);
 
-	// a nonzero return value means the ipix range arrays overflowed; since q3c v2.0.6
-	// q3c retries with coarser ranges itself, so this is a guard that should not fire
+	// a nonzero return value means the ipix range arrays overflowed; q3c retries with
+	// coarser ranges itself before returning one, so this is a guard that should not fire
 	init_padded_ranges(fulls_padded, partials_padded);
 	if (q3c_ellipse_query(hprm, ra_cen, dec_cen, semi_major_axis,
 						  ellipse_eccentricity(axis_ratio), position_angle,

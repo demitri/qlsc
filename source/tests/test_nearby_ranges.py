@@ -17,11 +17,9 @@ from qlsc.generate import sunflower_points_on_sphere
 #
 # READ THIS BEFORE CHANGING THE COVERAGE TEST BELOW. The method's docstring says
 # the ranges are not a guaranteed cover, and that is deliberate: on a cube face the
-# cone spills onto, q3c emits exactly one square. Before q3c v2.0.6 that square sat
-# at a corner of the face's bounding box with nothing bounding the rest of the box
-# to it (upstream found ellipses it missed; fixed in v2.0.6, which grows the square
-# up the quadtree until it holds the whole box). test_nearby_ranges_cover_the_cone
-# pins coverage over a deterministic grid. It is a measurement, not a proof of an
+# cone spills onto, q3c emits exactly one square, grown up the quadtree until it
+# holds that face's whole bounding box. test_nearby_ranges_cover_the_cone pins
+# coverage over a deterministic grid. It is a measurement, not a proof of an
 # invariant - if it ever fails, the finding is real and belongs upstream, not in a
 # widened tolerance here.
 
@@ -90,8 +88,8 @@ def test_nearby_ranges_cover_the_cone(depth, centre):
 
 # Cones whose bounding box, on a second neighbouring face, touches the far edge of
 # that face, found by bisecting the radius at which the box crosses a second edge.
-# Upstream q3c v2.0.6 loops forever on them in q3c_get_nearby (see the local patch
-# in CLAUDE.md). Which inputs land exactly on the edge depends on the platform's
+# Unpatched upstream q3c loops forever on them in q3c_get_nearby (segasai/q3c#60;
+# the local patch is listed in CLAUDE.md). Which inputs land exactly on the edge depends on the platform's
 # math library, so there are cases from both machines they were searched on. Each
 # hangs an unpatched build on the platform it was found on; the two sets overlap
 # (some hang on both), so neither list alone covers the other platform.

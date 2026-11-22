@@ -898,20 +898,18 @@ class QLSC:
 		once it has projected a sky position onto a face, so a face-plane position and the
 		sky position it stands for land on the same pixel.
 
-		It used to be computed the long way round, by projecting the position back onto
-		the sphere with :py:func:`xy2ang` and asking :py:func:`ang2ipix` — two trips
-		through trigonometry, whose last few bits decided the answer for a position on a
-		pixel boundary. That is exactly where the corners :py:func:`ipix2xy` returns sit:
-		at ``depth=30``, ``xy2ipix(ipix2xy(ipix))`` came back with a *neighbouring* pixel
-		for 40% of the pixels of the scheme. It now returns the pixel asked for, at every
-		depth. Positions in the interior of a pixel were never in doubt and are unchanged.
+		Do not compute it the long way round, by projecting the position back onto the
+		sphere with :py:func:`xy2ang` and asking :py:func:`ang2ipix`: the last few bits
+		of those two trips through trigonometry decide the answer for a position on a
+		pixel boundary, which is exactly where the corners :py:func:`ipix2xy` returns
+		sit. Computed directly, ``xy2ipix(ipix2xy(ipix))`` returns ``ipix`` at every depth.
 
 		:param facenum: the number of the cube face (0=top, 1-4=sides, 5=bottom)
 		:param x: x coordinate on cube face, in [-1,1]
 		:param y: y coordinate on cube face, in [-1,1]
 		:returns: the ipix value of the pixel containing that position
 		'''
-		# The same validation xy2ang applies, which this no longer goes through.
+		# The same validation xy2ang applies (this method does not call xy2ang).
 		if facenum is None:
 			raise ValueError("The cube face number ('facenum') must be provided.")
 		if not isinstance(facenum, int) or isinstance(facenum, bool):
@@ -1087,12 +1085,8 @@ class QLSC:
 
 			These ranges are not documented as a *guaranteed* cover of the cone. When the
 			cone spills onto two or three neighbouring cube faces, Q3C emits only one
-			square per neighbouring face. Before Q3C v2.0.6 that square was chosen at a
-			corner of the face's bounding box with nothing bounding the rest of the box to
-			it, and upstream found thin ellipses crossing a cube corner that it missed;
-			since v2.0.6 (embedded here, with a local fix for a hang in that new code)
-			the square is grown up the quadtree until it contains that face's whole box.
-			Upstream's construction argues coverage, and the guard test in
+			square per neighbouring face, grown up the quadtree until it contains that
+			face's whole bounding box. That construction argues coverage, and the guard test in
 			``test_nearby_ranges.py`` measures it over a deterministic grid of centres,
 			radii and depths, but neither is a proof, and this method is documented
 			accordingly. Anything that must not miss a point belongs in
@@ -1242,8 +1236,7 @@ class QLSC:
 			raise ValueError(f"The value of 'dec' must be normalized to [-90,90]; was given '{dec}'.")
 		# ra needs no range check: it is periodic, and the C wrapper reduces it
 		# to [0,360) before handing it to q3c_get_facenum, which requires that
-		# range and does not enforce it. Rejecting ra outside [-360,360] used to
-		# hide the fact that everything in [-360,0) was answered wrongly.
+		# range and does not enforce it. Any finite ra is valid.
 
 		return q3c.facenum(self._hprm, ra, dec)
 
@@ -2241,10 +2234,10 @@ class QLSCIndex:
 		Validate a key on its way into, or into a lookup against, the index.
 
 		The ``key`` column has SQLite's TEXT affinity, so a non-string key is stored
-		as its text representation: ``add_point(..., key=5)`` used to succeed while
-		``5 in index`` raised and ``'5' in index`` was the only way to find it back.
-		Requiring a string at every boundary is what keeps the value that goes in
-		equal to the value that comes out.
+		as its text representation: were ``add_point(..., key=5)`` accepted, ``5 in index``
+		would raise and only ``'5' in index`` would find the point. Requiring a string at
+		every boundary is what keeps the value that goes in equal to the value that
+		comes out.
 
 		``None`` means "this point has no key" and is accepted where that is
 		meaningful (adding points), but not in a lookup, where there is no such key

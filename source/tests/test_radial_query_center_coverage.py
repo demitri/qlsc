@@ -6,8 +6,7 @@ from qlsc import QLSC
 from qlsc import q3c
 
 # Regression test for the quadtree refinement depth in the vendored q3cube.c
-# (upstream q3c issue #51; patched locally against v2.0.5, fixed upstream in
-# v2.0.6 by q3c_res_depth()). res_depth counts classification passes, of which
+# (q3c_res_depth()). res_depth counts classification passes, of which
 # only the first res_depth - 1 subdivide; the raw ratio nside/n0 overflows, and a
 # plain log2(nside/n0) skips the final classification pass, and at nside/n0 == 1
 # skips classification entirely, reading the squares' status fields
