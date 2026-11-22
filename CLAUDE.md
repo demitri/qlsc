@@ -8,7 +8,7 @@ QLSC is a Python package (published on PyPI as `qlsc`) implementing the quadrila
 
 ## Layout Quirk
 
-The Python package does not live at the repo root: everything installable is under `source/` (`source/setup.py`, `source/qlsc/`, `source/tests/`). The repo root holds the README, docs, examples, figures (LaTeX/graphics sources for the README diagrams), and `c_test/` (an Xcode project for exercising the C code directly).
+The Python package does not live at the repo root: everything installable is under `source/` (`source/setup.py`, `source/qlsc/`, `source/tests/`). The repo root holds the README, docs, examples, figures (LaTeX/graphics sources for the README diagrams), and `c_test/` (an Xcode project for exercising the C code directly). `scripts/` holds repository tools that are not part of the package (`sync_q3c.py`, evidence scripts). `AI/` is gitignored: private working notes, not versioned, so nothing a clone or reviewer needs may live only there.
 
 ## Commands
 
@@ -28,6 +28,8 @@ cd docs && make html
 ```
 
 **Test gotcha:** the tests do `import qlsc`, and since the source tree contains no built `.so`, they run against the *installed* package, not the working tree. After changing anything under `source/qlsc/`, reinstall before running tests or you will test stale code. Test files prefixed `xtest_` (rather than `test_`) are deliberately disabled.
+
+**Full-coverage runs** (the global rule puts test suites on a server) use r740's `~/venvs/qlsc` (built from `/usr/local/anaconda/bin/python`, with numpy, astropy, pandas, matplotlib, mpmath, pytest, pytest-xdist, build, twine). Without astropy, matplotlib or cornish, tests skip by name. Install cornish from `$GH/cornish/source`, not PyPI: PyPI's cornish 1.1 fails to import (`No module named 'cornish.channel'`). Copy the working tree there (rsync excluding `.git`, `build/`, `AI/`), `pip install --force-reinstall --no-deps --no-build-isolation ./source`, then `pytest -n 24` from `source/tests`. A clean run has 0 skipped.
 
 **Releasing:** the version lives only in `source/qlsc/version.py` (kept out of `__init__.py` so `setup.py` can read it without importing dependencies). The commit convention is a dedicated "Bumping version to X.Y.Z." commit. Since binary wheels are built in CI, the release is **tag-first**: the tag is what produces the files that get uploaded, so nothing is uploaded before it exists. The procedure:
 

@@ -162,7 +162,9 @@ def test_the_gate_detects_a_violation():
 #  * pathlib.Path.open(), io.open() and codecs.open() are not checked (an attribute
 #    named "open" is too often tarfile.open or gzip.open to judge by name);
 #  * subprocess's text=True decodes child output in the locale's encoding;
-#  * an open() whose mode is not a literal string is reported, conservatively.
+#  * an open() whose mode is not a literal string is reported, conservatively;
+#  * the file set is python_files(): docs/*.py (check_example_outputs.py, conf.py)
+#    and .github/scripts/ are not gated - they run only on Linux CI.
 
 def unencoded_text_io(path:pathlib.Path) -> list:
 	'''
