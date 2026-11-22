@@ -367,8 +367,9 @@
     time and the old one never. Nearly all of the changes are for ellipses below
     1e-5 degrees (36 milliarcseconds), where the old test misclassified points well
     inside and outside the edge, not just on it; the largest ellipse with a changed
-    answer had a semi-major axis of 1.9e-4 degrees (0.7 arcseconds). Larger
-    ellipses are unaffected.
+    answer had a semi-major axis of 1.9e-4 degrees (0.7 arcseconds), and none of
+    the 2,193 sampled ellipses above 1e-3 degrees changed any answer. The
+    measurement is `scripts/q3c_206_ellipse_differential.py`.
   * `nearby_ipix_ranges` closes the gap its warning described: where a cone spills
     onto two or three neighbouring cube faces, the one square Q3C emits for each
     neighbouring face is now grown until it contains that face's whole bounding
