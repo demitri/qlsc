@@ -378,9 +378,11 @@
     in those cases; the method is still documented as a measured, not proven, cover.
   * v2.0.6's new code for that case could also loop forever: for a box touching the
     far edge of a neighbouring face it clamped only one end of the cell range, so
-    `nearby_ipix_ranges` hung, uninterruptibly, for about 1-2% of cones whose radius
-    puts them just across a second face edge. qlsc patches the embedded copy to
-    clamp both ends; the patch is documented in CLAUDE.md and guarded by a test.
+    `nearby_ipix_ranges` hung, uninterruptibly, for a cone whose bounding box landed,
+    to within floating-point rounding, on the far edge of a neighbouring face. Such
+    cones can be constructed, though arbitrary inputs essentially never are one.
+    qlsc patches the embedded copy to clamp both ends; the patch is documented in
+    CLAUDE.md and guarded by a test.
   * Region queries near cube corners that produced more ipix ranges than Q3C's
     output arrays hold are now retried by Q3C itself with fewer, coarser ranges.
     qlsc's own handling of that case (`RangeOverflowError`, and the index widening

@@ -92,8 +92,9 @@ def test_nearby_ranges_cover_the_cone(depth, centre):
 # that face, found by bisecting the radius at which the box crosses a second edge.
 # Upstream q3c v2.0.6 loops forever on them in q3c_get_nearby (see the local patch
 # in CLAUDE.md). Which inputs land exactly on the edge depends on the platform's
-# math library, so there are cases from both machines they were searched on; each
-# hangs an unpatched build on its own platform and is ordinary on the other.
+# math library, so there are cases from both machines they were searched on. Each
+# hangs an unpatched build on the platform it was found on; the two sets overlap
+# (some hang on both), so neither list alone covers the other platform.
 FAR_EDGE_CONES = [
 	# Linux x86_64 (glibc)
 	(219.27811033058825, 22.634103768334768, 13.478208875278737),
@@ -108,6 +109,10 @@ FAR_EDGE_CONES = [
 	(55.193439840894861, 47.537572927092015, 14.427760962184578),
 	(51.891283975863495, 18.200392378121791, 17.919845126707909),
 ]
+
+# A patched build answers each cone in about a second, interpreter start-up
+# included (1.05 s on r740, 1.7 s on an M-series Mac, measured with the patch).
+FAR_EDGE_CHILD_TIMEOUT = 20 # seconds
 
 _FAR_EDGE_CHILD = """
 import sys
@@ -144,10 +149,11 @@ def test_nearby_ranges_terminate_on_a_far_face_edge(cone):
 	try:
 		result = subprocess.run([sys.executable, "-c", _FAR_EDGE_CHILD, repr(ra0), repr(dec0), repr(radius)],
 								stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-								universal_newlines=True, timeout=60) # 3.6-compatible spellings
+								universal_newlines=True, timeout=FAR_EDGE_CHILD_TIMEOUT) # 3.6-compatible spellings
 	except subprocess.TimeoutExpired:
 		pytest.fail(f"nearby_ipix_ranges(ra={ra0}, dec={dec0}, radius={radius}) did not return "
-					f"within 60 s: the q3c_get_nearby far-edge loop is not terminating")
+					f"within {FAR_EDGE_CHILD_TIMEOUT} s (a patched build takes about a second): the q3c_get_nearby "
+					f"far-edge loop is not terminating")
 	assert result.returncode == 0, result.stderr
 	missed, inside = map(int, result.stdout.split())
 	assert inside > 0

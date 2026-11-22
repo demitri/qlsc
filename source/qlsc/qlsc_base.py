@@ -1091,10 +1091,11 @@ class QLSC:
 			corner of the face's bounding box with nothing bounding the rest of the box to
 			it, and upstream found thin ellipses crossing a cube corner that it missed;
 			since v2.0.6 (embedded here, with a local fix for a hang in that new code)
-			the square is grown up the quadtree until it contains that face's whole box. Upstream's construction argues coverage, and
-			the guard test in ``test_nearby_ranges.py`` measures it over a deterministic
-			grid of centres, radii and depths, but neither is a proof, and this method is
-			documented accordingly. Anything that must not miss a point belongs in
+			the square is grown up the quadtree until it contains that face's whole box.
+			Upstream's construction argues coverage, and the guard test in
+			``test_nearby_ranges.py`` measures it over a deterministic grid of centres,
+			radii and depths, but neither is a proof, and this method is documented
+			accordingly. Anything that must not miss a point belongs in
 			:py:func:`QLSCIndex.radial_query`, whose coverage the index's own tests pin.
 
 		A radius larger than ``qlsc.q3c.Q3C_MAXRAD`` (35 degrees) makes Q3C stop doing
