@@ -324,7 +324,8 @@ Two module-level functions compute separations, both taking degrees:
 	import numpy as np
 
 	# printed to 12 significant digits: the last digit or two of a full-precision
-	# value depends on the platform's long double, which Q3C computes in
+	# value depends on the platform's C math library (sin, cos, asin round
+	# differently on macOS and Linux)
 	print(f"distance((0,0),(0,1)):     {distance(0., 0., 0., 1.):.12g}")
 	print(f"distance((0,89),(180,89)): {distance(0., 89., 180., 89.):.12g}")
 
