@@ -362,9 +362,9 @@
     Maple, subtracted nearly equal numbers), and the old one was wrong more often
     than its release note suggests: over 4,000 random ellipses with semi-major axes
     from 1e-7 to 80 degrees and 200 points each, placed within twice the semi-major
-    axis of the centre, 38,364 of the 800,000 answers changed, and checked against
-    the tangent plane conic evaluated to 50 digits the new answer was right every
-    time and the old one never. Nearly all of the changes are for ellipses below
+    axis of the centre, 38,364 of the 800,000 answers changed, and on every one of
+    those, checked against the tangent plane conic evaluated to 50 digits, the new
+    answer was right and the old one wrong. Nearly all of the changes are for ellipses below
     1e-5 degrees (36 milliarcseconds), where the old test misclassified points well
     inside and outside the edge, not just on it; the largest ellipse with a changed
     answer had a semi-major axis of 1.9e-4 degrees (0.7 arcseconds), and none of
