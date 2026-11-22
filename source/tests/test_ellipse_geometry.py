@@ -28,13 +28,20 @@ def offset_point(ra0:float, dec0:float, separation:float, position_angle:float):
 	'''
 	Return the point `separation` degrees from (ra0,dec0) along the great circle at
 	the given position angle (measured from north through east).
+
+	Computed with unit vectors and arctan2 rather than arcsin: arcsin cannot resolve a
+	declination within ~1e-6 degrees of a pole (its argument rounds to 1), which put
+	every probe point that close to a pole on the same few positions and made an
+	ellipse whose edge passes through the pole look a microdegree too small.
 	'''
-	d0 = np.radians(dec0)
+	a0, d0 = np.radians(ra0), np.radians(dec0)
 	s = np.radians(separation)
 	pa = np.radians(position_angle)
-	dec = np.arcsin(np.sin(d0)*np.cos(s) + np.cos(d0)*np.sin(s)*np.cos(pa))
-	dra = np.arctan2(np.sin(pa)*np.sin(s)*np.cos(d0), np.cos(s) - np.sin(d0)*np.sin(dec))
-	return (np.degrees(dra) + ra0) % 360, np.degrees(dec)
+	center = np.array([np.cos(d0)*np.cos(a0), np.cos(d0)*np.sin(a0), np.sin(d0)])
+	north = np.array([-np.sin(d0)*np.cos(a0), -np.sin(d0)*np.sin(a0), np.cos(d0)])
+	east = np.array([-np.sin(a0), np.cos(a0), 0.])
+	x, y, z = np.cos(s)*center + np.sin(s)*(np.cos(pa)*north + np.sin(pa)*east)
+	return np.degrees(np.arctan2(y, x)) % 360, np.degrees(np.arctan2(z, np.hypot(x, y)))
 
 def edge_separation(ra0:float, dec0:float, semi_major_axis:float, axis_ratio:float,
 					position_angle:float, direction:float) -> float:
