@@ -357,9 +357,18 @@
   dropped and the embedded files are now byte-for-byte upstream's. Pixel numbering
   is unchanged: `ang2ipix` and everything that encodes or decodes an ipix give the
   same answers, and existing index files remain valid. What changes:
-  * The exact containment test behind `point_in_ellipse` and `ellipse_query` was
-    rewritten upstream for numerical accuracy. Answers can differ only for points
-    lying on the edge of very small (around a milliarcsecond) ellipses.
+  * `point_in_ellipse`, and so `ellipse_query`, now give the right answer for small
+    ellipses. Upstream rewrote the containment test (the old one, derived with
+    Maple, subtracted nearly equal numbers), and the old one was wrong more often
+    than its release note suggests: over 4,000 random ellipses with semi-major axes
+    from 1e-7 to 80 degrees and 200 points each, placed within twice the semi-major
+    axis of the centre, 38,364 of the 800,000 answers changed, and checked against
+    the tangent plane conic evaluated to 50 digits the new answer was right every
+    time and the old one never. Nearly all of the changes are for ellipses below
+    1e-5 degrees (36 milliarcseconds), where the old test misclassified points well
+    inside and outside the edge, not just on it; the largest ellipse with a changed
+    answer had a semi-major axis of 1.9e-4 degrees (0.7 arcseconds). Larger
+    ellipses are unaffected.
   * `nearby_ipix_ranges` closes the gap its warning described: where a cone spills
     onto two or three neighbouring cube faces, the one square Q3C emits for each
     neighbouring face is now grown until it contains that face's whole bounding
