@@ -340,11 +340,20 @@ def test_a_polygon_wound_the_other_way_is_refused(index, frame):
 	vertices hands AST the rest of the sky - a region whose bounding circle bounds its
 	complement. Q3C would happily answer about the small side, so this must be caught
 	before any fast path runs, not after.
+
+	Which of the two guards refuses it depends on the AST build: some report the
+	reversed polygon as a plain polygon containing the rest of the sky (caught by the
+	antipodal-point test), others as a negated region (starlink-pyast 4.2.0 does,
+	caught by the isNegated test). Both refuse before the fast paths; either is right.
 	'''
 	region = ASTPolygon(frame=frame, points=[[44.,11.],[46.,11.],[46.,13.],[44.,13.]])
+	assert region.pointInRegion([225., -12.]) and not region.pointInRegion([45., 12.]), \
+		"the reversed polygon is expected to be the rest of the sky, not the small square"
 	with pytest.raises(ValueError) as e:
 		index.region_query(region)
-	assert "antipodal" in str(e.value)
+	message = str(e.value)
+	assert ("antipodal" in message) == (not region.isNegated)
+	assert ("negated region cannot be searched" in message) == region.isNegated
 
 
 # ---------------------------------------------------------------------------

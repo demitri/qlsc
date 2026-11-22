@@ -112,12 +112,12 @@ needed to write it out or read it back:
 		reloaded = json.load(f)
 
 	print("round-trips through plain json:", reloaded == cov)
-	print("file size:", len(open(path).read()), "bytes")
+	print("polygons read back:", len(reloaded["polygons"]))
 
 .. code-block:: text
 
 	round-trips through plain json: True
-	file size: 3607 bytes
+	polygons read back: 17
 
 
 A depth cannot outrun the index

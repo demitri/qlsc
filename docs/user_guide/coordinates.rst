@@ -323,24 +323,26 @@ Two module-level functions compute separations, both taking degrees:
 	from qlsc import distance, sindist
 	import numpy as np
 
-	print("distance((0,0),(0,1)):    ", distance(0., 0., 0., 1.))
-	print("distance((0,89),(180,89)):", distance(0., 89., 180., 89.))
+	# printed to 12 significant digits: the last digit or two of a full-precision
+	# value depends on the platform's long double, which Q3C computes in
+	print(f"distance((0,0),(0,1)):     {distance(0., 0., 0., 1.):.12g}")
+	print(f"distance((0,89),(180,89)): {distance(0., 89., 180., 89.):.12g}")
 
 	d = distance(10., 20., 11., 21.)
 	s = sindist(10., 20., 11., 21.)
-	print(f"distance = {d} deg")
-	print(f"sindist  = {s}")
-	print(f"sin^2(d/2) = {np.sin(np.radians(d)/2)**2}")
-	print(f"2*asin(sqrt(sindist)) in degrees = {np.degrees(2*np.arcsin(np.sqrt(s)))}")
+	print(f"distance = {d:.12g} deg")
+	print(f"sindist  = {s:.12g}")
+	print(f"sin^2(d/2) = {np.sin(np.radians(d)/2)**2:.12g}")
+	print(f"2*asin(sqrt(sindist)) in degrees = {np.degrees(2*np.arcsin(np.sqrt(s))):.12g}")
 
 .. code-block:: text
 
-	distance((0,0),(0,1)):     1.0
-	distance((0,89),(180,89)): 2.0000000000000098
-	distance = 1.3701534390589423 deg
-	sindist  = 0.00014295931466168965
-	sin^2(d/2) = 0.00014295931466168967
-	2*asin(sqrt(sindist)) in degrees = 1.3701534390589423
+	distance((0,0),(0,1)):     1
+	distance((0,89),(180,89)): 2
+	distance = 1.37015343906 deg
+	sindist  = 0.000142959314662
+	sin^2(d/2) = 0.000142959314662
+	2*asin(sqrt(sindist)) in degrees = 1.37015343906
 
 :py:func:`~qlsc.distance` returns the angular separation in degrees.
 :py:func:`~qlsc.sindist` returns the *haversine* of the separation,
