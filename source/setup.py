@@ -34,7 +34,7 @@ def get_property(prop:str, project:str):
 	Read the requested property (e.g. '__version__', '__author__') from the specified Python module.
 	Ref: https://stackoverflow.com/a/41110107/2712652
 	'''
-	result = re.search(r'{}\s*=\s*[\'"]([^\'"]*)[\'"]'.format(prop), open(project + '/__init__.py').read())
+	result = re.search(r'{}\s*=\s*[\'"]([^\'"]*)[\'"]'.format(prop), open(project + '/__init__.py', encoding='utf-8').read())
 	return result.group(1)
 
 sources = ["qlsc/c_code/qlsc_c_module.c", "qlsc/c_code/q3c/q3cube.c", "qlsc/c_code/q3c/q3c_poly.c"]
@@ -95,7 +95,7 @@ classifiers = [
     "Intended Audience :: Science/Research"
 ]
 
-exec(open('qlsc/version.py').read())
+exec(open('qlsc/version.py', encoding='utf-8').read())
 setup(
     name="qlsc",
     version=__version__,

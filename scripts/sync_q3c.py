@@ -687,7 +687,7 @@ def read_upstream_file(tree:pathlib.Path, filename:str) -> str:
 		raise SyncError(f"The upstream tree at '{tree}' has no file '{filename}'. Either the release "
 						f"reorganized its sources or the wrong directory was given; the vendored file list "
 						f"in this script needs a human's attention.")
-	return path.read_text()
+	return path.read_text(encoding="utf-8")
 
 
 # ------------------------------------------------------------------
@@ -739,7 +739,7 @@ def check_no_undocumented_divergence(previous_tree:pathlib.Path):
 	:param previous_tree: the unpacked upstream tree the vendored files came from
 	'''
 	for filename in VENDORED_FILES:
-		vendored = (VENDOR_DIR / filename).read_text()
+		vendored = (VENDOR_DIR / filename).read_text(encoding="utf-8")
 		for patch in patches_for(filename):
 			vendored = unapply_patch(patch, vendored)
 		upstream = read_upstream_file(previous_tree, filename)
@@ -789,7 +789,7 @@ def sync(tag:str, from_tag:str=None, dry_run:bool=False, skip_tests:bool=False,
 	:param previous_dir: use this unpacked upstream tree instead of downloading `from_tag`
 	:returns: a process exit status
 	'''
-	setup_text = SETUP_PATH.read_text()
+	setup_text = SETUP_PATH.read_text(encoding="utf-8")
 	current_version = setup_q3c_version(setup_text)
 	new_version = version_from_tag(tag)
 	if from_tag is None:
@@ -833,7 +833,7 @@ def sync(tag:str, from_tag:str=None, dry_run:bool=False, skip_tests:bool=False,
 		print("\n4. Checking the C interface the wrapper depends on:")
 		differences = interface_differences(read_upstream_file(previous_tree, HEADER_FILE),
 											read_upstream_file(target_tree, HEADER_FILE),
-											WRAPPER_PATH.read_text())
+											WRAPPER_PATH.read_text(encoding="utf-8"))
 		if differences:
 			raise SyncError("The C interface used by qlsc_c_module.c changed between "
 							f"{from_tag} and {tag}:\n\n" + "\n".join(differences)
@@ -851,7 +851,7 @@ def sync(tag:str, from_tag:str=None, dry_run:bool=False, skip_tests:bool=False,
 		print("\n6. Changes to the vendored files:")
 		changed = False
 		for filename in VENDORED_FILES:
-			old_text = (VENDOR_DIR / filename).read_text()
+			old_text = (VENDOR_DIR / filename).read_text(encoding="utf-8")
 			print(summarize_change(filename, old_text, new_contents[filename]))
 			changed = changed or old_text != new_contents[filename]
 
@@ -862,10 +862,10 @@ def sync(tag:str, from_tag:str=None, dry_run:bool=False, skip_tests:bool=False,
 
 		print("\n7. Writing:")
 		for filename in VENDORED_FILES:
-			(VENDOR_DIR / filename).write_text(new_contents[filename])
+			(VENDOR_DIR / filename).write_text(new_contents[filename], encoding="utf-8")
 			print(f"  wrote {VENDOR_DIR / filename}")
 		if current_version != new_version:
-			SETUP_PATH.write_text(set_setup_q3c_version(setup_text, new_version))
+			SETUP_PATH.write_text(set_setup_q3c_version(setup_text, new_version), encoding="utf-8")
 			print(f"  wrote {SETUP_PATH} (Q3C_VERSION = {new_version})")
 
 	if skip_tests:

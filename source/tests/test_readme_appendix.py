@@ -25,7 +25,7 @@ if not README_PATH.is_file():
 	pytest.skip(f"README.md is not present at {README_PATH}; it ships in the repository, "
 				"not in the qlsc package.", allow_module_level=True)
 
-README = README_PATH.read_text()
+README = README_PATH.read_text(encoding="utf-8")
 
 STERADIANS_PER_SQUARE_DEGREE = (math.pi / 180) ** 2
 SQUARE_MAS_PER_SQUARE_DEGREE = (3600 * 1000) ** 2

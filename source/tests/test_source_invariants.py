@@ -23,7 +23,7 @@ def test_capsule_pointer_null_checks():
 	# Note: this is a whole-file count, not a per-site check - it cannot say WHICH
 	# site is unguarded, and guards clustered elsewhere would satisfy it. It is a
 	# smoke guard; the per-function runtime check lives in test_invalid_inputs.py.
-	source = (C_CODE_DIR / "qlsc_c_module.c").read_text()
+	source = (C_CODE_DIR / "qlsc_c_module.c").read_text(encoding="utf-8")
 	# strip line comments so commented-out code is not counted
 	source = re.sub(r"//[^\n]*", "", source)
 	calls = source.count("PyCapsule_GetPointer")

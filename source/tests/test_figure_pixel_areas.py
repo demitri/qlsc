@@ -54,7 +54,7 @@ def test_no_figure_uses_one_pixels_area_as_the_pixel_area():
 	wants that count's own pixel). Reading the pixel number from a variable is how the
 	per-pixel helper does it, and is fine.
 	'''
-	tree = ast.parse(FIGURE_SCRIPT.read_text(), str(FIGURE_SCRIPT))
+	tree = ast.parse(FIGURE_SCRIPT.read_text(encoding="utf-8"), str(FIGURE_SCRIPT))
 
 	problems = []
 	for node in ipix_area_calls(tree):

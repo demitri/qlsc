@@ -42,7 +42,7 @@ def python_floor() -> tuple:
 	'''
 	Return the minimum Python version setup.py declares support for, as a tuple.
 	'''
-	match = re.search(r"python_requires\s*=\s*['\"]>=\s*(\d+)\.(\d+)['\"]", SETUP_PATH.read_text())
+	match = re.search(r"python_requires\s*=\s*['\"]>=\s*(\d+)\.(\d+)['\"]", SETUP_PATH.read_text(encoding="utf-8"))
 	assert match is not None, "could not read python_requires from setup.py"
 	return (int(match.group(1)), int(match.group(2)))
 
@@ -80,7 +80,7 @@ def version_violations(path:pathlib.Path, floor:tuple) -> list:
 	Return a list of (line, required version, description) for every construct in the
 	file that needs a Python newer than `floor`.
 	'''
-	tree = ast.parse(path.read_text(), str(path))
+	tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
 	found = []
 
 	def report(node, version, description):
@@ -140,7 +140,7 @@ def test_the_gate_detects_a_violation():
 	Test that the check above actually fires; a gate that cannot fail guards nothing.
 	'''
 	sample = pathlib.Path(__file__).parent / "__version_floor_sample__.py"
-	sample.write_text("import dataclasses\n\ndef f(values: list[int]) -> dict[str,int]:\n\treturn {}\n")
+	sample.write_text("import dataclasses\n\ndef f(values: list[int]) -> dict[str,int]:\n\treturn {}\n", encoding="utf-8")
 	try:
 		violations = version_violations(sample, (3, 6))
 		descriptions = [d for _, _, d in violations]
@@ -150,3 +150,56 @@ def test_the_gate_detects_a_violation():
 		assert version_violations(sample, (3, 12)) == []
 	finally:
 		sample.unlink()
+
+
+# A second gate over the same files: text I/O must name its encoding. Without one,
+# Python uses the locale's encoding, which is cp1252 on Windows, and a file holding
+# any non-ASCII character (the README, CLAUDE.md) fails to decode there. This broke
+# the Windows wheel tests once (test_readme_appendix.py), with some thirty more
+# instances in the tree waiting behind it, so the rule is enforced here instead.
+#
+# Blind spots, stated rather than assumed covered:
+#  * pathlib.Path.open(), io.open() and codecs.open() are not checked (an attribute
+#    named "open" is too often tarfile.open or gzip.open to judge by name);
+#  * subprocess's text=True decodes child output in the locale's encoding;
+#  * an open() whose mode is not a literal string is reported, conservatively.
+
+def unencoded_text_io(path:pathlib.Path) -> list:
+	'''
+	Return a list of (line, description) for every text-mode read or write in the
+	file that does not pass an explicit encoding.
+	'''
+	tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+	found = []
+	for node in ast.walk(tree):
+		if not isinstance(node, ast.Call):
+			continue
+		if any(keyword.arg == "encoding" for keyword in node.keywords):
+			continue
+		function = node.func
+		if isinstance(function, ast.Attribute) and function.attr in ("read_text", "write_text"):
+			# read_text(encoding) / write_text(data, encoding) may pass it positionally
+			positional_encoding = len(node.args) >= (1 if function.attr == "read_text" else 2)
+			if not positional_encoding:
+				found.append((node.lineno, f".{function.attr}() without an encoding"))
+		elif isinstance(function, ast.Name) and function.id == "open":
+			mode = node.args[1] if len(node.args) >= 2 else next(
+				(keyword.value for keyword in node.keywords if keyword.arg == "mode"), None)
+			if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and "b" in mode.value:
+				continue # binary mode has no encoding
+			if len(node.args) >= 4:
+				continue # encoding given positionally: open(file, mode, buffering, encoding)
+			found.append((node.lineno, "open() in text mode without an encoding"))
+	return found
+
+def test_text_io_names_its_encoding():
+	'''
+	Test that no shipped or run Python file reads or writes text in the locale's
+	default encoding.
+	'''
+	offences = []
+	for path in python_files():
+		for line, description in unencoded_text_io(path):
+			offences.append(f"{path.relative_to(REPO_ROOT)}:{line}: {description}")
+	assert not offences, ("text I/O without an explicit encoding (cp1252 on Windows):\n"
+						  + "\n".join(offences) + "\nPass encoding=\"utf-8\".")

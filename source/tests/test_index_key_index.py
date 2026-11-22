@@ -135,6 +135,12 @@ def test_read_only_index_file_still_opens(tmp_path):
 	path = _make_index_file(tmp_path / "readonly.qlscidx", n=20)
 	_drop_key_index(path)
 	os.chmod(path, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+	if os.access(path, os.W_OK):
+		# root (cibuildwheel's manylinux containers run the tests as root) can write a
+		# file whatever its mode, so the read-only file this test is about cannot be
+		# made here; the run on any other account covers it
+		os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+		pytest.skip("cannot make a read-only file for this user (running as root?)")
 
 	try:
 		with _capture_warning() as captured:

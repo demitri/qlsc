@@ -53,7 +53,7 @@ def test_registered_patches_are_in_the_vendored_sources():
 	the script's idea of the local divergences matches the C sources.
 	'''
 	for patch in sync_q3c.PATCHES:
-		vendored = (VENDOR_DIR / patch.filename).read_text()
+		vendored = (VENDOR_DIR / patch.filename).read_text(encoding="utf-8")
 		assert sync_q3c.patch_state(patch, vendored) is sync_q3c.PatchState.ALREADY_UPSTREAM, patch.name
 		upstream_form = sync_q3c.unapply_patch(patch, vendored)
 		assert sync_q3c.apply_patch(patch, upstream_form) == (vendored, sync_q3c.PatchState.NEEDED), patch.name
@@ -64,8 +64,8 @@ def test_registered_patches_are_documented_and_guarded():
 	copy of the divergence list, and that the guard test exists. A patch registered
 	without either would be invisible to a reader or unguarded.
 	'''
-	claude_md = (SCRIPT_PATH.parent.parent / "CLAUDE.md").read_text()
-	test_sources = "".join(path.read_text() for path in pathlib.Path(__file__).parent.glob("test_*.py"))
+	claude_md = (SCRIPT_PATH.parent.parent / "CLAUDE.md").read_text(encoding="utf-8")
+	test_sources = "".join(path.read_text(encoding="utf-8") for path in pathlib.Path(__file__).parent.glob("test_*.py"))
 	for patch in sync_q3c.PATCHES:
 		assert patch.guard_test in claude_md, f"CLAUDE.md does not mention the guard test of '{patch.name}'"
 		assert f"def {patch.guard_test}(" in test_sources, f"no test named '{patch.guard_test}' guards '{patch.name}'"
@@ -180,7 +180,7 @@ def test_interface_index_finds_the_real_declarations():
 	Test that the header index picks up the function prototypes, structs and macros
 	the wrapper depends on out of the real common.h.
 	'''
-	index = sync_q3c.interface_index((VENDOR_DIR / "common.h").read_text())
+	index = sync_q3c.interface_index((VENDOR_DIR / "common.h").read_text(encoding="utf-8"))
 	for name in ("q3c_ang2ipix", "q3c_radial_query", "q3c_check_sphere_point_in_poly",
 				 "init_q3c1", "q3c_prm", "q3c_prm_write", "q3c_ipix_t", "q3c_coord_t",
 				 "Q3C_NFULLS", "Q3C_NPARTIALS", "Q3C_MAX_N_POLY_VERTEX", "UNWRAP_RA"):
@@ -193,7 +193,7 @@ def test_interface_index_records_both_arms_of_an_ifdef():
 	Test that a macro defined twice (common.h defines its math macros once per branch
 	of the Q3C_LONG_DOUBLE #ifdef) keeps both definitions, so a change to either is seen.
 	'''
-	index = sync_q3c.interface_index((VENDOR_DIR / "common.h").read_text())
+	index = sync_q3c.interface_index((VENDOR_DIR / "common.h").read_text(encoding="utf-8"))
 	assert len(index["q3c_sqrt"]) == 2
 	assert index["q3c_sqrt"] != index["q3c_atan"]
 
@@ -211,30 +211,30 @@ def test_no_interface_differences_against_itself():
 	'''
 	Test that the real header compared with itself reports nothing.
 	'''
-	header = (VENDOR_DIR / "common.h").read_text()
-	assert sync_q3c.interface_differences(header, header, WRAPPER_PATH.read_text()) == []
+	header = (VENDOR_DIR / "common.h").read_text(encoding="utf-8")
+	assert sync_q3c.interface_differences(header, header, WRAPPER_PATH.read_text(encoding="utf-8")) == []
 
 def test_reformatting_alone_is_not_an_interface_difference():
 	'''
 	Test that rewrapping a prototype across lines is not reported; upstream reformats
 	its sources from time to time and a whitespace-only change is not an interface change.
 	'''
-	header = (VENDOR_DIR / "common.h").read_text()
+	header = (VENDOR_DIR / "common.h").read_text(encoding="utf-8")
 	old = "void q3c_ipix2ang(struct q3c_prm *, q3c_ipix_t, q3c_coord_t *, q3c_coord_t *);"
 	assert old in header
 	reformatted = header.replace(old, "void q3c_ipix2ang(struct q3c_prm *,\n                  q3c_ipix_t,\n"
 									  "                  q3c_coord_t *,\n                  q3c_coord_t *);")
-	assert sync_q3c.interface_differences(header, reformatted, WRAPPER_PATH.read_text()) == []
+	assert sync_q3c.interface_differences(header, reformatted, WRAPPER_PATH.read_text(encoding="utf-8")) == []
 
 def test_a_changed_prototype_is_reported():
 	'''
 	Test that adding a parameter to a function the wrapper calls is caught.
 	'''
-	header = (VENDOR_DIR / "common.h").read_text()
+	header = (VENDOR_DIR / "common.h").read_text(encoding="utf-8")
 	changed = header.replace("void q3c_ipix2ang(struct q3c_prm *, q3c_ipix_t, q3c_coord_t *, q3c_coord_t *);",
 							 "void q3c_ipix2ang(struct q3c_prm *, q3c_ipix_t, q3c_coord_t *, q3c_coord_t *, int);")
 	assert changed != header
-	differences = sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text())
+	differences = sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text(encoding="utf-8"))
 	assert len(differences) == 1
 	assert "q3c_ipix2ang" in differences[0]
 
@@ -244,10 +244,10 @@ def test_a_changed_buffer_size_macro_is_reported():
 	caught. Q3C_NFULLS sizes an array in qlsc_q3c_radial_query; a silent change there
 	would be a stack overflow.
 	'''
-	header = (VENDOR_DIR / "common.h").read_text()
+	header = (VENDOR_DIR / "common.h").read_text(encoding="utf-8")
 	changed = header.replace("#define Q3C_NFULLS 50", "#define Q3C_NFULLS 80")
 	assert changed != header
-	differences = sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text())
+	differences = sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text(encoding="utf-8"))
 	assert len(differences) == 1
 	assert "Q3C_NFULLS" in differences[0]
 
@@ -256,11 +256,11 @@ def test_a_changed_struct_is_reported():
 	Test that a change to the q3c_prm struct, whose members the wrapper reads and frees
 	directly, is caught.
 	'''
-	header = (VENDOR_DIR / "common.h").read_text()
+	header = (VENDOR_DIR / "common.h").read_text(encoding="utf-8")
 	changed = header.replace("    const q3c_ipix_t *ybits1;\n};\nstruct q3c_prm_write",
 							 "    const q3c_ipix_t *ybits1;\n    const q3c_ipix_t *zbits1;\n};\nstruct q3c_prm_write")
 	assert changed != header
-	differences = sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text())
+	differences = sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text(encoding="utf-8"))
 	assert len(differences) == 1
 	assert "q3c_prm" in differences[0]
 
@@ -268,10 +268,10 @@ def test_a_removed_declaration_is_reported():
 	'''
 	Test that a function the wrapper calls disappearing from the header is caught.
 	'''
-	header = (VENDOR_DIR / "common.h").read_text()
+	header = (VENDOR_DIR / "common.h").read_text(encoding="utf-8")
 	changed = header.replace("q3c_coord_t q3c_sindist(q3c_coord_t, q3c_coord_t, q3c_coord_t, q3c_coord_t);", "")
 	assert changed != header
-	differences = sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text())
+	differences = sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text(encoding="utf-8"))
 	assert len(differences) == 1
 	assert "q3c_sindist" in differences[0]
 	assert "no longer defined" in differences[0]
@@ -280,13 +280,13 @@ def test_changes_the_wrapper_does_not_use_are_ignored():
 	'''
 	Test that upstream is free to change anything qlsc never calls.
 	'''
-	header = (VENDOR_DIR / "common.h").read_text()
-	assert "q3c_get_nearby_split" not in sync_q3c.wrapper_identifiers(WRAPPER_PATH.read_text())
+	header = (VENDOR_DIR / "common.h").read_text(encoding="utf-8")
+	assert "q3c_get_nearby_split" not in sync_q3c.wrapper_identifiers(WRAPPER_PATH.read_text(encoding="utf-8"))
 	changed = header.replace("void q3c_get_nearby_split(struct q3c_prm *, q3c_coord_t, q3c_coord_t, "
 							 "q3c_coord_t, q3c_ipix_t *, int);",
 							 "void q3c_get_nearby_split(struct q3c_prm *, q3c_coord_t, int);")
 	assert changed != header
-	assert sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text()) == []
+	assert sync_q3c.interface_differences(header, changed, WRAPPER_PATH.read_text(encoding="utf-8")) == []
 
 
 # ------------------------------------------------------------------
@@ -313,13 +313,13 @@ def test_setup_q3c_version_matches_the_vendored_sources():
 	'''
 	Test that the version string can be read out of the real setup.py.
 	'''
-	assert sync_q3c.setup_q3c_version(SETUP_PATH.read_text()) == "2.0.6"
+	assert sync_q3c.setup_q3c_version(SETUP_PATH.read_text(encoding="utf-8")) == "2.0.6"
 
 def test_set_setup_q3c_version_changes_only_that_string():
 	'''
 	Test that writing a new version rewrites exactly one line of setup.py.
 	'''
-	original = SETUP_PATH.read_text()
+	original = SETUP_PATH.read_text(encoding="utf-8")
 	updated = sync_q3c.set_setup_q3c_version(original, "2.0.7")
 	assert sync_q3c.setup_q3c_version(updated) == "2.0.7"
 	differing = [(a, b) for a, b in zip(original.splitlines(), updated.splitlines()) if a != b]
