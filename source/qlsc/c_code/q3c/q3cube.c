@@ -805,7 +805,7 @@ int q3c_get_nearby(struct q3c_prm *hprm, q3c_region region, void *region_data, q
                     iymax = (Q3C_HALF + ymax) * n0;
                     ixmax = (ixmax == n0 ? n0 - 1 : ixmax);
                     iymax = (iymax == n0 ? n0 - 1 : iymax);
-                    /* Local qlsc patch (not yet reported upstream): a box touching the
+                    /* Local qlsc patch (upstream q3c issue #60): a box touching the
                      * far edge of the face (xmin or ymin at 0.5, or within rounding of
                      * it) puts the lower index at n0, one past the last cell. It then
                      * never equals the clamped upper index, n0 halves to 0, and this loop

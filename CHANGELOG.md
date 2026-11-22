@@ -385,8 +385,8 @@
     `nearby_ipix_ranges` hung, uninterruptibly, for a cone whose bounding box landed,
     to within floating-point rounding, on the far edge of a neighbouring face. Such
     cones can be constructed, though arbitrary inputs essentially never are one.
-    qlsc patches the embedded copy to clamp both ends; the patch is documented in
-    CLAUDE.md and guarded by a test.
+    qlsc patches the embedded copy to clamp both ends (reported upstream as q3c
+    issue #60); the patch is documented in CLAUDE.md and guarded by a test.
   * Region queries near cube corners that produced more ipix ranges than Q3C's
     output arrays hold are now retried by Q3C itself with fewer, coarser ranges.
     qlsc's own handling of that case (`RangeOverflowError`, and the index widening

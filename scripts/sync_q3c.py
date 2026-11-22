@@ -196,7 +196,7 @@ NEARBY_LOWER_CLAMP_PATCH = Patch(
 	patched_text=(
 		'                    ixmax = (ixmax == n0 ? n0 - 1 : ixmax);\n'
 		'                    iymax = (iymax == n0 ? n0 - 1 : iymax);\n'
-		'                    /* Local qlsc patch (not yet reported upstream): a box touching the\n'
+		'                    /* Local qlsc patch (upstream q3c issue #60): a box touching the\n'
 		'                     * far edge of the face (xmin or ymin at 0.5, or within rounding of\n'
 		'                     * it) puts the lower index at n0, one past the last cell. It then\n'
 		'                     * never equals the clamped upper index, n0 halves to 0, and this loop\n'
@@ -208,7 +208,7 @@ NEARBY_LOWER_CLAMP_PATCH = Patch(
 		'                    if (ixmin == ixmax && iymin == iymax)\n'
 	),
 	occurrences=1,
-	issue="not yet filed upstream (introduced in v2.0.6; see CLAUDE.md)",
+	issue=f"{UPSTREAM_ISSUES_URL}/60",
 	guard_test="test_nearby_ranges_terminate_on_a_far_face_edge")
 
 PATCHES = (NEARBY_LOWER_CLAMP_PATCH,)
