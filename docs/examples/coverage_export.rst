@@ -65,7 +65,7 @@ Exporting the coverage
 	keys: ['edges', 'frame', 'meta', 'polygons', 'type', 'units', 'value', 'version']
 	type: sky-coverage | version: 1 | frame: icrs | edges: geodesic | units: deg
 	occupied pixels: 17
-	meta: {'depth': 4, 'producer': 'qlsc 1.1.0', 'scheme': 'qlsc'}
+	meta: {'depth': 4, 'producer': 'qlsc 1.2.0', 'scheme': 'qlsc'}
 	value descriptor: {'name': 'count', 'units': 'points'}
 
 Only pixels holding at least one point appear — 17 out of the 1,536 pixels at
@@ -176,7 +176,7 @@ producer wants to keep attached, short of the three keys qlsc writes itself:
 .. code-block:: text
 
 	value: {'name': 'count', 'units': 'points', 'domain': [0.0, 50000.0]}
-	meta: {'depth': 3, 'producer': 'qlsc 1.1.0', 'scheme': 'qlsc', 'survey': 'demo-2026a'}
+	meta: {'depth': 3, 'producer': 'qlsc 1.2.0', 'scheme': 'qlsc', 'survey': 'demo-2026a'}
 	ValueError These 'meta' keys are written by qlsc itself and cannot be replaced: ['scheme'].
 
 A document claiming to have been produced by something other than the qlsc

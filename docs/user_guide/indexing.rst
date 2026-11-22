@@ -416,7 +416,7 @@ as a polygon with the number of points in it.
 	keys:    ['edges', 'frame', 'meta', 'polygons', 'type', 'units', 'value', 'version']
 	type:    sky-coverage | version: 1 | frame: icrs
 	polygons: 384 | first: ['id', 'value', 'vertices']
-	meta:    {'depth': 3, 'producer': 'qlsc 1.1.0', 'scheme': 'qlsc'}
+	meta:    {'depth': 3, 'producer': 'qlsc 1.2.0', 'scheme': 'qlsc'}
 	value:   {'name': 'count', 'units': 'points'}
 
 The document is plain JSON-compatible Python, so ``json.dump`` writes it straight

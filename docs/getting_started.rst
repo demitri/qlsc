@@ -46,7 +46,7 @@ Check the installation:
 
 .. code-block:: text
 
-	1.1.0
+	1.2.0
 
 
 The two classes

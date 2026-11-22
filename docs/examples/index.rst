@@ -3,7 +3,7 @@ Worked Examples
 
 Each page here is a complete problem worked end to end. The code is meant to be
 copied and run: every block of output shown was produced by actually running the
-code above it, on an Apple M1 with Python 3.13, NumPy 2.5, and qlsc 1.1.0.
+code above it, on an Apple M1 with Python 3.13, NumPy 2.5, and qlsc 1.2.0.
 
 Most of the catalogs are synthetic, generated from a fixed random seed so that
 your numbers will match the ones printed here. Where synthetic data is used it is
