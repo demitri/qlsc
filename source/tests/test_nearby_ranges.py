@@ -148,8 +148,7 @@ def test_nearby_ranges_terminate_on_a_far_face_edge(cone):
 	ra0, dec0, radius = cone
 	try:
 		result = subprocess.run([sys.executable, "-c", _FAR_EDGE_CHILD, repr(ra0), repr(dec0), repr(radius)],
-								stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-								universal_newlines=True, timeout=FAR_EDGE_CHILD_TIMEOUT) # 3.6-compatible spellings
+								capture_output=True, text=True, timeout=FAR_EDGE_CHILD_TIMEOUT)
 	except subprocess.TimeoutExpired:
 		pytest.fail(f"nearby_ipix_ranges(ra={ra0}, dec={dec0}, radius={radius}) did not return "
 					f"within {FAR_EDGE_CHILD_TIMEOUT} s (a patched build takes about a second): the q3c_get_nearby "

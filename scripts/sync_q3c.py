@@ -134,9 +134,9 @@ class Patch:
 	'''
 	One local divergence from upstream, expressed as an exact-match text substitution.
 
-	Written out rather than declared with :mod:`dataclasses`, which arrived in Python
-	3.7 while the package declares ``python_requires='>=3.6'``; the tests import this
-	script, so a dataclass here would fail the suite on a supported interpreter.
+	Written out rather than declared with :mod:`dataclasses` because it predates the
+	3.7 floor, when dataclasses were not yet available to it; the tests import this
+	script, so it must stay within ``python_requires`` (see test_python_version_floor.py).
 
 	:param name: short identifier used in this script's output
 	:param filename: the vendored file the patch applies to

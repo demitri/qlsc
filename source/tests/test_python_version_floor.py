@@ -9,15 +9,15 @@ import pytest
 # library modules newer than the Python version setup.py declares support for.
 #
 # This exists because the invariant is mechanically decidable and was broken once:
-# scripts/sync_q3c.py used dataclasses (3.7) while python_requires says >=3.6, and
+# scripts/sync_q3c.py used dataclasses (3.7) while python_requires said >=3.6, and
 # because the test suite imports that script the whole suite would have failed on a
 # supported interpreter. Fixing that one file would have left the rule unenforced,
 # so the rule is enforced here instead.
 #
 # Blind spots, stated rather than assumed covered:
 #  * only syntax and stdlib module names are checked, not new METHODS or keyword
-#    arguments on existing objects (subprocess.run(capture_output=...), 3.7, would
-#    pass this gate);
+#    arguments on existing objects (subprocess.run(text=...), 3.7, or
+#    zip(strict=...), 3.10, would pass this gate);
 #  * f-string self-documenting expressions, f"{x=}" (3.8), are not detected - they
 #    do not survive into a distinguishable AST node across versions;
 #  * third-party APIs (NumPy, astropy) are not version checked here.

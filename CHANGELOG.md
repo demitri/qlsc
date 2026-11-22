@@ -313,11 +313,15 @@
   updates the `Q3C_VERSION` string, and runs the guard tests and the full suite.
   `--dry-run` reports without writing. This is a repository tool; it is not part of
   the installed package.
-  Since the v2.0.6 sync it carries no local patches; its patch machinery is tested
-  against a synthetic patch so that it stays ready for the next one.
+  Its patch machinery is also tested against a synthetic patch, so it stays
+  covered whatever PATCHES holds (one patch since the v2.0.6 sync).
 
 ### Breaking changes
 
+* qlsc now requires Python 3.7 or later (`python_requires='>=3.7'`). Python 3.6
+  reached end of life in December 2021; pip on a 3.6 interpreter will keep
+  resolving to qlsc 1.1.0. Binary wheels already started at 3.10, so this changes
+  only who may build from the source distribution.
 * Omitting a required argument of `QLSCIndex.radial_query` or `QLSC.ang2ipix_at_depth`
   now raises `ValueError` where it used to raise `TypeError`. Their parameters were
   made formally optional so that a single `SkyCoord` can be given as the one positional

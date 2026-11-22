@@ -24,7 +24,7 @@ index.radial_query(lon=-74., lat=40.7, radius=1.)
 Author: Demitri Muna
 Copyright © 2020-2026 Demitri Muna, except for the embedded Q3C code which is copyright Sergey Koposov.
 
-> **Note for v1.2:** the embedded Q3C code is updated to v2.0.6, which makes `point_in_ellipse` and `ellipse_query` correct for sub-arcsecond ellipses. Four small breaking changes — `ValueError` instead of `TypeError` for a missing argument to `radial_query` or `ang2ipix_at_depth`, a validated `depth` in `ipix_area`, an empty `QLSCIndex` being falsy, and keys having to be strings — are described in the [CHANGELOG](https://github.com/demitri/qlsc/blob/master/CHANGELOG.md).
+> **Note for v1.2:** the embedded Q3C code is updated to v2.0.6, which makes `point_in_ellipse` and `ellipse_query` correct for sub-arcsecond ellipses. Python 3.7 or later is now required, and four small breaking changes — `ValueError` instead of `TypeError` for a missing argument to `radial_query` or `ang2ipix_at_depth`, a validated `depth` in `ipix_area`, an empty `QLSCIndex` being falsy, and keys having to be strings — are described in the [CHANGELOG](https://github.com/demitri/qlsc/blob/master/CHANGELOG.md).
 
 > **Note for v1.1:** `QLSC.ipix2ang` now returns the **center** of the pixel rather than the "lower left" corner, matching the Q3C PostgreSQL extension v2.0.1 and later. This is a breaking change that returns different values without raising an error; code depending on the corner should use `ipix2xy`/`xy2ang` or `ipix2polygon`. (`ipix2ang_center` is now a synonym of `ipix2ang`.) See the [CHANGELOG](https://github.com/demitri/qlsc/blob/master/CHANGELOG.md) for all changes.
 

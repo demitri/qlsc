@@ -31,7 +31,7 @@ build-backend = "setuptools.build_meta"
 [tool.cibuildwheel]
 # CPython only (the extension is written against the CPython C API), and only
 # interpreters that are not yet end-of-life. Older Pythons are still supported
-# by the package (python_requires is >=3.6); they build from the sdist.
+# by the package (python_requires is >=3.7); they build from the sdist.
 build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
 # NumPy publishes no 32-bit Linux wheels, so an i686 wheel could be neither
 # built (no headers in the build env) nor tested against a released NumPy.

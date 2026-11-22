@@ -271,7 +271,7 @@ def _zip_exact(*sequences):
 	when given three coordinates and two keys. Every use here is building rows to
 	insert into the index, where a short sequence is a bug in the caller, not a
 	shorter insert. (``zip(..., strict=True)`` would do the same, but it needs
-	Python 3.10 and this package supports 3.6.)
+	Python 3.10 and this package supports 3.7.)
 
 	:param sequences: the sequences to combine; all must be the same length
 	:returns: an iterator of tuples, as ``zip`` returns

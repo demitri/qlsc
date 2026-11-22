@@ -132,7 +132,7 @@ setup(
     # which is what its "Package would be ignored" warning about 'qlsc.c_code' asked for.
     include_package_data=False,
     package_data={"qlsc" : ["c_code/*.c", "c_code/q3c/*.c", "c_code/q3c/*.h"]},
-    python_requires='>=3.6'
+    python_requires='>=3.7'
 )
 #    cmdclass={"build_ext": build_ext_subclass}
 #)
