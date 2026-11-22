@@ -5,13 +5,14 @@ import numpy as np
 from qlsc import QLSC
 from qlsc import q3c
 
-# Regression test for the res_depth patch to the vendored q3cube.c (upstream q3c
-# issue #51). res_depth counts classification passes, of which only the first
-# res_depth - 1 subdivide; a plain log2(nside/n0) skips the final classification
-# pass, and at nside/n0 == 1 skips classification entirely, reading the squares'
-# status fields uninitialized - tiny queries then silently miss their own center
-# (100% of the time at depth 0). The source-invariant test cannot catch this;
-# only behavior can.
+# Regression test for the quadtree refinement depth in the vendored q3cube.c
+# (upstream q3c issue #51; patched locally against v2.0.5, fixed upstream in
+# v2.0.6 by q3c_res_depth()). res_depth counts classification passes, of which
+# only the first res_depth - 1 subdivide; the raw ratio nside/n0 overflows, and a
+# plain log2(nside/n0) skips the final classification pass, and at nside/n0 == 1
+# skips classification entirely, reading the squares' status fields
+# uninitialized - tiny queries then silently miss their own center (100% of the
+# time at depth 0). Only behavior can catch this.
 
 @pytest.mark.parametrize("depth", [0, 1, 2, 5, 30])
 def test_tiny_radius_queries_cover_their_center(depth):

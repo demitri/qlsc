@@ -26,106 +26,102 @@ SETUP_PATH = pathlib.Path(__file__).resolve().parent.parent / "setup.py"
 
 
 # ------------------------------------------------------------------
-# Patch detection against the real vendored sources.
+# Patch detection and application.
 #
-# Reversing each patch produces the upstream text it was made against, so the real
-# files serve as their own fixtures: the "upstream" side is derived from them rather
-# than being a hand-copied snippet that could drift out of step with the C code.
+# The vendored files carry no local patches as of q3c v2.0.6 (see PATCHES in the
+# script), so the machinery is exercised on a synthetic patch with two sites: the
+# next reachable upstream bug will need it, and it must still refuse to guess.
 # ------------------------------------------------------------------
 
-@pytest.mark.parametrize("patch", sync_q3c.PATCHES, ids=lambda p: p.name)
-def test_patch_is_present_in_the_vendored_source(patch):
-	'''
-	Test that each patch this script knows about is actually in the vendored file,
-	i.e. that the script's idea of the local divergences matches the C sources.
-	'''
-	source = (VENDOR_DIR / patch.filename).read_text()
-	assert sync_q3c.patch_state(patch, source) is sync_q3c.PatchState.ALREADY_UPSTREAM
-	assert source.count(patch.patched_text) == patch.occurrences
+FIXTURE_PATCH = sync_q3c.Patch(
+	name="fixture buf[8]",
+	filename="fixture.c",
+	upstream_text="    int buf[4];\n",
+	patched_text="    int buf[8];\n",
+	occurrences=2,
+	issue="https://example.invalid/issues/1",
+	guard_test="test_fixture_guard")
 
-@pytest.mark.parametrize("patch", sync_q3c.PATCHES, ids=lambda p: p.name)
-def test_patch_round_trip(patch):
-	'''
-	Test that reversing a patch and re-applying it reproduces the vendored file byte
-	for byte, and that the reversed text is correctly reported as still needing it.
-	'''
-	vendored = (VENDOR_DIR / patch.filename).read_text()
+FIXTURE_UPSTREAM = ("void f(void)\n{\n    int buf[4];\n}\n"
+					"void g(void)\n{\n    int buf[4];\n}\n")
+FIXTURE_PATCHED = FIXTURE_UPSTREAM.replace("buf[4]", "buf[8]")
 
-	upstream_form = sync_q3c.unapply_patch(patch, vendored)
-	assert upstream_form != vendored
-	assert sync_q3c.patch_state(patch, upstream_form) is sync_q3c.PatchState.NEEDED
+def test_no_local_patches_are_carried():
+	'''
+	Test that the script registers exactly the local divergences CLAUDE.md documents,
+	which since the v2.0.6 sync is none. A local patch added to the vendored files
+	without being registered here would make the next sync's divergence check stop,
+	and one registered without being documented would be invisible to a reader.
+	'''
+	assert sync_q3c.PATCHES == ()
 
-	repatched, state = sync_q3c.apply_patch(patch, upstream_form)
+def test_patch_round_trip():
+	'''
+	Test that applying a patch to the upstream text patches every site, that reversing
+	it reproduces the upstream text byte for byte, and that each side reports the
+	right state.
+	'''
+	assert sync_q3c.patch_state(FIXTURE_PATCH, FIXTURE_UPSTREAM) is sync_q3c.PatchState.NEEDED
+	patched, state = sync_q3c.apply_patch(FIXTURE_PATCH, FIXTURE_UPSTREAM)
 	assert state is sync_q3c.PatchState.NEEDED
-	assert repatched == vendored
+	assert patched == FIXTURE_PATCHED
+	assert sync_q3c.patch_state(FIXTURE_PATCH, patched) is sync_q3c.PatchState.ALREADY_UPSTREAM
+	assert sync_q3c.unapply_patch(FIXTURE_PATCH, patched) == FIXTURE_UPSTREAM
 
-@pytest.mark.parametrize("patch", sync_q3c.PATCHES, ids=lambda p: p.name)
-def test_patch_already_upstream_is_a_no_op(patch):
+def test_patch_already_upstream_is_a_no_op():
 	'''
 	Test that a source already containing the fix is left alone rather than patched twice.
 	'''
-	vendored = (VENDOR_DIR / patch.filename).read_text()
-	unchanged, state = sync_q3c.apply_patch(patch, vendored)
+	unchanged, state = sync_q3c.apply_patch(FIXTURE_PATCH, FIXTURE_PATCHED)
 	assert state is sync_q3c.PatchState.ALREADY_UPSTREAM
-	assert unchanged == vendored
+	assert unchanged == FIXTURE_PATCHED
 
-@pytest.mark.parametrize("patch", sync_q3c.PATCHES, ids=lambda p: p.name)
-def test_patch_refuses_an_unrecognized_source(patch):
+def test_patch_refuses_an_unrecognized_source():
 	'''
 	Test that a file in which the patch anchor cannot be found raises rather than being
-	silently skipped. This is the case where upstream reworked the surrounding code.
+	silently skipped. This is the case where upstream reworked the surrounding code, or
+	fixed the bug with different text, as it did for both v2.0.5 patches in v2.0.6.
 	'''
 	with pytest.raises(sync_q3c.SyncError) as excinfo:
-		sync_q3c.patch_state(patch, "int main(void) { return 0; }\n")
-	assert patch.issue in str(excinfo.value)
-	assert patch.guard_test in str(excinfo.value)
+		sync_q3c.patch_state(FIXTURE_PATCH, "int main(void) { return 0; }\n")
+	assert FIXTURE_PATCH.issue in str(excinfo.value)
+	assert FIXTURE_PATCH.guard_test in str(excinfo.value)
 
-@pytest.mark.parametrize("patch", sync_q3c.PATCHES, ids=lambda p: p.name)
-def test_patch_refuses_a_changed_number_of_sites(patch):
+def test_patch_refuses_a_changed_number_of_sites():
 	'''
-	Test that a source carrying the wrong number of patch sites raises. Upstream adding
-	a fourth copy of the radial query loop must not have three of its four sites patched.
+	Test that a source carrying the wrong number of patch sites raises: upstream adding
+	a third copy of a patched loop must not have two of its three sites patched.
 	'''
-	upstream_form = sync_q3c.unapply_patch(patch, (VENDOR_DIR / patch.filename).read_text())
 	with pytest.raises(sync_q3c.SyncError):
-		sync_q3c.patch_state(patch, upstream_form + patch.upstream_text)
+		sync_q3c.patch_state(FIXTURE_PATCH, FIXTURE_UPSTREAM + FIXTURE_PATCH.upstream_text)
 
-@pytest.mark.parametrize("patch", sync_q3c.PATCHES, ids=lambda p: p.name)
-def test_patch_refuses_a_partially_patched_source(patch):
+def test_patch_refuses_a_partially_patched_source():
 	'''
 	Test that a source containing both forms - as it would if upstream fixed some but
 	not all of the sites - raises rather than being patched the rest of the way.
 	'''
-	vendored = (VENDOR_DIR / patch.filename).read_text()
+	partial = FIXTURE_UPSTREAM.replace("buf[4]", "buf[8]", 1)
 	with pytest.raises(sync_q3c.SyncError):
-		sync_q3c.patch_state(patch, vendored + patch.upstream_text)
+		sync_q3c.patch_state(FIXTURE_PATCH, partial)
 
 def test_unapply_refuses_an_unpatched_source():
 	'''
 	Test that reversing a patch that is not there raises; this is the check that keeps
 	the "no undocumented divergence" step honest.
 	'''
-	patch = sync_q3c.POLY_POINTS_PATCH
 	with pytest.raises(sync_q3c.SyncError):
-		sync_q3c.unapply_patch(patch, patch.upstream_text)
+		sync_q3c.unapply_patch(FIXTURE_PATCH, FIXTURE_UPSTREAM)
 
-def test_patches_cover_both_documented_divergences():
+def test_patch_rejects_overlapping_texts():
 	'''
-	Test that the script knows about exactly the two divergences CLAUDE.md documents.
-	A third local patch added without being registered here would be silently
-	overwritten by the next sync.
+	Test that a patch whose upstream and patched texts contain one another cannot be
+	defined; the occurrence counting that decides the patch state depends on the two
+	being distinct.
 	'''
-	assert {p.filename for p in sync_q3c.PATCHES} == {"q3c_poly.c", "q3cube.c"}
-	assert len(sync_q3c.PATCHES) == 2
-
-def test_patched_and_upstream_texts_are_disjoint():
-	'''
-	Test that no patch's upstream text is a substring of its own patched text; the
-	occurrence counting that decides the patch state depends on the two being distinct.
-	'''
-	for patch in sync_q3c.PATCHES:
-		assert patch.upstream_text not in patch.patched_text
-		assert patch.patched_text not in patch.upstream_text
+	with pytest.raises(ValueError):
+		sync_q3c.Patch(name="overlap", filename="fixture.c", upstream_text="int buf;\n",
+					   patched_text="int buf;\nint guard;\n", occurrences=1,
+					   issue="https://example.invalid/issues/2", guard_test="test_overlap")
 
 
 # ------------------------------------------------------------------
@@ -302,15 +298,15 @@ def test_setup_q3c_version_matches_the_vendored_sources():
 	'''
 	Test that the version string can be read out of the real setup.py.
 	'''
-	assert sync_q3c.setup_q3c_version(SETUP_PATH.read_text()) == "2.0.5"
+	assert sync_q3c.setup_q3c_version(SETUP_PATH.read_text()) == "2.0.6"
 
 def test_set_setup_q3c_version_changes_only_that_string():
 	'''
 	Test that writing a new version rewrites exactly one line of setup.py.
 	'''
 	original = SETUP_PATH.read_text()
-	updated = sync_q3c.set_setup_q3c_version(original, "2.0.6")
-	assert sync_q3c.setup_q3c_version(updated) == "2.0.6"
+	updated = sync_q3c.set_setup_q3c_version(original, "2.0.7")
+	assert sync_q3c.setup_q3c_version(updated) == "2.0.7"
 	differing = [(a, b) for a, b in zip(original.splitlines(), updated.splitlines()) if a != b]
 	assert len(differing) == 1
 	assert "Q3C_VERSION" in differing[0][0]

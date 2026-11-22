@@ -29,13 +29,16 @@
 // This wrapper is the boundary where that is fixed - the vendored files are not
 // edited for it. Every entry point below that hands an ra to Q3C is audited here;
 // re-run this audit when a Q3C function is newly exported or the vendored code is
-// synced (scripts/sync_q3c.py diffs the declarations this depends on).
+// synced (scripts/sync_q3c.py diffs the declarations this depends on). Last
+// audited against q3c v2.0.6.
 //
 //   SAFE, unwraps internally:
 //     q3c_ang2ipix, q3c_ang2ipix_xy  - both call UNWRAP_RA(ra0) on entry
 //   SAFE, periodic in ra with period 360:
 //     q3c_dist, q3c_sindist  - ra enters only as sin((ra1-ra2)/2)^2
-//     q3c_in_ellipse         - ra enters only as cos/sin of (alpha1-alpha)
+//     q3c_in_ellipse         - ra enters only through d_alpha = alpha1-alpha, as
+//                              sin^2(d_alpha/2) and sin(d_alpha/2)cos(d_alpha/2)
+//                              (re-audited for the v2.0.6 rewrite)
 //     q3c_xy2ang, q3c_xy2facenum, q3c_ipix2ang, q3c_ipix2xy, q3c_pixarea,
 //     q3c_xiyi2ipix, ipix_to_xiyi
 //                            - take no ra at all
@@ -1335,7 +1338,8 @@ qlsc_q3c_radial_query(PyObject *module, PyObject *args, PyObject *kwargs)
 	}
 
 	// generate the full, partials arrays
-	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
+	// a nonzero return value means the ipix range arrays overflowed; since q3c v2.0.6
+	// q3c retries with coarser ranges itself, so this is a guard that should not fire
 	init_padded_ranges(fulls_padded, partials_padded);
 	if (q3c_radial_query(hprm, ra_cen, dec_cen, radius, fulls_padded, partials_padded))
 	{
@@ -1486,9 +1490,9 @@ qlsc_q3c_check_sphere_point_in_poly(PyObject *module, PyObject *args, PyObject *
 	// internal variables
 	struct q3c_prm *hprm;
 	// per-face projection buffers: the main face plus up to four secondary faces.
-	// NOTE: q3c proper (q3c.c) sizes these [3][...], which overflows for polygons
-	// whose bounding box crosses onto three or four extra faces (multi_flag >= 3);
-	// see the q3c_poly.c points[8] note in CLAUDE.md.
+	// q3c proper (q3c.c) sized these [3][...] before v2.0.6, which overflows for
+	// polygons whose bounding box crosses onto three or four extra faces
+	// (multi_flag >= 3; upstream issue #50, fixed upstream in v2.0.6).
 	q3c_coord_t xpj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t ypj[5][Q3C_MAX_N_POLY_VERTEX];
 	q3c_coord_t poly_ra_unwrapped[Q3C_MAX_N_POLY_VERTEX]; // vertex ra reduced to [0,360)
@@ -1865,7 +1869,8 @@ qlsc_q3c_ellipse_query(PyObject *module, PyObject *args, PyObject *kwargs)
 
 	ra_cen = UNWRAP_RA(ra_cen);
 
-	// as of q3c v2.0.5, a nonzero return value means the ipix range arrays overflowed
+	// a nonzero return value means the ipix range arrays overflowed; since q3c v2.0.6
+	// q3c retries with coarser ranges itself, so this is a guard that should not fire
 	init_padded_ranges(fulls_padded, partials_padded);
 	if (q3c_ellipse_query(hprm, ra_cen, dec_cen, semi_major_axis,
 						  ellipse_eccentricity(axis_ratio), position_angle,

@@ -62,7 +62,7 @@ def test_embedded_q3c_version():
 	means a Q3C sync forgot to update Q3C_VERSION in setup.py (or vice versa).
 	'''
 	from qlsc import q3c
-	assert q3c.version() == "2.0.5"
+	assert q3c.version() == "2.0.6"
 
 def test_range_overflow_error_type():
 	'''

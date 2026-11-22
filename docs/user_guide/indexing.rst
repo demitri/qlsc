@@ -507,12 +507,14 @@ altogether and hands back the whole sky.
 
 .. warning::
 
-	These ranges are not a *guaranteed* cover of the cone. Where the cone spills
-	onto a neighbouring cube face, Q3C emits one square for that face, chosen at a
-	corner of the face's bounding box, and nothing in its code bounds the rest of
-	that box to the same square. No case where a point inside the cone fell
-	outside the ranges has been found, and the package's tests pin that over a
-	grid of centres, radii and depths — but that is a measurement, not a proof.
+	These ranges are not documented as a *guaranteed* cover of the cone. Where the
+	cone spills onto two or three neighbouring cube faces, Q3C emits one square
+	per neighbouring face. Before Q3C v2.0.6 that square sat at a corner of the
+	face's bounding box with nothing bounding the rest of the box to it, and
+	upstream found thin ellipses crossing a cube corner that it missed; since
+	v2.0.6, which qlsc embeds, the square is grown until it contains that face's
+	whole box. Upstream's construction argues coverage, and the package's tests
+	measure it over a grid of centres, radii and depths — but neither is a proof.
 	Anything that must not miss a point belongs in
 	:py:func:`~qlsc.QLSCIndex.radial_query`, which is built on the refined ranges
 	of step 1 and finishes with the exact test of step 4.

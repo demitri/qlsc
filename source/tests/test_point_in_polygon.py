@@ -51,9 +51,9 @@ def test_point_in_polygon_too_large():
 
 	These polygons overflow the projected face bounding box on three or four sides,
 	which is the geometry that overflowed q3c's undersized internal buffers (the
-	points[4] stack buffer patched locally to points[8] - see CLAUDE.md); the
-	projection loop runs before the polygon is rejected, so these cases exercise
-	the patched code path.
+	points[4] stack buffer of upstream issue #50, patched locally against q3c
+	v2.0.5 and fixed upstream in v2.0.6); the projection loop runs before the
+	polygon is rejected, so these cases exercise that code path.
 	'''
 	# the shape that reproduced the q3c stack overflow under ASan
 	huge = np.array([[80.,0.],[0.,80.],[280.,0.],[0.,-80.]])

@@ -285,91 +285,43 @@ char q3c_get_region_facenum(q3c_region region, void *data)
     }
 }
 
-/* Check that the given point (alpha, delta0)
- * is within the ellipse specified by
- * center, maj_ax, axis ratio and positional angle
+/* Check that the point (alpha1, delta01) is within the ellipse with centre
+ * (alpha, delta0), semi-major axis d0, eccentricity e and positional angle PA0
+ * (east of north), all in degrees. The ellipse is defined in the gnomonic
+ * (tangent-plane) projection around its centre: with u, v the tangent-plane
+ * coordinates along the major and minor axes, the point is inside if
+ * u^2/tan^2(d0) + v^2/(tan^2(d0) (1-e^2)) < 1 and it is less than 90 degrees
+ * away from the centre. The inequality is multiplied by the positive
+ * denominators, and the coordinates are computed without subtracting nearly
+ * equal numbers, so that it stays accurate for tiny ellipses.
  */
 char q3c_in_ellipse(q3c_coord_t alpha, q3c_coord_t delta0, q3c_coord_t alpha1, q3c_coord_t delta01, q3c_coord_t d0,
                     q3c_coord_t e, q3c_coord_t PA0)
 {
-    q3c_coord_t d_alpha = (alpha1 - alpha) * Q3C_DEGRA;
-    q3c_coord_t delta1 = delta01 * Q3C_DEGRA;
-    q3c_coord_t delta = delta0 * Q3C_DEGRA;
-    q3c_coord_t PA = PA0 * Q3C_DEGRA;
-    q3c_coord_t d = d0 * Q3C_DEGRA;
+    const q3c_coord_t d_alpha = (alpha1 - alpha) * Q3C_DEGRA, delta = delta0 * Q3C_DEGRA, delta1 = delta01 * Q3C_DEGRA,
+                      PA = PA0 * Q3C_DEGRA, d = d0 * Q3C_DEGRA;
+    const q3c_coord_t sin_delta = q3c_sin(delta), cos_delta = q3c_cos(delta), sin_delta1 = q3c_sin(delta1),
+                      cos_delta1 = q3c_cos(delta1), sin_ddelta = q3c_sin((delta01 - delta0) * Q3C_DEGRA),
+                      sin_half_dalpha = q3c_sin(d_alpha / 2), cos_half_dalpha = q3c_cos(d_alpha / 2),
+                      sin_PA = q3c_sin(PA), cos_PA = q3c_cos(PA), sin_d = q3c_sin(d), cos_d = q3c_cos(d);
+    /* (delta01 - delta0) is taken in degrees, where the subtraction of close values is exact */
+    /* 1 - cos(d_alpha) */
+    const q3c_coord_t vers_dalpha = 2 * sin_half_dalpha * sin_half_dalpha;
+    /* cosine of the distance between the point and the centre */
+    const q3c_coord_t cos_dist = sin_delta * sin_delta1 + cos_delta * cos_delta1 * (1 - vers_dalpha);
+    /* tangent-plane coordinates (east, north) multiplied by cos_dist;
+     * y is cos(delta) sin(delta1) - sin(delta) cos(delta1) cos(d_alpha) */
+    const q3c_coord_t x = cos_delta1 * 2 * sin_half_dalpha * cos_half_dalpha;
+    const q3c_coord_t y = sin_ddelta + sin_delta * cos_delta1 * vers_dalpha;
+    /* the same along the major and minor axes */
+    const q3c_coord_t u = x * sin_PA + y * cos_PA, v = -x * cos_PA + y * sin_PA;
+    const q3c_coord_t e2 = 1 - e * e;
 
-    q3c_coord_t t1 = q3c_cos(d_alpha);
-    q3c_coord_t t22 = q3c_sin(d_alpha);
-    q3c_coord_t t3 = q3c_cos(delta1);
-    q3c_coord_t t32 = q3c_sin(delta1);
-    q3c_coord_t t6 = q3c_cos(delta);
-    q3c_coord_t t26 = q3c_sin(delta);
-    q3c_coord_t t9 = q3c_cos(d);
-    q3c_coord_t t55 = q3c_sin(d);
-
-    q3c_coord_t t2;
-    q3c_coord_t t4;
-    q3c_coord_t t5;
-    q3c_coord_t t7;
-    q3c_coord_t t8;
-    q3c_coord_t t10;
-    q3c_coord_t t11;
-    q3c_coord_t t13;
-    q3c_coord_t t14;
-    q3c_coord_t t15;
-    q3c_coord_t t18;
-    q3c_coord_t t19;
-    q3c_coord_t t24;
-    q3c_coord_t t31;
-    q3c_coord_t t36;
-    q3c_coord_t t37;
-    q3c_coord_t t38;
-    q3c_coord_t t45;
-
-    q3c_coord_t t56;
-    q3c_coord_t t57;
-    q3c_coord_t t60;
-    q3c_coord_t t61;
-    q3c_coord_t t63;
-
-    if ((t3 * t6 * t1 + t32 * t26) < 0)
+    if (cos_dist < 0)
     {
         return 0;
     }
-
-    t2 = t1 * t1;
-
-    t4 = t3 * t3;
-    t5 = t2 * t4;
-
-    t7 = t6 * t6;
-    t8 = t5 * t7;
-
-    t10 = t9 * t9;
-    t11 = t7 * t10;
-    t13 = q3c_cos(PA);
-    t14 = t13 * t13;
-    t15 = t14 * t10;
-    t18 = t7 * t14;
-    t19 = t18 * t10;
-
-    t24 = q3c_sin(PA);
-
-    t31 = t1 * t3;
-
-    t36 = 2.0 * t31 * t32 * t26 * t6;
-    t37 = t31 * t32;
-    t38 = t26 * t6;
-    t45 = t4 * t10;
-
-    t56 = t55 * t55;
-    t57 = t4 * t7;
-    t60 = -t8 + t5 * t11 + 2.0 * t5 * t15 - t5 * t19 - 2.0 * t1 * t4 * t22 * t10 * t24 * t13 * t26 - t36 +
-          2.0 * t37 * t38 * t10 - 2.0 * t37 * t38 * t15 - t45 * t14 - t45 * t2 +
-          2.0 * t22 * t3 * t32 * t6 * t24 * t10 * t13 - t56 + t7 - t11 + t4 - t57 + t57 * t10 + t19 - t18 * t45;
-    t61 = e * e;
-    t63 = t60 * t61 + t8 + t57 - t4 - t7 + t56 + t36;
-    return t63 > 0;
+    return (u * u * e2 + v * v) * cos_d * cos_d < sin_d * sin_d * e2 * cos_dist * cos_dist;
 }
 
 /* Clamp the box (xmin,xmax,ymin,ymax) to the face, i.e. [-0.5,0.5] in
@@ -834,8 +786,30 @@ int q3c_get_nearby(struct q3c_prm *hprm, q3c_region region, void *region_data, q
                  * element is >~ our ellipse
                  */
 
-                ixmin = (Q3C_HALF + xmin) * n0;
-                iymin = (Q3C_HALF + ymin) * n0;
+                /* A box no larger than a cell of level n0 lies in a single cell
+                 * only if it cannot straddle a cell boundary. Touching a face edge
+                 * rules that out along the axis perpendicular to that edge. The
+                 * main-face box here touches two perpendicular edges, so one cell
+                 * suffices, but this box touches only the edge shared with the
+                 * main face and can straddle two cells along it. Unlike the
+                 * multi_flag == 1 case, there is room for only one range per face,
+                 * so use the smallest quadtree cell containing the box: go up the
+                 * levels until both corners fall into the same cell (finer levels
+                 * have cells smaller than the box; n0 == 1 is the whole face).
+                 */
+                for (;; n0 /= 2)
+                {
+                    ixmin = (Q3C_HALF + xmin) * n0;
+                    ixmax = (Q3C_HALF + xmax) * n0;
+                    iymin = (Q3C_HALF + ymin) * n0;
+                    iymax = (Q3C_HALF + ymax) * n0;
+                    ixmax = (ixmax == n0 ? n0 - 1 : ixmax);
+                    iymax = (iymax == n0 ? n0 - 1 : iymax);
+                    if (ixmin == ixmax && iymin == iymax)
+                    {
+                        break;
+                    }
+                }
 
                 n1 = nside / n0;
 
@@ -1417,8 +1391,9 @@ void q3c_fast_get_xy_minmax(char face_num, q3c_region region, void *region_data,
                                        xmax, ymin, ymax);
         break;
     }
-    case Q3C_POLYGON: {
-    }
+    default:
+        /* Q3C_POLYGON never gets here: q3c_poly_query() projects the polygon itself */
+        break;
     }
 }
 
@@ -2100,6 +2075,19 @@ int q3c_setup_square_stack(struct q3c_square *stack, q3c_coord_t xmin, q3c_coord
     return work_nstack;
 }
 
+/* Number of refinement passes for the quadtree starting at n0: only the
+ * first res_depth-1 passes split the squares, so n0 * 2^(res_depth-1) must
+ * not exceed nside, i.e. res_depth = 1 + log2(nside / n0), capped at
+ * max_depth. (nside / n0 is always a power of two.)
+ */
+static int q3c_res_depth(q3c_ipix_t nside, q3c_ipix_t n0, int max_depth)
+{
+    int d;
+    for (d = 1; d < max_depth && (n0 << d) <= nside; d++)
+        ;
+    return d;
+}
+
 /* Process the stack of quad-tree squares and depending on the overlap status
  * I either keep them, expand them into smaller squares or throw them out
  */
@@ -2214,7 +2202,7 @@ void q3c_stack_expand(struct q3c_square *work_stack, int *work_nstack, struct q3
  * lists.
  * It returns 0 on success and 1 if the ranges did not fit in the output
  * arrays, which hold Q3C_NFULLS/Q3C_NPARTIALS pairs each. In the latter case
- * the caller is expected to redo the decomposition with a smaller res_depth,
+ * the query wrappers redo the decomposition with a smaller res_depth,
  * which produces fewer and coarser ranges.
  */
 int q3c_output_stack(struct q3c_prm *hprm, struct q3c_square *out_stack, int out_nstack, struct q3c_square *work_stack,
@@ -2314,17 +2302,19 @@ static void array_filler(q3c_ipix_t *fulls, int fullpos, q3c_ipix_t *parts, int 
     }
 }
 
-/* Declare the whole sphere partially covered. Used for the regions that are
- * too large for the quadtree decomposition to describe with the number of
- * ranges we have at our disposal.
+/* A region spanning 3-4 cube faces can produce more ranges than the output
+ * arrays hold. The query functions below then retry with fewer refinement
+ * passes, i.e. fewer and coarser ranges. With a single pass every face
+ * contributes at most 4 squares (or one whole-face range), so at most 5 faces
+ * give <= 20 pairs, which always fits; the final return 1 is only a guard.
  */
-/* Main radial query function.
+
+/* Radial query decomposition using at most max_depth refinement passes.
  * Returns 0 on success and 1 when the produced ranges could not fit in the
- * output arrays; the latter should never happen and must be reported by the
- * caller as an internal error.
+ * output arrays.
  */
-int q3c_radial_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3c_coord_t rad,
-                     q3c_ipix_t *out_ipix_arr_fulls, q3c_ipix_t *out_ipix_arr_partials)
+static int q3c_radial_query_depth(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3c_coord_t rad,
+                                  q3c_ipix_t *out_ipix_arr_fulls, q3c_ipix_t *out_ipix_arr_partials, int max_depth)
 {
     q3c_coord_t axx, ayy, axy, ax, ay, a, xmin, xmax, ymin, ymax, xc_cur = 0, yc_cur = 0, cur_size, xesize, yesize,
                                                                   points[8];
@@ -2459,28 +2449,7 @@ int q3c_radial_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3
 
         work_nstack = q3c_setup_square_stack(work_stack, xmin, ymin, xmax, ymax, n0);
 
-        /* For this case the maximal increase of resolution of 2^res_depth
-         * for each axis
-         */
-        /* Local qlsc patch (upstream q3c issue #51): res_depth counts
-         * classification passes, of which only the first res_depth - 1 subdivide,
-         * so the safe value is log2(nside / n0) + 1, not the raw ratio. For tiny
-         * query regions the ratio exceeds the true remaining depth and the
-         * subdivision below overflows (2 * 2^30 in a signed int), producing
-         * garbage coordinates; and at least one classification pass must always
-         * run, or the squares' status fields are read uninitialized. Behavior is
-         * unchanged whenever the ratio >= 8, since both values are then capped
-         * to Q3C_MAX_DEPTH.
-         */
-        res_depth = 1;
-        for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
-        {
-            res_depth++;
-        }
-        /* If the the query is too small we cannot go up to Q3C_MAX_DEPTH since we
-         * are limited by nside depth
-         */
-        res_depth = Q3C_MAX_DEPTH > res_depth ? res_depth : Q3C_MAX_DEPTH;
+        res_depth = q3c_res_depth(nside, n0, max_depth);
 
         for (i = 1; i <= res_depth; i++)
         {
@@ -2544,15 +2513,33 @@ int q3c_radial_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3
 
     return 0;
 
-} /* End of q3c_radial_query() */
+} /* End of q3c_radial_query_depth() */
 
-/* Main polygonal query function.
+/* Main radial query function.
  * Returns 0 on success and 1 when the produced ranges could not fit in the
  * output arrays; the latter should never happen and must be reported by the
  * caller as an internal error.
  */
-int q3c_poly_query(struct q3c_prm *hprm, q3c_poly *qp, q3c_ipix_t *out_ipix_arr_fulls,
-                   q3c_ipix_t *out_ipix_arr_partials, char *too_large)
+int q3c_radial_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3c_coord_t rad,
+                     q3c_ipix_t *out_ipix_arr_fulls, q3c_ipix_t *out_ipix_arr_partials)
+{
+    int max_depth;
+    for (max_depth = Q3C_MAX_DEPTH; max_depth >= 1; max_depth--)
+    {
+        if (!q3c_radial_query_depth(hprm, ra0, dec0, rad, out_ipix_arr_fulls, out_ipix_arr_partials, max_depth))
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Polygonal query decomposition using at most max_depth refinement passes.
+ * Returns 0 on success and 1 when the produced ranges could not fit in the
+ * output arrays.
+ */
+static int q3c_poly_query_depth(struct q3c_prm *hprm, q3c_poly *qp, q3c_ipix_t *out_ipix_arr_fulls,
+                                q3c_ipix_t *out_ipix_arr_partials, char *too_large, int max_depth)
 {
 
     q3c_coord_t xmin, xmax, ymin, ymax, xc_cur = 0, yc_cur = 0, cur_size, xesize, yesize, points[8];
@@ -2642,29 +2629,7 @@ int q3c_poly_query(struct q3c_prm *hprm, q3c_poly *qp, q3c_ipix_t *out_ipix_arr_
 
         work_nstack = q3c_setup_square_stack(work_stack, xmin, ymin, xmax, ymax, n0);
 
-        /* For this case the maximal increase of resolution of 2^res_depth
-         * for each axis
-         */
-
-        /* Local qlsc patch (upstream q3c issue #51): res_depth counts
-         * classification passes, of which only the first res_depth - 1 subdivide,
-         * so the safe value is log2(nside / n0) + 1, not the raw ratio. For tiny
-         * query regions the ratio exceeds the true remaining depth and the
-         * subdivision below overflows (2 * 2^30 in a signed int), producing
-         * garbage coordinates; and at least one classification pass must always
-         * run, or the squares' status fields are read uninitialized. Behavior is
-         * unchanged whenever the ratio >= 8, since both values are then capped
-         * to Q3C_MAX_DEPTH.
-         */
-        res_depth = 1;
-        for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
-        {
-            res_depth++;
-        }
-        /* If the the query is too small we cannot go up to Q3C_MAX_DEPTH since we
-         * are limited by nside depth
-         */
-        res_depth = Q3C_MAX_DEPTH > res_depth ? res_depth : Q3C_MAX_DEPTH;
+        res_depth = q3c_res_depth(nside, n0, max_depth);
 
         for (i = 1; i <= res_depth; i++)
         {
@@ -2738,15 +2703,34 @@ int q3c_poly_query(struct q3c_prm *hprm, q3c_poly *qp, q3c_ipix_t *out_ipix_arr_
 
     return 0;
 
-} /* End of q3c_poly_query() */
+} /* End of q3c_poly_query_depth() */
 
-/* Main elliptical query function.
+/* Main polygonal query function.
  * Returns 0 on success and 1 when the produced ranges could not fit in the
  * output arrays; the latter should never happen and must be reported by the
  * caller as an internal error.
  */
-int q3c_ellipse_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3c_coord_t majax, q3c_coord_t ell,
-                      q3c_coord_t PA, q3c_ipix_t *out_ipix_arr_fulls, q3c_ipix_t *out_ipix_arr_partials)
+int q3c_poly_query(struct q3c_prm *hprm, q3c_poly *qp, q3c_ipix_t *out_ipix_arr_fulls,
+                   q3c_ipix_t *out_ipix_arr_partials, char *too_large)
+{
+    int max_depth;
+    for (max_depth = Q3C_MAX_DEPTH; max_depth >= 1; max_depth--)
+    {
+        if (!q3c_poly_query_depth(hprm, qp, out_ipix_arr_fulls, out_ipix_arr_partials, too_large, max_depth))
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Elliptical query decomposition using at most max_depth refinement passes.
+ * Returns 0 on success and 1 when the produced ranges could not fit in the
+ * output arrays.
+ */
+static int q3c_ellipse_query_depth(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3c_coord_t majax,
+                                   q3c_coord_t ell, q3c_coord_t PA, q3c_ipix_t *out_ipix_arr_fulls,
+                                   q3c_ipix_t *out_ipix_arr_partials, int max_depth)
 {
     q3c_coord_t xmin, xmax, ymin, ymax, xc_cur = 0, yc_cur = 0, cur_size, xesize, yesize, points[8], axx, ayy, axy, ax,
                                         ay, a;
@@ -2879,29 +2863,7 @@ int q3c_ellipse_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q
 
         work_nstack = q3c_setup_square_stack(work_stack, xmin, ymin, xmax, ymax, n0);
 
-        /* For this case the maximal increase of resolution of 2^res_depth
-         * for each axis
-         */
-
-        /* Local qlsc patch (upstream q3c issue #51): res_depth counts
-         * classification passes, of which only the first res_depth - 1 subdivide,
-         * so the safe value is log2(nside / n0) + 1, not the raw ratio. For tiny
-         * query regions the ratio exceeds the true remaining depth and the
-         * subdivision below overflows (2 * 2^30 in a signed int), producing
-         * garbage coordinates; and at least one classification pass must always
-         * run, or the squares' status fields are read uninitialized. Behavior is
-         * unchanged whenever the ratio >= 8, since both values are then capped
-         * to Q3C_MAX_DEPTH.
-         */
-        res_depth = 1;
-        for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)
-        {
-            res_depth++;
-        }
-        /* If the the query is too small we cannot go up to Q3C_MAX_DEPTH since we
-         * are limited by nside depth
-         */
-        res_depth = Q3C_MAX_DEPTH > res_depth ? res_depth : Q3C_MAX_DEPTH;
+        res_depth = q3c_res_depth(nside, n0, max_depth);
 
         for (i = 1; i <= res_depth; i++)
         {
@@ -2970,4 +2932,24 @@ int q3c_ellipse_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q
 
     return 0;
 
-} /* End of q3c_ellipse_query() */
+} /* End of q3c_ellipse_query_depth() */
+
+/* Main elliptical query function.
+ * Returns 0 on success and 1 when the produced ranges could not fit in the
+ * output arrays; the latter should never happen and must be reported by the
+ * caller as an internal error.
+ */
+int q3c_ellipse_query(struct q3c_prm *hprm, q3c_coord_t ra0, q3c_coord_t dec0, q3c_coord_t majax, q3c_coord_t ell,
+                      q3c_coord_t PA, q3c_ipix_t *out_ipix_arr_fulls, q3c_ipix_t *out_ipix_arr_partials)
+{
+    int max_depth;
+    for (max_depth = Q3C_MAX_DEPTH; max_depth >= 1; max_depth--)
+    {
+        if (!q3c_ellipse_query_depth(hprm, ra0, dec0, majax, ell, PA, out_ipix_arr_fulls, out_ipix_arr_partials,
+                                     max_depth))
+        {
+            return 0;
+        }
+    }
+    return 1;
+}

@@ -3,39 +3,15 @@ import pathlib
 import re
 
 # Mechanical guards over the C source itself, for invariants that the runtime
-# tests cannot see failing (a reintroduced stack overflow is a silent 32-byte
-# scribble, not a crash).
+# tests cannot see failing.
+#
+# The vendored q3c files carry no local patches (q3c v2.0.6 fixed upstream the
+# two bugs qlsc used to patch, #50 and #51), so there is no patch guard here:
+# scripts/sync_q3c.py's divergence check refuses any vendored difference not
+# registered in its PATCHES, and the runtime regressions for both bugs live in
+# test_point_in_polygon.py and test_radial_query_center_coverage.py.
 
 C_CODE_DIR = pathlib.Path(__file__).parent.parent / "qlsc" / "c_code"
-
-def test_q3c_poly_points_buffer_patch():
-	'''
-	Test that the local points[8] patch to the vendored q3c_poly.c is present.
-
-	Upstream q3c v2.0.5 declares points[4] in q3c_check_sphere_point_in_poly, an
-	ASan-confirmed stack buffer overflow reachable through QLSC.point_in_polygon
-	(q3c_multi_face_check writes up to four coordinate pairs). A future upstream
-	sync that copies the file verbatim would silently reintroduce it; this test
-	fails loudly instead. See CLAUDE.md. Remove this test only when upstream
-	ships the fix and the sync drops the local patch.
-	'''
-	source = (C_CODE_DIR / "q3c" / "q3c_poly.c").read_text()
-	assert "q3c_coord_t points[8];" in source, "the local points[8] patch to q3c_poly.c has been lost (probably by an upstream sync)"
-	assert "q3c_coord_t points[4];" not in source, "upstream's undersized points[4] buffer has been reintroduced into q3c_poly.c"
-
-def test_q3cube_res_depth_patch():
-	'''
-	Test that the local subdivision-depth patch to the vendored q3cube.c is present.
-
-	Upstream q3c v2.0.5 computes the quadtree refinement depth as the ratio
-	nside/n0 instead of its log2 (upstream issue #51), overflowing a signed int
-	(2 * 2^30) for tiny query regions - UBSan-confirmed, producing garbage
-	coordinates. Remove this test only when upstream ships the fix and the sync
-	drops the local patch. See CLAUDE.md.
-	'''
-	source = (C_CODE_DIR / "q3c" / "q3cube.c").read_text()
-	assert "res_depth = nside / n0;" not in source, "upstream's overflowing res_depth ratio has been reintroduced into q3cube.c"
-	assert source.count("subdiv_ratio") >= 3, "the local log2 subdivision-depth patch to q3cube.c has been lost (probably by an upstream sync)"
 
 def test_capsule_pointer_null_checks():
 	'''

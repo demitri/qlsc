@@ -14,12 +14,13 @@ from qlsc.generate import sunflower_points_on_sphere
 #
 # READ THIS BEFORE CHANGING THE COVERAGE TEST BELOW. The method's docstring says
 # the ranges are not a guaranteed cover, and that is deliberate: on a cube face the
-# cone spills onto, q3c emits exactly one square, chosen at a corner of that face's
-# bounding box, and nothing in the vendored code bounds the rest of that box to the
-# same square. No case where a point inside the cone fell outside the ranges has
-# been found; test_nearby_ranges_cover_the_cone pins that over a deterministic grid.
-# It is a measurement of today's behaviour, not a proof of an invariant - if it ever
-# fails, the finding is real and belongs upstream, not in a widened tolerance here.
+# cone spills onto, q3c emits exactly one square. Before q3c v2.0.6 that square sat
+# at a corner of the face's bounding box with nothing bounding the rest of the box
+# to it (upstream found ellipses it missed; fixed in v2.0.6, which grows the square
+# up the quadtree until it holds the whole box). test_nearby_ranges_cover_the_cone
+# pins coverage over a deterministic grid. It is a measurement, not a proof of an
+# invariant - if it ever fails, the finding is real and belongs upstream, not in a
+# widened tolerance here.
 
 
 def _angular_distance(ra0, dec0, ra, dec):

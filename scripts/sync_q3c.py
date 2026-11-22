@@ -12,19 +12,19 @@ wrapper depends on has not changed, and runs the test suite.
 Usage
 -----
 
-	# see what syncing to q3c v2.0.6 would do, changing nothing
-	python3 scripts/sync_q3c.py v2.0.6 --dry-run
+	# see what syncing to q3c v2.0.7 would do, changing nothing
+	python3 scripts/sync_q3c.py v2.0.7 --dry-run
 
 	# do it
-	python3 scripts/sync_q3c.py v2.0.6
+	python3 scripts/sync_q3c.py v2.0.7
 
 	# re-run the current version against itself as an end-to-end check
-	# (expected result: "no changes", both patches still needed)
-	python3 scripts/sync_q3c.py v2.0.5 --dry-run
+	# (expected result: "Nothing changed")
+	python3 scripts/sync_q3c.py v2.0.6 --dry-run
 
 	# work from already-unpacked upstream trees instead of downloading
-	python3 scripts/sync_q3c.py v2.0.6 --upstream-dir /tmp/q3c-2.0.6 \
-	                                   --previous-dir /tmp/q3c-2.0.5
+	python3 scripts/sync_q3c.py v2.0.7 --upstream-dir /tmp/q3c-2.0.7 \
+	                                   --previous-dir /tmp/q3c-2.0.6
 
 Options: --dry-run (report only), --from-tag (the upstream tag the vendored files
 currently come from; defaults to the Q3C_VERSION in setup.py), --upstream-dir /
@@ -36,7 +36,7 @@ What it does, in order
 
 1. Fetches the target tag and the tag the tree currently sits on. Both are needed:
    the previous release is the baseline that proves the vendored files carry the
-   two documented local patches and *nothing else*, and its common.h is the "before"
+   documented local patches (PATCHES) and *nothing else*, and its common.h is the "before"
    side of the interface diff.
 2. Confirms the vendored files are exactly previous-upstream plus the known patches.
    An undocumented local divergence stops the run: it would be silently overwritten.
@@ -74,7 +74,7 @@ The eventual answer to both is an integration test driven through --upstream-dir
 fixture trees, run sync() against them with --dry-run and without, and assert on the
 files written and the messages printed. Until then those paths are covered only by
 running the script for real, which the sync procedure does anyway
-(``python3 scripts/sync_q3c.py v2.0.5 --dry-run`` against the current release is the
+(``python3 scripts/sync_q3c.py v2.0.6 --dry-run`` against the current release is the
 end-to-end smoke test).
 '''
 
@@ -156,49 +156,34 @@ class Patch:
 		self.occurrences = occurrences
 		self.issue = issue
 		self.guard_test = guard_test
+		# patch_state() decides by counting each text; if one contained the other, every
+		# patched site would also count as an upstream site and no state could be decided
+		if upstream_text in patched_text or patched_text in upstream_text:
+			raise ValueError(f"Patch '{name}': the upstream and patched texts must not contain one another.")
 
 	def __repr__(self):
 		return "Patch(name={!r}, filename={!r}, occurrences={!r})".format(self.name, self.filename, self.occurrences)
 
 
 # ------------------------------------------------------------------
-# The local patches. Both are documented in CLAUDE.md; keep the two in step.
+# The local patches. Every entry is documented in CLAUDE.md; keep the two in step.
+#
+# There are none as of q3c v2.0.6. The two patches carried against v2.0.5 were
+# retired by the v2.0.6 sync because upstream fixed both bugs itself, in each case
+# with different text from qlsc's (so patch_state() could not recognize the fix
+# and stopped, as it should; the decision to drop them was made by hand):
+#
+#   q3c_poly.c points[8] (upstream issue #50): upstream declares the same
+#     points[8] buffer, with a trailing comment.
+#   q3cube.c res_depth log2 (upstream issue #51): upstream's new q3c_res_depth()
+#     computes 1 + log2(nside/n0), capped at the maximum depth - the same value as
+#     qlsc's loop, which started at 1 and counted the halvings of nside/n0.
+#
+# To add a patch, define a Patch below and list it here, add its guard test, and
+# document it in CLAUDE.md.
 # ------------------------------------------------------------------
 
-POLY_POINTS_PATCH = Patch(
-	name="q3c_poly.c points[8]",
-	filename="q3c_poly.c",
-	upstream_text="    q3c_coord_t points[4];\n",
-	patched_text="    q3c_coord_t points[8];\n",
-	occurrences=1,
-	issue=f"{UPSTREAM_ISSUES_URL}/50",
-	guard_test="test_q3c_poly_points_buffer_patch")
-
-RES_DEPTH_PATCH = Patch(
-	name="q3cube.c res_depth log2",
-	filename="q3cube.c",
-	upstream_text="        res_depth = nside / n0;\n",
-	patched_text=(
-		"        /* Local qlsc patch (upstream q3c issue #51): res_depth counts\n"
-		"         * classification passes, of which only the first res_depth - 1 subdivide,\n"
-		"         * so the safe value is log2(nside / n0) + 1, not the raw ratio. For tiny\n"
-		"         * query regions the ratio exceeds the true remaining depth and the\n"
-		"         * subdivision below overflows (2 * 2^30 in a signed int), producing\n"
-		"         * garbage coordinates; and at least one classification pass must always\n"
-		"         * run, or the squares' status fields are read uninitialized. Behavior is\n"
-		"         * unchanged whenever the ratio >= 8, since both values are then capped\n"
-		"         * to Q3C_MAX_DEPTH.\n"
-		"         */\n"
-		"        res_depth = 1;\n"
-		"        for (q3c_ipix_t subdiv_ratio = nside / n0; subdiv_ratio > 1; subdiv_ratio >>= 1)\n"
-		"        {\n"
-		"            res_depth++;\n"
-		"        }\n"),
-	occurrences=3,
-	issue=f"{UPSTREAM_ISSUES_URL}/51",
-	guard_test="test_q3cube_res_depth_patch")
-
-PATCHES = (POLY_POINTS_PATCH, RES_DEPTH_PATCH)
+PATCHES = ()
 
 
 # ------------------------------------------------------------------
@@ -233,6 +218,8 @@ def patch_state(patch:Patch, source:str) -> PatchState:
 		f"Expected either {patch.occurrences} occurrence(s) of the upstream text and none of the\n"
 		f"patched text, or the reverse; found {n_upstream} upstream and {n_patched} patched.\n"
 		f"The surrounding code has changed, so this script will not guess where the patch belongs.\n"
+		f"Upstream may have fixed the bug itself with different text (as both v2.0.5 patches were in\n"
+		f"v2.0.6); exact matching cannot recognize that.\n"
 		f"WHAT TO DO: read {patch.issue} and the new '{patch.filename}', decide by hand whether the\n"
 		f"bug is still present, re-apply or drop the patch, and update both CLAUDE.md and the guard\n"
 		f"test '{patch.guard_test}' in source/tests/test_source_invariants.py.")

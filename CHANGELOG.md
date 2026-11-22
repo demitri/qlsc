@@ -313,6 +313,8 @@
   updates the `Q3C_VERSION` string, and runs the guard tests and the full suite.
   `--dry-run` reports without writing. This is a repository tool; it is not part of
   the installed package.
+  Since the v2.0.6 sync it carries no local patches; its patch machinery is tested
+  against a synthetic patch so that it stays ready for the next one.
 
 ### Breaking changes
 
@@ -348,6 +350,26 @@
 
 ### Fixed
 
+* The embedded Q3C code is updated from v2.0.5 to v2.0.6. Upstream fixed both bugs
+  qlsc had been patching locally since 1.1.0 — the undersized buffer in `q3c_poly.c`
+  reachable through `point_in_polygon` (q3c issue #50) and the integer overflow in
+  the quadtree decomposition of tiny query regions (#51) — so both patches are
+  dropped and the embedded files are now byte-for-byte upstream's. Pixel numbering
+  is unchanged: `ang2ipix` and everything that encodes or decodes an ipix give the
+  same answers, and existing index files remain valid. What changes:
+  * The exact containment test behind `point_in_ellipse` and `ellipse_query` was
+    rewritten upstream for numerical accuracy. Answers can differ only for points
+    lying on the edge of very small (around a milliarcsecond) ellipses.
+  * `nearby_ipix_ranges` closes the gap its warning described: where a cone spills
+    onto two or three neighbouring cube faces, the one square Q3C emits for each
+    neighbouring face is now grown until it contains that face's whole bounding
+    box, rather than sitting at one corner of it. Upstream found thin ellipses
+    crossing a cube corner that the old square missed. The ranges can be coarser
+    in those cases; the method is still documented as a measured, not proven, cover.
+  * Region queries near cube corners that produced more ipix ranges than Q3C's
+    output arrays hold are now retried by Q3C itself with fewer, coarser ranges.
+    qlsc's own handling of that case (`RangeOverflowError`, and the index widening
+    its search region) remains as a guard that should no longer fire.
 * `QLSC.xy2ipix()` returns the pixel containing the position it is given, at every
   depth. It computed its answer by projecting the position back onto the sphere with
   `xy2ang` and handing that to `ang2ipix` — two trips through trigonometry, whose last

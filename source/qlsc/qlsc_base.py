@@ -1085,13 +1085,15 @@ class QLSC:
 
 		.. warning::
 
-			These ranges are not a *guaranteed* cover of the cone. When the cone spills
-			onto neighbouring cube faces, Q3C emits only one square per neighbouring face,
-			chosen at the corner of that face's bounding box; nothing in the code bounds
-			the rest of that box to the same square. No case where a point inside the cone
-			fell outside the ranges has been found — the guard test in
-			``test_nearby_ranges.py`` pins that over a deterministic grid of centres,
-			radii and depths — but that is a measurement, not a proof, and this method is
+			These ranges are not documented as a *guaranteed* cover of the cone. When the
+			cone spills onto two or three neighbouring cube faces, Q3C emits only one
+			square per neighbouring face. Before Q3C v2.0.6 that square was chosen at a
+			corner of the face's bounding box with nothing bounding the rest of the box to
+			it, and upstream found thin ellipses crossing a cube corner that it missed;
+			since v2.0.6 (embedded here) the square is grown up the quadtree until it
+			contains that face's whole box. Upstream's construction argues coverage, and
+			the guard test in ``test_nearby_ranges.py`` measures it over a deterministic
+			grid of centres, radii and depths, but neither is a proof, and this method is
 			documented accordingly. Anything that must not miss a point belongs in
 			:py:func:`QLSCIndex.radial_query`, whose coverage the index's own tests pin.
 
